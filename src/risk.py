@@ -6,7 +6,7 @@ without side effects.
 """
 import logging
 from datetime import date
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import pandas as pd
 
@@ -125,10 +125,32 @@ def stop_loss_triggered(
 def take_profit_triggered(
     entry_price: float,
     current_price: float,
-    take_profit: float = 0.10,
+    take_profit: Optional[float] = 0.10,
 ) -> bool:
-    """Return True if current_price has risen take_profit% or more above entry_price."""
+    """Return True if current_price has risen take_profit% or more above entry_price.
+
+    take_profit=None disables the rule (used by trailing-stop-only profiles).
+    """
+    if take_profit is None:
+        return False
     return current_price >= entry_price * (1 + take_profit)
+
+
+def trailing_stop_triggered(
+    highest_price: float,
+    current_price: float,
+    trailing_stop: Optional[float] = None,
+) -> bool:
+    """
+    Return True if current_price has fallen trailing_stop% or more below the
+    highest price seen since entry. trailing_stop=None disables the rule.
+
+    highest_price is the running peak close since entry, so this only ever
+    activates after the position has been held for at least one bar.
+    """
+    if trailing_stop is None or highest_price is None or highest_price <= 0:
+        return False
+    return current_price <= highest_price * (1 - trailing_stop)
 
 
 def holding_period_exceeded(

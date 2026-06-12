@@ -51,13 +51,14 @@ from risk import (
     resolve_max_position_pct,
     stop_loss_triggered,
     take_profit_triggered,
+    trailing_stop_triggered,
 )
 from signals import calculate_signals, rank_candidates
 
 log = logging.getLogger(__name__)
 
 _BENCH_TICKERS = ["SPY", "QQQ"]
-_POS_COLS = ["ticker", "shares", "entry_price", "entry_date", "current_price"]
+_POS_COLS = ["ticker", "shares", "entry_price", "entry_date", "current_price", "highest_price"]
 
 # Signals look back at most 21 bars (20-day return + 20-day avg volume). Feeding
 # calculate_signals only this tail — instead of the full growing history — keeps
@@ -127,9 +128,10 @@ def _evaluate_backtest_exits(
     positions: pd.DataFrame,
     today: date,
     stop_loss: float,
-    take_profit: float,
+    take_profit: Optional[float],
     max_holding_days: int,
     slippage: float,
+    trailing_stop: Optional[float] = None,
 ) -> Tuple[List[Dict[str, Any]], pd.DataFrame]:
     """
     Scan open positions for exit conditions.
@@ -137,6 +139,11 @@ def _evaluate_backtest_exits(
     Mirrors portfolio.evaluate_exits() but uses the column name 'realized_pnl'
     and includes 'holding_days' — required by the backtest trade log schema.
     Fill price = today's close with slippage (see assumption #3 in module doc).
+
+    take_profit=None disables fixed take-profit; trailing_stop (when set) exits
+    when price falls trailing_stop below the position's running peak (highest_price).
+    The exit record also carries entry_price and highest_price so downstream
+    diagnostics can detect winners that gave back gains.
     """
     exit_trades: List[Dict[str, Any]] = []
     keep: List[bool] = []
@@ -147,12 +154,15 @@ def _evaluate_backtest_exits(
         entry_date = row["entry_date"]
         ticker = str(row["ticker"])
         shares = int(row["shares"])
+        highest_price = float(row.get("highest_price", current_price))
 
         triggered = []
         if stop_loss_triggered(entry_price, current_price, stop_loss):
             triggered.append("stop_loss")
         if take_profit_triggered(entry_price, current_price, take_profit):
             triggered.append("take_profit")
+        if trailing_stop_triggered(highest_price, current_price, trailing_stop):
+            triggered.append("trailing_stop")
         if holding_period_exceeded(entry_date, today, max_holding_days):
             triggered.append("max_holding_period")
 
@@ -172,6 +182,8 @@ def _evaluate_backtest_exits(
                     "reason": "+".join(triggered),
                     "realized_pnl": pnl,
                     "holding_days": hold_days,
+                    "entry_price": entry_price,
+                    "highest_price": highest_price,
                 }
             )
             keep.append(False)
@@ -208,6 +220,11 @@ def _queue_entries(
     max_pct = resolve_max_position_pct(config)
     max_exp = config["portfolio"]["max_total_exposure"]
 
+    # Optional score-weighted sizing: position size scales linearly with the
+    # ticker's composite_score (in [0,1]) between min_position_pct and max_pct.
+    sizing_mode = config["portfolio"].get("sizing_mode", "equal")
+    min_pct = config["portfolio"].get("min_position_pct", max_pct)
+
     held = set(open_positions["ticker"].tolist()) if not open_positions.empty else set()
     orders: List[Dict[str, Any]] = []
     temp_positions = open_positions.copy()
@@ -223,7 +240,12 @@ def _queue_entries(
             break
 
         price = float(row["price"])
-        shares = position_size_shares(portfolio_value, price, max_pct)
+        if sizing_mode == "score_weighted":
+            score = float(row.get("composite_score") or 0.0)
+            pct = min_pct + (max_pct - min_pct) * max(0.0, min(1.0, score))
+        else:
+            pct = max_pct
+        shares = position_size_shares(portfolio_value, price, pct)
         if shares == 0:
             continue
         est_value = round(price * shares, 2)
@@ -427,7 +449,8 @@ def run_backtest(
     tickers: List[str] = config["tickers"]
     slippage = config["risk"]["slippage"]
     stop_loss = config["risk"]["stop_loss"]
-    take_profit = config["risk"]["take_profit"]
+    take_profit = config["risk"].get("take_profit")        # may be None (trailing-only)
+    trailing_stop = config["risk"].get("trailing_stop")    # None unless a profile sets it
     max_holding = config["risk"]["max_holding_days"]
     starting_value = config["portfolio"]["starting_value"]
     top_n = config.get("signals", {}).get("top_candidates", 10)
@@ -503,6 +526,7 @@ def run_backtest(
                     "entry_price": fill_price,
                     "entry_date": bar_date,
                     "current_price": fill_price,
+                    "highest_price": fill_price,
                 }
             )
         if filled:
@@ -511,12 +535,15 @@ def run_backtest(
             )
         pending_orders = []
 
-        # ── 2. Update open position prices ────────────────────────────────────
+        # ── 2. Update open position prices + running peak (for trailing stop) ─
         positions = update_current_prices(positions, today_prices)
+        if not positions.empty:
+            positions["highest_price"] = positions[["highest_price", "current_price"]].max(axis=1)
 
         # ── 3. Evaluate exits against today's close ───────────────────────────
         exit_trades, positions = _evaluate_backtest_exits(
-            positions, bar_date, stop_loss, take_profit, max_holding, slippage
+            positions, bar_date, stop_loss, take_profit, max_holding, slippage,
+            trailing_stop=trailing_stop,
         )
         for e in exit_trades:
             cash += e["trade_value"]
