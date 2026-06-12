@@ -1,6 +1,42 @@
 tickers:
-  - TQQQ
-  - SQQQ
+  # Mega-cap / high-liquidity growth
+  - NVDA
+  - MSFT
+  - AAPL
+  - AMZN
+  - GOOGL
+  - META
+  - TSLA
+  - NFLX
+
+  # Semiconductors / AI infrastructure
+  - AVGO
+  - AMD
+  - TSM
+  - ASML
+  - MU
+  - ARM
+
+  # Enterprise software / cybersecurity
+  - CRM
+  - ORCL
+  - NOW
+  - ADBE
+  - CRWD
+  - PANW
+
+  # Financial / high-volume beta
+  - JPM
+  - BAC
+  - GS
+  - COIN
+
+  # Consumer / mega-cap momentum
+  - COST
+
+#tickers:
+#  - TQQQ
+#  - SQQQ
 #  - SPY
 #  - QQQ
 #  - IWM

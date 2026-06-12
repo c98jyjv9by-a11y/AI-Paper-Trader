@@ -7,97 +7,114 @@
 
 | Metric | Strategy | SPY | QQQ | Equal-Wt Hold |
 |--------|----------|-----|-----|-----|
-| Total Return | -5.40% | +116.05% | +140.62% | +87.99% |
-| Max Drawdown | -8.11% | -24.50% | -35.12% | -58.45% |
-| Excess vs SPY | -121.45% | — | — | — |
-| Excess vs QQQ | -146.02% | — | — | — |
-| Excess vs Equal-Wt | -93.39% | — | — | — |
-| 1-Year Return | +1.78% | +24.27% | +35.82% | +100.49% |
-| 2-Year Return | +0.26% | +41.84% | +56.89% | +117.73% |
-| 3-Year Return | +0.70% | +79.62% | +107.88% | +234.91% |
+| Total Return | +48.87% | +116.05% | +140.62% | +308.46% |
+| Max Drawdown | -19.47% | -24.50% | -35.12% | -41.24% |
+| Excess vs SPY | -67.18% | — | — | — |
+| Excess vs QQQ | -91.75% | — | — | — |
+| Excess vs Equal-Wt | -259.59% | — | — | — |
+| 1-Year Return | +12.21% | +24.27% | +35.82% | +55.52% |
+| 2-Year Return | +16.57% | +41.84% | +56.89% | +94.62% |
+| 3-Year Return | +44.60% | +79.62% | +107.88% | +216.34% |
 
 _Benchmarks: **SPY** and **QQQ** are buy-and-hold of those ETFs. **Equal-Wt Hold** is a synthetic equal-weight buy-and-hold of the strategy's own universe (not the unrelated EWH ETF)._
 
 | Metric | Value |
 |--------|-------|
 | Starting Value | $100,000.00 |
-| Ending Value | $94,599.83 |
+| Ending Value | $148,870.36 |
+| **Return on Invested Capital** | **+1.22%** |
+| Total Return (on full $ portfolio) | +48.87% |
+| Total Capital Deployed (all entries) | $4,003,596.01 |
+| Avg Capital Deployed (snapshot) | $43,992.46 (+43.99% of portfolio) |
+| Peak Capital Deployed (snapshot) | $81,116.90 (+81.12% of portfolio) |
+| Time Invested | +99.93% of trading days |
 | Trading Days | 1367 |
-| Total Trades | 444 (223 buys, 221 sells) |
-| Win Rate | +35.29% |
-| Average Win | $790.18 |
-| Average Loss | $-468.14 |
-| Profit Factor | 0.92 |
-| Avg Holding Period | 10.1 approx. trading days |
-| Largest Winner | $1,562.02 |
-| Largest Loser | $-1,506.38 |
-| Open Positions at End | 2 |
-| Total Slippage Cost | $2,060.06 (+2.06% of start) |
-| Avg Slippage / Trade | $4.64 |
+| Total Trades | 2371 (1191 buys, 1180 sells) |
+| Win Rate | +51.44% |
+| Average Win | $350.12 |
+| Average Loss | $-285.90 |
+| Profit Factor | 1.30 |
+| Avg Holding Period | 15.6 approx. trading days |
+| Largest Winner | $1,965.74 |
+| Largest Loser | $-1,003.95 |
+| Open Positions at End | 11 |
+| Total Slippage Cost | $8,010.08 (+8.01% of start) |
+| Avg Slippage / Trade | $3.38 |
+
+_**Return on Invested Capital** = total P&L ÷ total capital deployed across all entries (cost basis). It strips out idle-cash drag and is bounded at -100% for a long-only book. Note it counts each redeployment of capital separately, so with high turnover the denominator can exceed the starting portfolio. **Total Return** is on the full starting portfolio (cash included) and is what the SPY/QQQ/Equal-Wt comparisons above use, since those benchmarks are fully invested._
 
 ## Strategy Parameters Used
 
 | Parameter | Value |
 |-----------|-------|
 | Starting Portfolio | $100,000.00 |
-| Max Position Size | 5% |
+| Max Position Size | 3.0% (auto: 75% ÷ 25 tickers) |
 | Max Total Exposure | 75% |
-| Max New Trades / Day | 1 |
+| Max New Trades / Day | 2 |
 | Stop Loss | 8% |
-| Take Profit | 15% |
+| Take Profit | 10% |
 | Max Holding Period | 30 trading days |
 | Slippage | 0.10% per fill |
 
 ## Ticker Universe
 
-`TQQQ`, `SQQQ`
+`NVDA`, `MSFT`, `AAPL`, `AMZN`, `GOOGL`, `META`, `TSLA`, `NFLX`, `AVGO`, `AMD`, `TSM`, `ASML`, `MU`, `ARM`, `CRM`, `ORCL`, `NOW`, `ADBE`, `CRWD`, `PANW`, `JPM`, `BAC`, `GS`, `COIN`, `COST`
 
 ## Trade Log (last 20 trades)
 
 | Date | Action | Ticker | Shares | Price | Value | Reason | P&L | Hold Days |
 |------|--------|--------|--------|-------|-------|--------|-----|-----------|
-| 2026-04-08 | SELL | SQQQ | 52 | $69.13 | $3,594.80 | stop_loss | $-594.86 | 5.7 |
-| 2026-04-09 | BUY | SQQQ | 67 | $67.93 | $4,551.17 | momentum_score=0.825 | $nan | — |
-| 2026-04-13 | SELL | TQQQ | 108 | $50.61 | $5,465.80 | take_profit | $781.49 | 7.9 |
-| 2026-04-14 | BUY | TQQQ | 92 | $53.46 | $4,918.63 | momentum_score=0.825 | $nan | — |
-| 2026-04-14 | SELL | SQQQ | 67 | $61.96 | $4,151.19 | stop_loss | $-399.98 | 3.6 |
-| 2026-04-21 | BUY | SQQQ | 82 | $57.65 | $4,727.10 | momentum_score=0.725 | $nan | — |
-| 2026-04-24 | SELL | TQQQ | 92 | $62.50 | $5,749.76 | take_profit | $831.13 | 7.1 |
-| 2026-04-24 | SELL | SQQQ | 82 | $52.45 | $4,300.69 | stop_loss | $-426.41 | 2.1 |
-| 2026-04-27 | BUY | TQQQ | 75 | $62.70 | $4,702.69 | momentum_score=0.825 | $nan | — |
-| 2026-05-05 | BUY | SQQQ | 93 | $48.64 | $4,523.39 | momentum_score=0.725 | $nan | — |
-| 2026-05-08 | SELL | TQQQ | 75 | $76.20 | $5,715.28 | take_profit | $1,012.58 | 7.9 |
-| 2026-05-08 | SELL | SQQQ | 93 | $42.53 | $3,955.05 | stop_loss | $-568.34 | 2.1 |
-| 2026-05-11 | BUY | TQQQ | 62 | $77.04 | $4,776.29 | momentum_score=0.825 | $nan | — |
-| 2026-05-13 | BUY | SQQQ | 109 | $42.03 | $4,581.49 | momentum_score=0.725 | $nan | — |
-| 2026-05-28 | SELL | SQQQ | 109 | $38.43 | $4,189.03 | stop_loss | $-392.45 | 10.7 |
-| 2026-06-04 | BUY | SQQQ | 127 | $37.80 | $4,800.32 | momentum_score=0.725 | $nan | — |
-| 2026-06-10 | SELL | TQQQ | 62 | $69.20 | $4,290.44 | stop_loss | $-485.85 | 21.4 |
-| 2026-06-10 | SELL | SQQQ | 127 | $45.20 | $5,741.00 | take_profit | $940.68 | 4.3 |
-| 2026-06-11 | BUY | SQQQ | 104 | $40.87 | $4,250.56 | momentum_score=1.0 | $nan | — |
-| 2026-06-12 | BUY | TQQQ | 62 | $77.60 | $4,811.05 | momentum_score=0.7 | $nan | — |
+| 2026-06-03 | BUY | AVGO | 9 | $479.71 | $4,317.38 | momentum_score=0.814 | — | — |
+| 2026-06-03 | SELL | NOW | 36 | $117.78 | $4,240.16 | stop_loss | $-655.70 | 1.4 |
+| 2026-06-04 | BUY | CRWD | 6 | $719.81 | $4,318.85 | momentum_score=0.836 | — | — |
+| 2026-06-04 | SELL | AVGO | 9 | $418.49 | $3,766.42 | stop_loss | $-550.96 | 0.7 |
+| 2026-06-05 | BUY | GS | 4 | $1,039.72 | $4,158.87 | momentum_score=0.792 | — | — |
+| 2026-06-05 | SELL | TSLA | 9 | $390.61 | $3,515.48 | stop_loss | $-389.47 | 17.1 |
+| 2026-06-05 | SELL | AMD | 9 | $465.91 | $4,193.22 | stop_loss | $-346.32 | 7.1 |
+| 2026-06-05 | SELL | ORCL | 20 | $213.47 | $4,269.33 | stop_loss | $-698.64 | 2.9 |
+| 2026-06-05 | SELL | ARM | 11 | $342.59 | $3,768.46 | stop_loss | $-665.78 | 2.1 |
+| 2026-06-05 | SELL | CRM | 21 | $185.00 | $3,884.93 | stop_loss | $-326.05 | 2.1 |
+| 2026-06-08 | SELL | AMZN | 16 | $244.97 | $3,919.60 | stop_loss | $-325.60 | 27.9 |
+| 2026-06-08 | SELL | CRWD | 6 | $658.13 | $3,948.79 | stop_loss | $-370.07 | 2.9 |
+| 2026-06-09 | BUY | MU | 4 | $936.83 | $3,747.30 | momentum_score=0.738 | — | — |
+| 2026-06-10 | BUY | JPM | 14 | $309.45 | $4,332.29 | momentum_score=0.796 | — | — |
+| 2026-06-10 | BUY | TSM | 10 | $408.20 | $4,082.03 | momentum_score=0.786 | — | — |
+| 2026-06-11 | BUY | BAC | 80 | $55.22 | $4,417.22 | momentum_score=0.726 | — | — |
+| 2026-06-11 | BUY | NFLX | 53 | $81.35 | $4,311.62 | momentum_score=0.704 | — | — |
+| 2026-06-11 | SELL | META | 6 | $567.86 | $3,407.17 | max_holding_period | $-267.96 | 30.0 |
+| 2026-06-11 | SELL | ASML | 2 | $1,897.58 | $3,795.16 | take_profit | $527.84 | 11.4 |
+| 2026-06-12 | BUY | ASML | 2 | $1,865.41 | $3,730.83 | momentum_score=0.916 | — | — |
 
 ## Open Positions at End of Period
 
 | Ticker | Shares | Entry Price | Final Price | Unrealized P&L | Entry Date |
 |--------|--------|------------|------------|----------------|------------|
-| SQQQ | 104 | $40.87 | $40.04 | $-86.40 | 2026-06-11 |
-| TQQQ | 62 | $77.60 | $77.52 | $-4.81 | 2026-06-12 |
+| GOOGL | 11 | $383.40 | $359.68 | $-260.97 | 2026-05-04 |
+| AAPL | 15 | $287.53 | $291.13 | $53.96 | 2026-05-06 |
+| NVDA | 20 | $215.16 | $205.19 | $-199.49 | 2026-05-08 |
+| PANW | 15 | $280.71 | $279.62 | $-16.36 | 2026-06-03 |
+| GS | 4 | $1,039.72 | $1,062.75 | $92.13 | 2026-06-05 |
+| MU | 4 | $936.83 | $981.61 | $179.14 | 2026-06-09 |
+| JPM | 14 | $309.45 | $320.72 | $157.79 | 2026-06-10 |
+| TSM | 10 | $408.20 | $423.93 | $157.27 | 2026-06-10 |
+| BAC | 80 | $55.22 | $56.02 | $64.38 | 2026-06-11 |
+| NFLX | 53 | $81.35 | $80.34 | $-53.60 | 2026-06-11 |
+| ASML | 2 | $1,865.41 | $1,863.55 | $-3.73 | 2026-06-12 |
 
 ## Equity Curve (first and last 5 days)
 
 | Date | Portfolio Value | Daily Ret | Cumulative Ret | SPY Ret | QQQ Ret | EqWt Ret |
 |------|----------------|----------|----------------|---------|---------|---------|
-| 2021-01-04 | $100,000.00 | +nan% | +0.00% | +0.00% | +0.00% | +0.00% |
-| 2021-01-05 | $99,995.32 | -0.00% | -0.00% | +0.69% | +0.82% | +0.02% |
-| 2021-01-06 | $100,184.10 | +0.19% | +0.18% | +1.29% | -0.57% | -0.08% |
-| 2021-01-07 | $100,165.96 | -0.02% | +0.17% | +2.80% | +1.83% | -0.32% |
-| 2021-01-08 | $100,197.97 | +0.03% | +0.20% | +3.38% | +3.14% | -0.01% |
-| 2026-06-08 | $94,628.36 | -0.05% | -5.37% | +115.32% | +138.86% | +85.02% |
-| 2026-06-09 | $94,649.33 | +0.02% | -5.35% | +114.68% | +136.11% | +78.92% |
-| 2026-06-10 | $94,691.04 | +0.04% | -5.31% | +111.30% | +131.40% | +68.28% |
-| 2026-06-11 | $94,686.80 | -0.00% | -5.31% | +114.89% | +139.21% | +84.38% |
-| 2026-06-12 | $94,599.83 | -0.09% | -5.40% | +116.05% | +140.62% | +87.99% |
+| 2021-01-04 | $100,000.00 | — | +0.00% | +0.00% | +0.00% | +0.00% |
+| 2021-01-05 | $99,994.11 | -0.01% | -0.01% | +0.69% | +0.82% | +0.94% |
+| 2021-01-06 | $99,976.99 | -0.02% | -0.02% | +1.29% | -0.57% | -0.03% |
+| 2021-01-07 | $100,329.78 | +0.35% | +0.33% | +2.80% | +1.83% | +3.04% |
+| 2021-01-08 | $100,190.76 | -0.14% | +0.19% | +3.38% | +3.14% | +3.76% |
+| 2026-06-08 | $148,171.93 | -0.04% | +48.17% | +115.32% | +138.86% | +309.58% |
+| 2026-06-09 | $147,918.34 | -0.17% | +47.92% | +114.68% | +136.11% | +305.06% |
+| 2026-06-10 | $147,256.06 | -0.45% | +47.26% | +111.30% | +131.40% | +293.38% |
+| 2026-06-11 | $148,712.10 | +0.99% | +48.71% | +114.89% | +139.21% | +308.18% |
+| 2026-06-12 | $148,870.36 | +0.11% | +48.87% | +116.05% | +140.62% | +308.46% |
 
 
 ## Sensitivity Analysis
@@ -105,86 +122,86 @@ _Benchmarks: **SPY** and **QQQ** are buy-and-hold of those ETFs. **Equal-Wt Hold
 > One parameter is varied at a time; all others remain at baseline values.
 > Do not select parameters based on in-sample performance alone — see Robustness Notes below.
 
-**Baseline:** -5.40% return  |  -8.11% max drawdown  |  +35.29% win rate  |  0.92 profit factor
+**Baseline:** +48.87% return  |  -19.47% max drawdown  |  +51.44% win rate  |  1.30 profit factor
 
 ### Stop Loss  (baseline: 7.5%)
 
 | Value | Return | vs SPY | vs EqWt | Max DD | Trades | Win Rate | PF |
 |-------|--------|--------|--------|--------|--------|----------|-----|
-| 3.0% | -12.08% | -128.14% | -100.08% | -15.40% | 670 | +21.86% | 0.82 |
-| 5.0% | -9.96% | -126.01% | -97.95% | -13.40% | 522 | +26.92% | 0.85 |
-| 7.5% ◀ baseline | -5.40% | -121.45% | -93.39% | -8.11% | 444 | +35.29% | 0.92 |
-| 10.0% | -6.17% | -122.23% | -94.17% | -6.89% | 378 | +40.43% | 0.91 |
+| 3.0% | +34.67% | -81.39% | -273.80% | -14.87% | 2942 | +35.08% | 1.23 |
+| 5.0% | +45.14% | -70.91% | -263.32% | -17.64% | 2615 | +44.13% | 1.28 |
+| 7.5% ◀ baseline | +48.87% | -67.18% | -259.59% | -19.47% | 2371 | +51.44% | 1.30 |
+| 10.0% | +49.04% | -67.01% | -259.42% | -22.69% | 2215 | +55.58% | 1.31 |
 
-### Take Profit  (baseline: 15%)
+### Take Profit  (baseline: 10%)
 
 | Value | Return | vs SPY | vs EqWt | Max DD | Trades | Win Rate | PF |
 |-------|--------|--------|--------|--------|--------|----------|-----|
-| 8% | -8.27% | -124.33% | -96.27% | -11.85% | 604 | +46.84% | 0.89 |
-| 10% | -6.22% | -122.27% | -94.21% | -8.10% | 528 | +43.73% | 0.91 |
-| 15% ◀ baseline | -5.40% | -121.45% | -93.39% | -8.11% | 444 | +35.29% | 0.92 |
+| 8% | +49.10% | -66.95% | -259.36% | -18.58% | 2526 | +55.12% | 1.30 |
+| 10% ◀ baseline | +48.87% | -67.18% | -259.59% | -19.47% | 2371 | +51.44% | 1.30 |
+| 15% | +53.57% | -62.48% | -254.89% | -20.28% | 2050 | +48.82% | 1.35 |
 
 ### Max Holding Days  (baseline: 30)
 
 | Value | Return | vs SPY | vs EqWt | Max DD | Trades | Win Rate | PF |
 |-------|--------|--------|--------|--------|--------|----------|-----|
-| 5 | -8.49% | -124.54% | -96.48% | -10.44% | 832 | +45.06% | 0.88 |
-| 15 | -6.90% | -122.95% | -94.89% | -8.74% | 518 | +38.76% | 0.90 |
-| 30 ◀ baseline | -5.40% | -121.45% | -93.39% | -8.11% | 444 | +35.29% | 0.92 |
-| 60 | -5.43% | -121.48% | -93.42% | -7.33% | 430 | +34.58% | 0.92 |
+| 5 | +11.70% | -104.35% | -296.76% | -13.18% | 3734 | +50.19% | 1.09 |
+| 15 | +43.54% | -72.51% | -264.92% | -17.39% | 2739 | +52.75% | 1.29 |
+| 30 ◀ baseline | +48.87% | -67.18% | -259.59% | -19.47% | 2371 | +51.44% | 1.30 |
+| 60 | +62.22% | -53.84% | -246.25% | -21.79% | 2195 | +51.28% | 1.36 |
 
-### Max New Trades / Day  (baseline: 1)
+### Max New Trades / Day  (baseline: 2)
 
 | Value | Return | vs SPY | vs EqWt | Max DD | Trades | Win Rate | PF |
 |-------|--------|--------|--------|--------|--------|----------|-----|
-| 1 ◀ baseline | -5.40% | -121.45% | -93.39% | -8.11% | 444 | +35.29% | 0.92 |
-| 2 | -5.05% | -121.11% | -93.05% | -8.11% | 444 | +35.29% | 0.93 |
-| 3 | -5.05% | -121.11% | -93.05% | -8.11% | 444 | +35.29% | 0.93 |
-| 5 | -5.05% | -121.11% | -93.05% | -8.11% | 444 | +35.29% | 0.93 |
+| 1 | +35.86% | -80.19% | -272.60% | -17.85% | 2020 | +51.19% | 1.26 |
+| 2 ◀ baseline | +48.87% | -67.18% | -259.59% | -19.47% | 2371 | +51.44% | 1.30 |
+| 3 | +57.25% | -58.80% | -251.22% | -20.54% | 2427 | +51.99% | 1.34 |
+| 5 | +57.67% | -58.38% | -250.79% | -20.63% | 2442 | +52.18% | 1.34 |
 
 ### Min Composite Score  (baseline: 0.70)
 
 | Value | Return | vs SPY | vs EqWt | Max DD | Trades | Win Rate | PF |
 |-------|--------|--------|--------|--------|--------|----------|-----|
-| none | -5.34% | -121.40% | -93.34% | -7.34% | 506 | +35.71% | 0.93 |
-| 0.60 | -3.12% | -119.17% | -91.11% | -5.96% | 474 | +36.44% | 0.96 |
-| 0.70 ◀ baseline | -5.40% | -121.45% | -93.39% | -8.11% | 444 | +35.29% | 0.92 |
-| 0.80 | -4.72% | -120.77% | -92.71% | -8.03% | 387 | +36.27% | 0.92 |
+| none | +87.13% | -28.92% | -221.33% | -26.16% | 3236 | +52.89% | 1.35 |
+| 0.60 | +61.36% | -54.69% | -247.11% | -26.39% | 2978 | +51.21% | 1.29 |
+| 0.70 ◀ baseline | +48.87% | -67.18% | -259.59% | -19.47% | 2371 | +51.44% | 1.30 |
+| 0.80 | +35.29% | -80.76% | -273.18% | -14.88% | 1677 | +52.27% | 1.31 |
 
 ### Signal Weight Profile  (baseline: baseline)
 
 | Value | Return | vs SPY | vs EqWt | Max DD | Trades | Win Rate | PF |
 |-------|--------|--------|--------|--------|--------|----------|-----|
-| baseline ◀ baseline | -5.40% | -121.45% | -93.39% | -8.11% | 444 | +35.29% | 0.92 |
-| no_1d | -3.28% | -119.34% | -91.28% | -5.92% | 410 | +36.76% | 0.95 |
-| less_1d | -4.45% | -120.50% | -92.45% | -7.12% | 414 | +36.41% | 0.93 |
-| more_volume | -5.40% | -121.45% | -93.39% | -8.11% | 444 | +35.29% | 0.92 |
+| baseline ◀ baseline | +48.87% | -67.18% | -259.59% | -19.47% | 2371 | +51.44% | 1.30 |
+| no_1d | +47.44% | -68.61% | -261.03% | -19.89% | 2307 | +51.52% | 1.30 |
+| less_1d | +47.16% | -68.89% | -261.30% | -19.83% | 2291 | +51.62% | 1.30 |
+| more_volume | +48.87% | -67.18% | -259.59% | -19.47% | 2371 | +51.44% | 1.30 |
 
 ### Best 5 Variants by Total Return
 
 | Rank | Parameter | Value | Return | vs SPY | vs EqWt | Max DD | PF |
 |------|-----------|-------|--------|--------|--------|--------|-----|
-| 1 | min_composite_score | 0.60 | -3.12% | -119.17% | -91.11% | -5.96% | 0.96 |
-| 2 | signal_weights | no_1d | -3.28% | -119.34% | -91.28% | -5.92% | 0.95 |
-| 3 | signal_weights | less_1d | -4.45% | -120.50% | -92.45% | -7.12% | 0.93 |
-| 4 | min_composite_score | 0.80 | -4.72% | -120.77% | -92.71% | -8.03% | 0.92 |
-| 5 | max_new_trades_per_day | 2 | -5.05% | -121.11% | -93.05% | -8.11% | 0.93 |
+| 1 | min_composite_score | none | +87.13% | -28.92% | -221.33% | -26.16% | 1.35 |
+| 2 | max_holding_days | 60 | +62.22% | -53.84% | -246.25% | -21.79% | 1.36 |
+| 3 | min_composite_score | 0.60 | +61.36% | -54.69% | -247.11% | -26.39% | 1.29 |
+| 4 | max_new_trades_per_day | 5 | +57.67% | -58.38% | -250.79% | -20.63% | 1.34 |
+| 5 | max_new_trades_per_day | 3 | +57.25% | -58.80% | -251.22% | -20.54% | 1.34 |
 
 ### Worst 5 Variants by Total Return
 
 | Rank | Parameter | Value | Return | vs SPY | vs EqWt | Max DD | PF |
 |------|-----------|-------|--------|--------|--------|--------|-----|
-| 1 | stop_loss | 3.0% | -12.08% | -128.14% | -100.08% | -15.40% | 0.82 |
-| 2 | stop_loss | 5.0% | -9.96% | -126.01% | -97.95% | -13.40% | 0.85 |
-| 3 | max_holding_days | 5 | -8.49% | -124.54% | -96.48% | -10.44% | 0.88 |
-| 4 | take_profit | 8% | -8.27% | -124.33% | -96.27% | -11.85% | 0.89 |
-| 5 | max_holding_days | 15 | -6.90% | -122.95% | -94.89% | -8.74% | 0.90 |
+| 1 | max_holding_days | 5 | +11.70% | -104.35% | -296.76% | -13.18% | 1.09 |
+| 2 | stop_loss | 3.0% | +34.67% | -81.39% | -273.80% | -14.87% | 1.23 |
+| 3 | min_composite_score | 0.80 | +35.29% | -80.76% | -273.18% | -14.88% | 1.31 |
+| 4 | max_new_trades_per_day | 1 | +35.86% | -80.19% | -272.60% | -17.85% | 1.26 |
+| 5 | max_holding_days | 15 | +43.54% | -72.51% | -264.92% | -17.39% | 1.29 |
 
 ### Robustness Notes
 
 35% of variants beat the baseline. Improvements are mixed — some directions help, others hurt — which is consistent with a strategy that has modest but not dominant in-sample edge.
 
-The widest in-sample return spread belongs to `stop_loss` (6.7 pp range across its variants); `max_new_trades_per_day` shows the narrowest spread (0.3 pp), suggesting the strategy is least sensitive to that parameter in this period.
+The widest in-sample return spread belongs to `min_composite_score` (51.8 pp range across its variants); `signal_weights` shows the narrowest spread (1.7 pp), suggesting the strategy is least sensitive to that parameter in this period.
 
 Improvements that appear in only one or two variants should be treated with skepticism — isolated peaks are more likely to reflect in-sample noise than genuine edge. Prefer settings that perform consistently across the full sweep.
 

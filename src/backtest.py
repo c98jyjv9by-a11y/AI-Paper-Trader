@@ -28,13 +28,15 @@ import argparse
 import logging
 import os
 import sys
+from concurrent.futures import ProcessPoolExecutor
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
-import yfinance as yf
 import yaml
+# yfinance is imported lazily inside fetch_backtest_data — it is slow to import
+# and unneeded by sensitivity worker processes (which only replay in-memory data).
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -55,6 +57,11 @@ log = logging.getLogger(__name__)
 
 _BENCH_TICKERS = ["SPY", "QQQ"]
 _POS_COLS = ["ticker", "shares", "entry_price", "entry_date", "current_price"]
+
+# Signals look back at most 21 bars (20-day return + 20-day avg volume). Feeding
+# calculate_signals only this tail — instead of the full growing history — keeps
+# per-bar signal cost flat rather than O(bars²). 60 leaves margin for missing/NaN bars.
+_SIGNAL_WINDOW = 60
 
 
 # ─── Config (duplicated from main.py so this script is fully standalone) ──────
@@ -84,6 +91,8 @@ def fetch_backtest_data(
     signals (which need 20 bars) are available from the very first sim date.
     yfinance's end parameter is exclusive, so we add one day.
     """
+    import yfinance as yf  # lazy: keeps module import (and worker startup) fast
+
     all_tickers = list(dict.fromkeys(tickers + _BENCH_TICKERS))
     fetch_start = (start_date - timedelta(days=warmup_days)).isoformat()
     fetch_end = (end_date + timedelta(days=1)).isoformat()
@@ -325,6 +334,71 @@ def _trailing_return_from_cum_ret(cum_series: pd.Series, n_bars: int) -> Optiona
     return round(end_level / start_level - 1, 6)
 
 
+def _xirr(cashflows: List[Tuple[date, float]]) -> Optional[float]:
+    """
+    Annualized internal rate of return (money-weighted) for dated cash flows.
+
+    cashflows: (date, amount) pairs; negative = cash out (a BUY), positive = cash
+    in (a SELL, or terminal mark-to-market of still-open positions). Returns the
+    annual rate r solving sum(amount / (1+r)**years_from_first) == 0, or None if
+    the stream lacks both signs or cannot be solved.
+
+    Newton-Raphson first, with a bracketed bisection fallback for robustness. The
+    rate domain is (-100%, ∞), so IRR cannot print below -100%.
+    """
+    if len(cashflows) < 2:
+        return None
+    amounts = [a for _, a in cashflows]
+    if not (any(a > 0 for a in amounts) and any(a < 0 for a in amounts)):
+        return None
+
+    t0 = min(d for d, _ in cashflows)
+    years = [(d - t0).days / 365.0 for d, _ in cashflows]
+    scale = sum(abs(a) for a in amounts)
+    tol = 1e-6 * scale + 1e-6
+
+    def npv(rate: float) -> float:
+        return sum(a / (1.0 + rate) ** y for a, y in zip(amounts, years))
+
+    # Newton-Raphson
+    rate = 0.1
+    for _ in range(100):
+        f = npv(rate)
+        deriv = sum(-y * a / (1.0 + rate) ** (y + 1.0) for a, y in zip(amounts, years))
+        if abs(deriv) < 1e-12:
+            break
+        new_rate = rate - f / deriv
+        if new_rate <= -0.999999:
+            new_rate = (rate - 0.999999) / 2.0
+        if abs(new_rate - rate) < 1e-9:
+            rate = new_rate
+            break
+        rate = new_rate
+    if rate > -0.999999 and abs(npv(rate)) < tol:
+        return rate
+
+    # Bisection fallback
+    lo, hi = -0.999999, 1.0
+    f_lo, f_hi = npv(lo), npv(hi)
+    tries = 0
+    while f_lo * f_hi > 0 and hi < 1e7 and tries < 80:
+        hi *= 2.0
+        f_hi = npv(hi)
+        tries += 1
+    if f_lo * f_hi > 0:
+        return None
+    for _ in range(200):
+        mid = (lo + hi) / 2.0
+        f_mid = npv(mid)
+        if abs(f_mid) < tol or (hi - lo) < 1e-12:
+            return mid
+        if f_lo * f_mid < 0:
+            hi = mid
+        else:
+            lo, f_lo = mid, f_mid
+    return (lo + hi) / 2.0
+
+
 # ─── Main simulation loop ─────────────────────────────────────────────────────
 
 
@@ -363,6 +437,10 @@ def run_backtest(
         raise ValueError(f"No trading days found between {start_date} and {end_date}.")
 
     bench_start_ts = sim_timestamps[0]
+    # sim_timestamps is a contiguous tail of all_timestamps, so the integer bar
+    # index just increments — avoids an O(n) list.index() lookup every bar.
+    sim_start_idx = all_timestamps.index(bench_start_ts)
+    n_timestamps = len(all_timestamps)
 
     # ── State ─────────────────────────────────────────────────────────────────
     cash = float(starting_value)
@@ -377,9 +455,9 @@ def run_backtest(
         start_date, end_date, len(sim_timestamps),
     )
 
-    for bar_ts in sim_timestamps:
+    for offset, bar_ts in enumerate(sim_timestamps):
         bar_date = bar_ts.date()
-        bar_idx = all_timestamps.index(bar_ts)
+        bar_idx = sim_start_idx + offset
         today_prices: pd.Series = close.loc[bar_ts].dropna()
 
         # ── 1. Fill pending buy orders (queued from yesterday's signals) ──────
@@ -446,8 +524,10 @@ def run_backtest(
         portfolio_value = cash + equity
 
         # ── 5. Compute signals (no look-ahead) and queue entries for tomorrow ─
-        if bar_idx + 1 < len(all_timestamps):
-            data_slice = price_data.iloc[: bar_idx + 1]   # ← only data up to today
+        if bar_idx + 1 < n_timestamps:
+            # Windowed tail ending at today's bar — never includes future data,
+            # but bounds per-bar cost (see _SIGNAL_WINDOW).
+            data_slice = price_data.iloc[max(0, bar_idx + 1 - _SIGNAL_WINDOW): bar_idx + 1]
             signals = calculate_signals(data_slice, tickers)
             if not signals.empty:
                 ranked = rank_candidates(signals, top_n=top_n, weights=weights)
@@ -524,17 +604,35 @@ def compute_metrics(
     total_pnl = final_value - starting_value
     total_return = total_pnl / starting_value
 
-    # ── Capital deployment & return on invested capital ───────────────────────
-    # "Invested capital" = market value of open positions at each day's close.
-    # Averaging over ALL sim days (idle days count as 0) gives the time-weighted
-    # capital actually put to work, so ROIC is not inflated by brief deployments.
+    # ── Capital deployment & money-weighted return (IRR) ──────────────────────
+    # Snapshot deployment: market value of open positions at each day's close.
+    # These describe how much capital was at work *at any one moment* (a stock).
     deployed = equity_df["open_positions_value"]
     avg_deployed = float(deployed.mean())
     peak_deployed = float(deployed.max())
     pct_time_invested = float((deployed > 0).mean())
-    # Return on invested capital: total P&L per dollar of (time-averaged) capital
-    # deployed. Strips out cash drag — the headline "total_return" above keeps it.
-    return_on_invested_capital = (total_pnl / avg_deployed) if avg_deployed > 0 else None
+    total_capital_deployed = (
+        float(trades_df.loc[trades_df["action"] == "BUY", "trade_value"].sum())
+        if not trades_df.empty else 0.0
+    )
+
+    # IRR (annualized, money-weighted) on the capital actually put into positions.
+    # Cash flows are the dated BUYs (out) and SELLs (in), plus a terminal mark-to-
+    # market of any still-open positions on the last day. Idle cash never enters,
+    # so this isolates how the *deployed* capital performed, time-weighted by when
+    # it was committed. The rate domain is (-100%, ∞), so IRR cannot exceed -100%.
+    cashflows: List[Tuple[date, float]] = []
+    if not trades_df.empty:
+        for _, tr in trades_df.iterrows():
+            amt = -float(tr["trade_value"]) if tr["action"] == "BUY" else float(tr["trade_value"])
+            cashflows.append((date.fromisoformat(str(tr["date"])), amt))
+    terminal_value = (
+        float((positions["shares"] * positions["current_price"]).sum())
+        if not positions.empty else 0.0
+    )
+    if terminal_value > 0:
+        cashflows.append((date.fromisoformat(str(equity_df["date"].iloc[-1])), terminal_value))
+    irr = _xirr(cashflows)
 
     # Max drawdown
     roll_max = equity_df["total_portfolio_value"].cummax()
@@ -605,7 +703,8 @@ def compute_metrics(
         "starting_value": starting_value,
         "ending_value": final_value,
         "total_return": total_return,
-        "return_on_invested_capital": return_on_invested_capital,
+        "irr": irr,
+        "total_capital_deployed": total_capital_deployed,
         "avg_capital_deployed": avg_deployed,
         "avg_capital_deployed_pct": avg_deployed / starting_value,
         "peak_capital_deployed": peak_deployed,
@@ -694,6 +793,84 @@ def _sweep_with_baseline(
     return ([None] if None in vals else []) + numeric
 
 
+# Each sensitivity variant is an independent full backtest, so they run in
+# parallel across processes. Worker processes receive the (large, read-only) price
+# data once via the pool initializer rather than re-pickling it for every task.
+_SENS_CTX: Dict[str, Any] = {}
+
+
+def _sensitivity_pool_init(price_data: pd.DataFrame, start_date: date, end_date: date) -> None:
+    _SENS_CTX["price_data"] = price_data
+    _SENS_CTX["start_date"] = start_date
+    _SENS_CTX["end_date"] = end_date
+
+
+def _run_variant(task: Tuple[str, str, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Run one variant backtest and return its summary metrics (or None on failure)."""
+    param, display_val, cfg = task
+    price_data = _SENS_CTX["price_data"]
+    start_date = _SENS_CTX["start_date"]
+    end_date = _SENS_CTX["end_date"]
+    try:
+        t, e, pos = run_backtest(cfg, price_data, start_date, end_date)
+        m = compute_metrics(t, e, pos, cfg, start_date, end_date)
+        return {
+            "parameter": param,
+            "value": display_val,
+            "total_return": m.get("total_return"),
+            "excess_vs_spy": m.get("excess_vs_spy"),
+            "excess_vs_qqq": m.get("excess_vs_qqq"),
+            "excess_vs_equal_weight": m.get("excess_vs_equal_weight"),
+            "max_drawdown": m.get("max_drawdown"),
+            "total_trades": m.get("n_trades", 0),
+            "win_rate": m.get("win_rate"),
+            "profit_factor": m.get("profit_factor"),
+            "avg_holding_period": m.get("avg_holding_days"),
+        }
+    except Exception as exc:
+        log.warning("Sensitivity %s=%s failed: %s", param, display_val, exc)
+        return None
+
+
+def _build_sensitivity_tasks(baseline_config: Dict[str, Any]) -> List[Tuple[str, str, Dict[str, Any]]]:
+    """Build the (parameter, display_value, config) tuples for every variant to run."""
+    import copy
+
+    r = baseline_config["risk"]
+    p = baseline_config["portfolio"]
+    s = baseline_config.get("signals", {})
+    tasks: List[Tuple[str, str, Dict[str, Any]]] = []
+
+    for val in _sweep_with_baseline(_SENSITIVITY_TEST_POINTS["stop_loss"], r["stop_loss"]):
+        cfg = copy.deepcopy(baseline_config); cfg["risk"]["stop_loss"] = val
+        tasks.append(("stop_loss", f"{val:.1%}", cfg))
+
+    for val in _sweep_with_baseline(_SENSITIVITY_TEST_POINTS["take_profit"], r["take_profit"]):
+        cfg = copy.deepcopy(baseline_config); cfg["risk"]["take_profit"] = val
+        tasks.append(("take_profit", f"{val:.0%}", cfg))
+
+    for val in _sweep_with_baseline(_SENSITIVITY_TEST_POINTS["max_holding_days"], r["max_holding_days"]):
+        cfg = copy.deepcopy(baseline_config); cfg["risk"]["max_holding_days"] = val
+        tasks.append(("max_holding_days", str(val), cfg))
+
+    for val in _sweep_with_baseline(_SENSITIVITY_TEST_POINTS["max_new_trades_per_day"], p["max_new_trades_per_day"]):
+        cfg = copy.deepcopy(baseline_config); cfg["portfolio"]["max_new_trades_per_day"] = val
+        tasks.append(("max_new_trades_per_day", str(val), cfg))
+
+    for val in _sweep_with_baseline(_SENSITIVITY_TEST_POINTS["min_composite_score"], s.get("min_composite_score")):
+        cfg = copy.deepcopy(baseline_config); cfg["signals"]["min_composite_score"] = val
+        tasks.append(("min_composite_score", "none" if val is None else f"{val:.2f}", cfg))
+
+    # "baseline" profile reflects the live config weights; alternatives are fixed.
+    config_weights = s.get("weights") or _DEFAULT_WEIGHTS
+    weight_profiles = {"baseline": config_weights, **_ALT_WEIGHT_PROFILES}
+    for name, wts in weight_profiles.items():
+        cfg = copy.deepcopy(baseline_config); cfg["signals"]["weights"] = wts
+        tasks.append(("signal_weights", name, cfg))
+
+    return tasks
+
+
 def _run_sensitivity_variants(
     baseline_config: Dict[str, Any],
     price_data: pd.DataFrame,
@@ -704,75 +881,39 @@ def _run_sensitivity_variants(
     One-way sensitivity analysis: vary one parameter at a time, all others held at
     the live config baseline.
 
-    Each numeric sweep is built from a fixed set of test points plus the current
-    baseline value from config/strategy.yaml, so the report stays correct as you
-    edit baselines. Uses deepcopy so baseline_config is never mutated. Returns
-    summary metric dicts only — no per-run trade logs or equity curves are retained.
+    Each numeric sweep merges a fixed set of test points with the current baseline
+    value from config/strategy.yaml, so the report stays correct as you edit
+    baselines. Variants are independent full backtests, so they run across a process
+    pool (set BACKTEST_SERIAL=1 to force single-process). deepcopy keeps
+    baseline_config unmutated. Returns summary metric dicts only — no per-run trade
+    logs or equity curves are retained. Result order matches task order regardless
+    of execution mode, so the report is deterministic.
     """
-    import copy
+    tasks = _build_sensitivity_tasks(baseline_config)
 
-    r = baseline_config["risk"]
-    p = baseline_config["portfolio"]
-    s = baseline_config.get("signals", {})
+    force_serial = os.environ.get("BACKTEST_SERIAL") == "1"
+    max_workers = min(len(tasks), os.cpu_count() or 1, 8)
 
-    results: List[Dict[str, Any]] = []
-
-    def _run_one(param: str, display_val: str, cfg: Dict[str, Any]) -> None:
+    if not force_serial and max_workers > 1:
         try:
-            t, e, pos = run_backtest(cfg, price_data, start_date, end_date)
-            m = compute_metrics(t, e, pos, cfg, start_date, end_date)
-            results.append(
-                {
-                    "parameter": param,
-                    "value": display_val,
-                    "total_return": m.get("total_return"),
-                    "excess_vs_spy": m.get("excess_vs_spy"),
-                    "excess_vs_qqq": m.get("excess_vs_qqq"),
-                    "excess_vs_equal_weight": m.get("excess_vs_equal_weight"),
-                    "max_drawdown": m.get("max_drawdown"),
-                    "total_trades": m.get("n_trades", 0),
-                    "win_rate": m.get("win_rate"),
-                    "profit_factor": m.get("profit_factor"),
-                    "avg_holding_period": m.get("avg_holding_days"),
-                }
+            with ProcessPoolExecutor(
+                max_workers=max_workers,
+                initializer=_sensitivity_pool_init,
+                initargs=(price_data, start_date, end_date),
+            ) as executor:
+                results = [r for r in executor.map(_run_variant, tasks) if r is not None]
+            log.info(
+                "Sensitivity analysis: %d/%d variants across %d workers",
+                len(results), len(tasks), max_workers,
             )
-        except Exception as exc:
-            log.warning("Sensitivity %s=%s failed: %s", param, display_val, exc)
+            return results
+        except Exception as exc:  # pragma: no cover - environment-dependent
+            log.warning("Parallel sensitivity unavailable (%s) — running serially", exc)
 
-    for val in _sweep_with_baseline(_SENSITIVITY_TEST_POINTS["stop_loss"], r["stop_loss"]):
-        cfg = copy.deepcopy(baseline_config)
-        cfg["risk"]["stop_loss"] = val
-        _run_one("stop_loss", f"{val:.1%}", cfg)
-
-    for val in _sweep_with_baseline(_SENSITIVITY_TEST_POINTS["take_profit"], r["take_profit"]):
-        cfg = copy.deepcopy(baseline_config)
-        cfg["risk"]["take_profit"] = val
-        _run_one("take_profit", f"{val:.0%}", cfg)
-
-    for val in _sweep_with_baseline(_SENSITIVITY_TEST_POINTS["max_holding_days"], r["max_holding_days"]):
-        cfg = copy.deepcopy(baseline_config)
-        cfg["risk"]["max_holding_days"] = val
-        _run_one("max_holding_days", str(val), cfg)
-
-    for val in _sweep_with_baseline(_SENSITIVITY_TEST_POINTS["max_new_trades_per_day"], p["max_new_trades_per_day"]):
-        cfg = copy.deepcopy(baseline_config)
-        cfg["portfolio"]["max_new_trades_per_day"] = val
-        _run_one("max_new_trades_per_day", str(val), cfg)
-
-    for val in _sweep_with_baseline(_SENSITIVITY_TEST_POINTS["min_composite_score"], s.get("min_composite_score")):
-        cfg = copy.deepcopy(baseline_config)
-        cfg["signals"]["min_composite_score"] = val
-        _run_one("min_composite_score", "none" if val is None else f"{val:.2f}", cfg)
-
-    # "baseline" profile reflects the live config weights; alternatives are fixed.
-    config_weights = s.get("weights") or _DEFAULT_WEIGHTS
-    weight_profiles = {"baseline": config_weights, **_ALT_WEIGHT_PROFILES}
-    for name, wts in weight_profiles.items():
-        cfg = copy.deepcopy(baseline_config)
-        cfg["signals"]["weights"] = wts
-        _run_one("signal_weights", name, cfg)
-
-    log.info("Sensitivity analysis: %d variants completed", len(results))
+    # Serial fallback (also the path when BACKTEST_SERIAL=1 or a single CPU).
+    _sensitivity_pool_init(price_data, start_date, end_date)
+    results = [r for r in (_run_variant(t) for t in tasks) if r is not None]
+    log.info("Sensitivity analysis: %d/%d variants (serial)", len(results), len(tasks))
     return results
 
 
@@ -1025,10 +1166,11 @@ def generate_backtest_report(
         "|--------|-------|",
         f"| Starting Value | {_dollar(m.get('starting_value'))} |",
         f"| Ending Value | {_dollar(m.get('ending_value'))} |",
-        f"| **Return on Invested Capital** | **{_pct(m.get('return_on_invested_capital'))}** |",
+        f"| **IRR (annualized, money-weighted)** | **{_pct(m.get('irr'))}** |",
         f"| Total Return (on full $ portfolio) | {_pct(m.get('total_return'))} |",
-        f"| Avg Capital Deployed | {_dollar(m.get('avg_capital_deployed'))} ({_pct(m.get('avg_capital_deployed_pct'))} of portfolio) |",
-        f"| Peak Capital Deployed | {_dollar(m.get('peak_capital_deployed'))} ({_pct(m.get('peak_capital_deployed_pct'))} of portfolio) |",
+        f"| Total Capital Deployed (all entries) | {_dollar(m.get('total_capital_deployed'))} |",
+        f"| Avg Capital Deployed (snapshot) | {_dollar(m.get('avg_capital_deployed'))} ({_pct(m.get('avg_capital_deployed_pct'))} of portfolio) |",
+        f"| Peak Capital Deployed (snapshot) | {_dollar(m.get('peak_capital_deployed'))} ({_pct(m.get('peak_capital_deployed_pct'))} of portfolio) |",
         f"| Time Invested | {_pct(m.get('pct_time_invested'))} of trading days |",
         f"| Trading Days | {m.get('trading_days', 'N/A')} |",
         f"| Total Trades | {m.get('n_trades', 0)} ({m.get('n_buys', 0)} buys, {m.get('n_sells', 0)} sells) |",
@@ -1043,10 +1185,13 @@ def generate_backtest_report(
         f"| Total Slippage Cost | {_dollar(m.get('total_slippage_cost'))} ({_pct(m.get('slippage_pct_of_portfolio'))} of start) |",
         f"| Avg Slippage / Trade | {_dollar(m.get('avg_slippage_per_trade'))} |",
         "",
-        "_**Return on Invested Capital** = total P&L ÷ time-averaged capital deployed; "
-        "it strips out idle-cash drag and is the truest measure of stock-picking. "
-        "**Total Return** is on the full starting portfolio (cash included) and is what "
-        "the SPY/QQQ/Equal-Wt comparisons above use, since those benchmarks are fully invested._",
+        "_**IRR** is the annualized money-weighted (internal) rate of return on the capital "
+        "actually put into positions: it solves for the rate that discounts the dated BUY "
+        "outflows, SELL inflows, and the terminal mark-to-market of open positions to zero. "
+        "It ignores idle cash, so it measures how the *deployed* capital performed, and is "
+        "bounded at -100%. Being annualized, short backtests can extrapolate to large figures. "
+        "**Total Return** is on the full starting portfolio (cash included) and is what the "
+        "SPY/QQQ/Equal-Wt comparisons above use, since those benchmarks are fully invested._",
         "",
     ]
 

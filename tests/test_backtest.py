@@ -23,6 +23,7 @@ from backtest import (
     _equal_weight_hold_return,
     _pct,
     _queue_entries,
+    _xirr,
     compute_metrics,
     generate_backtest_report,
     run_backtest,
@@ -599,7 +600,7 @@ class TestDynamicMaxPositionPct:
 # ─── 12. Return on invested capital & deployment metrics ─────────────────────
 
 
-class TestReturnOnInvestedCapital:
+class TestIRR:
     def _run(self, max_position_pct="auto"):
         tickers = ["AAPL", "MSFT", "SPY", "QQQ"]
         data = _make_price_data(tickers, n_days=60, seed=5)
@@ -613,22 +614,43 @@ class TestReturnOnInvestedCapital:
     def test_metrics_present(self):
         m = self._run()
         for k in [
-            "return_on_invested_capital", "avg_capital_deployed",
-            "avg_capital_deployed_pct", "peak_capital_deployed",
-            "peak_capital_deployed_pct", "pct_time_invested",
+            "irr", "total_capital_deployed",
+            "avg_capital_deployed", "avg_capital_deployed_pct",
+            "peak_capital_deployed", "peak_capital_deployed_pct",
+            "pct_time_invested",
         ]:
             assert k in m
 
-    def test_roic_exceeds_total_return_when_cash_idle(self):
-        """ROIC strips cash drag, so it should exceed total return when not fully invested."""
-        m = self._run()
-        if m["return_on_invested_capital"] is None or m["avg_capital_deployed_pct"] >= 0.999:
-            pytest.skip("Fully invested or no deployment — relationship not meaningful")
-        # |ROIC| should be larger in magnitude than |total_return| because the base is smaller
-        assert abs(m["return_on_invested_capital"]) > abs(m["total_return"])
+    def test_xirr_simple_one_year_gain(self):
+        """Invest $100, receive $110 exactly 365 days later → IRR == 10%."""
+        flows = [(date(2023, 1, 1), -100.0), (date(2024, 1, 1), 110.0)]  # 365-day span
+        assert _xirr(flows) == pytest.approx(0.10, rel=1e-3)
 
-    def test_roic_none_when_never_invested(self):
-        # top_n filtered to nothing via an impossible score → no positions ever opened
+    def test_xirr_half_year_gain_annualizes(self):
+        """$100 -> $110 in ~half a year annualizes above the simple 10%."""
+        flows = [(date(2023, 1, 1), -100.0), (date(2023, 7, 1), 110.0)]
+        irr = _xirr(flows)
+        assert irr is not None and irr > 0.10
+
+    def test_xirr_none_without_both_signs(self):
+        assert _xirr([(date(2024, 1, 1), -100.0), (date(2024, 6, 1), -50.0)]) is None
+        assert _xirr([(date(2024, 1, 1), 100.0)]) is None
+
+    def test_irr_bounded_below_at_negative_100pct(self):
+        """The IRR rate domain is (-100%, inf): it can never print below -100%."""
+        tickers = ["AAPL", "MSFT", "NVDA", "SPY", "QQQ"]
+        data = _make_price_data(tickers, n_days=80, seed=99)
+        dates = data.index
+        cfg = _make_config(["AAPL", "MSFT", "NVDA"], max_exposure=0.75, max_new=3, stop_loss=0.01, take_profit=5.0, max_holding=2)
+        cfg["portfolio"]["max_position_pct"] = "auto"
+        t, e, p = run_backtest(cfg, data, dates[25].date(), dates[-1].date())
+        m = compute_metrics(t, e, p, cfg, dates[25].date(), dates[-1].date())
+        if m["irr"] is None:
+            pytest.skip("IRR could not be solved (no qualifying cash flows)")
+        assert m["irr"] >= -1.0
+
+    def test_irr_none_when_never_invested(self):
+        # min score unreachable → no positions ever opened → no cash flows
         tickers = ["AAPL", "MSFT", "SPY", "QQQ"]
         data = _make_price_data(tickers, n_days=60, seed=5)
         dates = data.index
@@ -636,7 +658,7 @@ class TestReturnOnInvestedCapital:
         cfg["signals"]["min_composite_score"] = 2.0  # unreachable (max composite ~1.0)
         t, e, p = run_backtest(cfg, data, dates[25].date(), dates[-1].date())
         m = compute_metrics(t, e, p, cfg, dates[25].date(), dates[-1].date())
-        assert m["return_on_invested_capital"] is None
+        assert m["irr"] is None
 
 
 # ─── 13. Report formatting: NaN renders as em dash ───────────────────────────

@@ -42,24 +42,28 @@ def calculate_signals(data: pd.DataFrame, tickers: List[str]) -> pd.DataFrame:
             log.warning("No price data for %s — skipped", ticker)
             continue
 
-        c = close[ticker].dropna()
-        v = volume[ticker].dropna()
+        # Work on the raw numpy arrays: scalar indexing here is far cheaper than
+        # building full pct_change Series just to read the last value, and this is
+        # called once per ticker per bar across an entire backtest.
+        c = close[ticker].dropna().to_numpy()
+        v = volume[ticker].dropna().to_numpy()
 
         if len(c) < 21:
             log.warning("%s has only %d bars (need 21) — skipped", ticker, len(c))
             continue
 
-        ret_1d = float(c.pct_change(1).iloc[-1])
-        ret_5d = float(c.pct_change(5).iloc[-1])
-        ret_20d = float(c.pct_change(20).iloc[-1])
+        # pct_change(n).iloc[-1] == c[-1] / c[-1-n] - 1
+        ret_1d = float(c[-1] / c[-2] - 1)
+        ret_5d = float(c[-1] / c[-6] - 1)
+        ret_20d = float(c[-1] / c[-21] - 1)
 
-        avg_vol_20 = float(v.iloc[-21:-1].mean())
-        vol_ratio = float(v.iloc[-1]) / avg_vol_20 if avg_vol_20 > 0 else None
+        avg_vol_20 = float(v[-21:-1].mean())
+        vol_ratio = float(v[-1]) / avg_vol_20 if avg_vol_20 > 0 else None
 
         records.append(
             {
                 "ticker": ticker,
-                "price": round(float(c.iloc[-1]), 4),
+                "price": round(float(c[-1]), 4),
                 "return_1d": round(ret_1d, 6),
                 "return_5d": round(ret_5d, 6),
                 "return_20d": round(ret_20d, 6),
