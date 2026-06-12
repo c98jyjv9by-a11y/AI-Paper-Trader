@@ -1115,6 +1115,15 @@ def _pf(v: Optional[float]) -> str:
     return "N/A (no losses)" if v is None or pd.isna(v) else f"{v:.2f}"
 
 
+def _bench_end_balance(m: Dict[str, Any], return_key: str) -> Optional[float]:
+    """What the starting portfolio would be worth fully invested in a benchmark."""
+    sv = m.get("starting_value")
+    r = m.get(return_key)
+    if sv is None or r is None or pd.isna(r):
+        return None
+    return sv * (1.0 + r)
+
+
 def generate_backtest_report(
     metrics: Dict[str, Any],
     config: Dict[str, Any],
@@ -1141,6 +1150,7 @@ def generate_backtest_report(
         "",
         "| Metric | Strategy | SPY | QQQ | Equal-Wt Hold |",
         "|--------|----------|-----|-----|-----|",
+        f"| Ending Balance | {_dollar(m.get('ending_value'))} | {_dollar(_bench_end_balance(m, 'spy_return'), '—')} | {_dollar(_bench_end_balance(m, 'qqq_return'), '—')} | {_dollar(_bench_end_balance(m, 'equal_weight_return'), '—')} |",
         f"| Total Return | {_pct(m.get('total_return'))} | {_pct(m.get('spy_return'))} | {_pct(m.get('qqq_return'))} | {_pct(m.get('equal_weight_return'))} |",
         f"| Max Drawdown | {_pct(m.get('max_drawdown'))} | {_pct(m.get('spy_max_drawdown'), '—')} | {_pct(m.get('qqq_max_drawdown'), '—')} | {_pct(m.get('equal_weight_max_drawdown'), '—')} |",
         f"| Excess vs SPY | {_pct(m.get('excess_vs_spy'))} | — | — | — |",
