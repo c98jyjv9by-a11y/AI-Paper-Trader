@@ -4,6 +4,7 @@ signals.py — Momentum signal calculation and candidate ranking.
 import logging
 from typing import List
 
+import numpy as np
 import pandas as pd
 
 log = logging.getLogger(__name__)
@@ -60,6 +61,12 @@ def calculate_signals(data: pd.DataFrame, tickers: List[str]) -> pd.DataFrame:
         avg_vol_20 = float(v[-21:-1].mean())
         vol_ratio = float(v[-1]) / avg_vol_20 if avg_vol_20 > 0 else None
 
+        # Realized 20-day volatility (std of the last 20 daily returns) and
+        # volatility-adjusted momentum (return per unit of risk).
+        daily_rets_20 = c[-21:][1:] / c[-21:][:-1] - 1.0
+        realized_vol_20d = float(np.std(daily_rets_20))
+        vol_adj_mom_20d = ret_20d / realized_vol_20d if realized_vol_20d > 0 else None
+
         records.append(
             {
                 "ticker": ticker,
@@ -68,6 +75,8 @@ def calculate_signals(data: pd.DataFrame, tickers: List[str]) -> pd.DataFrame:
                 "return_5d": round(ret_5d, 6),
                 "return_20d": round(ret_20d, 6),
                 "vol_ratio": round(vol_ratio, 4) if vol_ratio is not None else None,
+                "realized_vol_20d": round(realized_vol_20d, 6),
+                "vol_adj_mom_20d": round(vol_adj_mom_20d, 6) if vol_adj_mom_20d is not None else None,
             }
         )
 

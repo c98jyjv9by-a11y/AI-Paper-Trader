@@ -14,6 +14,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from risk import trailing_stop_triggered, take_profit_triggered
 from backtest import _evaluate_backtest_exits, _queue_entries, run_backtest, compute_metrics
+from signals import calculate_signals
+from diagnostics import turnover_diagnostics
 import experiments
 from experiments import (
     _apply_overrides,
@@ -205,3 +207,72 @@ class TestExperimentsFramework:
                                   data["Close"].index[40].date(), data["Close"].index[-1].date())
         trailing = next(r for r in results if r["name"] == "no_fixed_take_profit_trailing_stop")
         assert trailing["exit_counts"]["take_profit"] == 0
+
+    def test_new_profiles_present_and_run(self):
+        tickers = ["NVDA", "MSFT", "AAPL", "AMD", "AVGO", "JPM", "SPY", "QQQ"]
+        universe = ["NVDA", "MSFT", "AAPL", "AMD", "AVGO", "JPM"]
+        data = _price_panel(tickers, n=140, seed=12)
+        results = run_experiments(_cfg(universe), data,
+                                  data["Close"].index[55].date(), data["Close"].index[-1].date())
+        names = {r["name"] for r in results}
+        assert {"vol_adjusted_momentum", "qqq_trend_filter", "stop_cooldown_5d",
+                "regime_voladj_higher_tp"}.issubset(names)
+
+
+# ─── New diagnostics-driven mechanics ─────────────────────────────────────────
+
+
+class TestVolAdjustedMomentum:
+    def test_signal_columns_present_and_correct(self):
+        data = _price_panel(["A"], n=40, seed=2)
+        sig = calculate_signals(data, ["A"])
+        assert "vol_adj_mom_20d" in sig.columns and "realized_vol_20d" in sig.columns
+        c = data["Close"]["A"].to_numpy()
+        ret_20d = c[-1] / c[-21] - 1
+        daily = c[-21:][1:] / c[-21:][:-1] - 1
+        expected = ret_20d / float(np.std(daily))
+        assert sig.iloc[0]["vol_adj_mom_20d"] == pytest.approx(expected, rel=1e-4)
+
+    def test_vol_adjusted_weights_rank(self):
+        from signals import rank_candidates
+        tickers = [f"T{i}" for i in range(6)]
+        data = _price_panel(tickers, n=40, seed=3)
+        sig = calculate_signals(data, tickers)
+        ranked = rank_candidates(sig, top_n=6, weights={
+            "return_5d": 0.2, "return_20d": 0.3, "vol_adj_mom_20d": 0.5,
+        })
+        assert "composite_score" in ranked.columns and len(ranked) == 6
+
+
+class TestRegimeFilter:
+    def test_filter_reduces_trades_in_downtrend(self):
+        # QQQ trends down → regime filter should block entries once below its 50d MA
+        tickers = ["A", "B", "SPY", "QQQ"]
+        n = 140
+        data = _price_panel(tickers, n=n, seed=6)
+        # Force QQQ into a steady decline over the back half
+        qqq = np.r_[100 * 1.003 ** np.arange(60), (100 * 1.003 ** 59) * 0.99 ** np.arange(1, n - 59)]
+        data[("Close", "QQQ")] = qqq
+        dates = data["Close"].index
+        base = _cfg(["A", "B"])
+        filt = _cfg(["A", "B"], **{"entry_filters.qqq_above_ma": 50})
+        _, _, _ = run_backtest(base, data, dates[55].date(), dates[-1].date())
+        tb, _, _ = run_backtest(base, data, dates[55].date(), dates[-1].date())
+        tf, _, _ = run_backtest(filt, data, dates[55].date(), dates[-1].date())
+        n_base = len(tb[tb["action"] == "BUY"]) if not tb.empty else 0
+        n_filt = len(tf[tf["action"] == "BUY"]) if not tf.empty else 0
+        assert n_filt <= n_base
+
+
+class TestStopCooldown:
+    def test_cooldown_blocks_reentry_within_5_days(self):
+        tickers = ["NVDA", "MSFT", "AAPL", "AMD", "AVGO", "JPM", "SPY", "QQQ"]
+        universe = ["NVDA", "MSFT", "AAPL", "AMD", "AVGO", "JPM"]
+        data = _price_panel(tickers, n=160, seed=9)
+        cfg = _cfg(universe, **{"risk.stop_cooldown_days": 5})
+        dates = data["Close"].index
+        t, e, p = run_backtest(cfg, data, dates[55].date(), dates[-1].date())
+        tov = turnover_diagnostics(t, data, {"avg_holding_days": 0.0},
+                                   dates[55].date(), dates[-1].date())
+        # With a 5-day cooldown, no stop-loss should be followed by a re-entry within 5d.
+        assert tov["stop_then_reentry_count"] == 0

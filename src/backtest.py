@@ -456,9 +456,14 @@ def run_backtest(
     top_n = config.get("signals", {}).get("top_candidates", 10)
     weights = config.get("signals", {}).get("weights")
     min_score = config.get("signals", {}).get("min_composite_score")
+    # Optional entry gates (default off — baseline behaviour unchanged):
+    regime_ma = config.get("entry_filters", {}).get("qqq_above_ma")     # int N or None
+    cooldown_days = config.get("risk", {}).get("stop_cooldown_days")    # int N or None
 
     close = price_data["Close"]
     all_timestamps = close.index.tolist()
+    qqq_arr = close["QQQ"].to_numpy() if "QQQ" in close.columns else None
+    stop_cooldown: Dict[str, int] = {}   # ticker -> bar_idx of its last stop-loss exit
 
     sim_timestamps = [
         ts for ts in all_timestamps
@@ -549,6 +554,8 @@ def run_backtest(
             cash += e["trade_value"]
             realized_pnl += e["realized_pnl"]
             all_trades.append(e)
+            if cooldown_days and "stop_loss" in str(e["reason"]):
+                stop_cooldown[e["ticker"]] = bar_idx
 
         # ── 4. Portfolio value snapshot ───────────────────────────────────────
         equity = (
@@ -568,8 +575,21 @@ def run_backtest(
                 ranked = rank_candidates(signals, top_n=top_n, weights=weights)
                 if min_score is not None and not ranked.empty:
                     ranked = ranked[ranked["composite_score"] >= min_score].reset_index(drop=True)
-                pending_orders = _queue_entries(
-                    ranked, positions, portfolio_value, cash, config
+                # Cooldown gate: drop names stopped out within the last cooldown_days bars.
+                if cooldown_days and stop_cooldown and not ranked.empty:
+                    ranked = ranked[
+                        ranked["ticker"].map(
+                            lambda t: (bar_idx - stop_cooldown.get(t, -10**9)) >= cooldown_days
+                        )
+                    ].reset_index(drop=True)
+                # Regime gate: only enter while QQQ is above its N-day moving average.
+                regime_ok = True
+                if regime_ma and qqq_arr is not None and bar_idx >= regime_ma:
+                    qqq_ma = float(qqq_arr[bar_idx - regime_ma + 1: bar_idx + 1].mean())
+                    regime_ok = float(qqq_arr[bar_idx]) > qqq_ma
+                pending_orders = (
+                    _queue_entries(ranked, positions, portfolio_value, cash, config)
+                    if regime_ok else []
                 )
                 if signal_sink is not None:
                     # Score the whole cross-section (not just top-N) for diagnostics.
@@ -584,6 +604,7 @@ def run_backtest(
                                 "return_5d": srow.get("return_5d"),
                                 "return_20d": srow.get("return_20d"),
                                 "vol_ratio": srow.get("vol_ratio"),
+                                "vol_adj_mom_20d": srow.get("vol_adj_mom_20d"),
                                 "composite_score": srow.get("composite_score"),
                             }
                         )

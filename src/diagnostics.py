@@ -22,7 +22,7 @@ import pandas as pd
 
 log = logging.getLogger(__name__)
 
-_SIGNAL_COLS = ["return_1d", "return_5d", "return_20d", "vol_ratio"]
+_SIGNAL_COLS = ["return_1d", "return_5d", "return_20d", "vol_ratio", "vol_adj_mom_20d"]
 _FWD_HORIZONS = [5, 10, 20]
 _RAW_HOLD_PERIODS = [5, 10, 20, 30]
 _N_QUINTILES = 5

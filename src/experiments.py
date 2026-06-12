@@ -72,6 +72,26 @@ PROFILES: List[Tuple[str, List[Tuple[str, Any]]]] = [
         ("risk.trailing_stop", 0.15),
         ("risk.max_holding_days", 60),
     ]),
+    # ── Diagnostics-driven candidates (signal quality / regime / churn) ──────
+    ("vol_adjusted_momentum", [
+        # Replace the near-useless volume input with return-per-unit-of-risk.
+        ("signals.weights", {"return_1d": 0.00, "return_5d": 0.20, "return_20d": 0.30, "vol_adj_mom_20d": 0.50}),
+    ]),
+    ("qqq_trend_filter", [
+        # Only enter while QQQ is above its 50-day moving average (sit out downtrends).
+        ("entry_filters.qqq_above_ma", 50),
+    ]),
+    ("stop_cooldown_5d", [
+        # No re-entry into a name for 5 trading days after it stops out (reduce churn).
+        ("risk.stop_cooldown_days", 5),
+    ]),
+    ("regime_voladj_higher_tp", [
+        # Stacked best-guess: regime filter + vol-adjusted ranker + looser take-profit.
+        ("entry_filters.qqq_above_ma", 50),
+        ("signals.weights", {"return_1d": 0.00, "return_5d": 0.20, "return_20d": 0.30, "vol_adj_mom_20d": 0.50}),
+        ("risk.take_profit", 0.15),
+        ("risk.max_holding_days", 60),
+    ]),
 ]
 
 
