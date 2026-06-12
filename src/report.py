@@ -8,6 +8,8 @@ from typing import Any, Dict, List
 
 import pandas as pd
 
+from risk import resolve_max_position_pct
+
 log = logging.getLogger(__name__)
 
 
@@ -185,7 +187,7 @@ def generate_report(
         "",
         "| Parameter | Value |",
         "|-----------|-------|",
-        f"| Max position size | {p['max_position_pct'] * 100:.0f}% of portfolio |",
+        f"| Max position size | {resolve_max_position_pct(config) * 100:.1f}% of portfolio |",
         f"| Max total exposure | {p['max_total_exposure'] * 100:.0f}% of portfolio |",
         f"| Max new trades / day | {p['max_new_trades_per_day']} |",
         f"| Stop loss | {r['stop_loss'] * 100:.0f}% below entry |",

@@ -18,12 +18,16 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from backtest import (
     _bench_return,
+    _dollar,
     _evaluate_backtest_exits,
     _equal_weight_hold_return,
+    _pct,
     _queue_entries,
     compute_metrics,
+    generate_backtest_report,
     run_backtest,
 )
+from risk import resolve_max_position_pct
 from signals import calculate_signals
 
 
@@ -547,3 +551,116 @@ class TestEqualWeightHold:
         )
         assert "equal_weight_return" in m
         assert "excess_vs_equal_weight" in m
+
+
+# ─── 11. Dynamic per-position sizing ─────────────────────────────────────────
+
+
+class TestDynamicMaxPositionPct:
+    def test_auto_scales_with_ticker_count(self):
+        cfg = {"tickers": ["A", "B"], "portfolio": {"max_position_pct": "auto", "max_total_exposure": 0.75}}
+        assert resolve_max_position_pct(cfg) == pytest.approx(0.375)  # 0.75 / 2
+
+    def test_auto_smaller_for_larger_universe(self):
+        cfg = {"tickers": list("ABCDE"), "portfolio": {"max_position_pct": "auto", "max_total_exposure": 0.30}}
+        assert resolve_max_position_pct(cfg) == pytest.approx(0.06)   # 0.30 / 5
+
+    def test_none_is_treated_as_auto(self):
+        cfg = {"tickers": ["A", "B"], "portfolio": {"max_position_pct": None, "max_total_exposure": 0.60}}
+        assert resolve_max_position_pct(cfg) == pytest.approx(0.30)
+
+    def test_fixed_value_respected(self):
+        cfg = {"tickers": ["A", "B"], "portfolio": {"max_position_pct": 0.05, "max_total_exposure": 0.75}}
+        assert resolve_max_position_pct(cfg) == pytest.approx(0.05)
+
+    def test_empty_universe_does_not_divide_by_zero(self):
+        cfg = {"tickers": [], "portfolio": {"max_position_pct": "auto", "max_total_exposure": 0.50}}
+        assert resolve_max_position_pct(cfg) == pytest.approx(0.50)   # n clamped to 1
+
+    def test_auto_deploys_more_capital_than_tiny_fixed_cap(self):
+        """With 2 tickers, 'auto' should deploy far more capital than a 5% cap."""
+        tickers = ["AAPL", "MSFT", "SPY", "QQQ"]
+        data = _make_price_data(tickers, n_days=60, seed=11)
+        dates = data.index
+        base = dict(tickers=["AAPL", "MSFT"], max_exposure=0.75, max_new=2, top_n=10)
+
+        cfg_fixed = _make_config(["AAPL", "MSFT"], max_position_pct=0.05, max_exposure=0.75, max_new=2)
+        cfg_auto = _make_config(["AAPL", "MSFT"], max_exposure=0.75, max_new=2)
+        cfg_auto["portfolio"]["max_position_pct"] = "auto"
+
+        _, e_fixed, _ = run_backtest(cfg_fixed, data, dates[25].date(), dates[-1].date())
+        _, e_auto, _ = run_backtest(cfg_auto, data, dates[25].date(), dates[-1].date())
+
+        if e_fixed.empty or e_auto.empty:
+            pytest.skip("No trading days produced")
+        assert e_auto["open_positions_value"].max() > e_fixed["open_positions_value"].max()
+
+
+# ─── 12. Return on invested capital & deployment metrics ─────────────────────
+
+
+class TestReturnOnInvestedCapital:
+    def _run(self, max_position_pct="auto"):
+        tickers = ["AAPL", "MSFT", "SPY", "QQQ"]
+        data = _make_price_data(tickers, n_days=60, seed=5)
+        dates = data.index
+        cfg = _make_config(["AAPL", "MSFT"], max_exposure=0.75, max_new=2)
+        cfg["portfolio"]["max_position_pct"] = max_position_pct
+        t, e, p = run_backtest(cfg, data, dates[25].date(), dates[-1].date())
+        m = compute_metrics(t, e, p, cfg, dates[25].date(), dates[-1].date())
+        return m
+
+    def test_metrics_present(self):
+        m = self._run()
+        for k in [
+            "return_on_invested_capital", "avg_capital_deployed",
+            "avg_capital_deployed_pct", "peak_capital_deployed",
+            "peak_capital_deployed_pct", "pct_time_invested",
+        ]:
+            assert k in m
+
+    def test_roic_exceeds_total_return_when_cash_idle(self):
+        """ROIC strips cash drag, so it should exceed total return when not fully invested."""
+        m = self._run()
+        if m["return_on_invested_capital"] is None or m["avg_capital_deployed_pct"] >= 0.999:
+            pytest.skip("Fully invested or no deployment — relationship not meaningful")
+        # |ROIC| should be larger in magnitude than |total_return| because the base is smaller
+        assert abs(m["return_on_invested_capital"]) > abs(m["total_return"])
+
+    def test_roic_none_when_never_invested(self):
+        # top_n filtered to nothing via an impossible score → no positions ever opened
+        tickers = ["AAPL", "MSFT", "SPY", "QQQ"]
+        data = _make_price_data(tickers, n_days=60, seed=5)
+        dates = data.index
+        cfg = _make_config(["AAPL", "MSFT"], max_exposure=0.75, max_new=2)
+        cfg["signals"]["min_composite_score"] = 2.0  # unreachable (max composite ~1.0)
+        t, e, p = run_backtest(cfg, data, dates[25].date(), dates[-1].date())
+        m = compute_metrics(t, e, p, cfg, dates[25].date(), dates[-1].date())
+        assert m["return_on_invested_capital"] is None
+
+
+# ─── 13. Report formatting: NaN renders as em dash ───────────────────────────
+
+
+class TestNaNFormatting:
+    def test_pct_handles_nan(self):
+        assert _pct(float("nan"), "—") == "—"
+        assert _pct(None, "—") == "—"
+        assert _pct(0.05) == "+5.00%"
+
+    def test_dollar_handles_nan(self):
+        assert _dollar(float("nan"), "—") == "—"
+        assert _dollar(None, "—") == "—"
+        assert _dollar(1234.5) == "$1,234.50"
+
+    def test_report_has_no_nan_artifacts(self):
+        tickers = ["AAPL", "MSFT", "SPY", "QQQ"]
+        data = _make_price_data(tickers, n_days=60, seed=5)
+        dates = data.index
+        cfg = _make_config(["AAPL", "MSFT"], max_exposure=0.75, max_new=2)
+        cfg["portfolio"]["max_position_pct"] = "auto"
+        t, e, p = run_backtest(cfg, data, dates[25].date(), dates[-1].date())
+        m = compute_metrics(t, e, p, cfg, dates[25].date(), dates[-1].date())
+        report = generate_backtest_report(m, cfg, t, e, p, date(2026, 6, 12))
+        assert "$nan" not in report
+        assert "nan%" not in report

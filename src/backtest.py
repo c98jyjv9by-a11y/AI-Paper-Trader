@@ -45,6 +45,7 @@ from risk import (
     can_add_position,
     holding_period_exceeded,
     position_size_shares,
+    resolve_max_position_pct,
     stop_loss_triggered,
     take_profit_triggered,
 )
@@ -194,7 +195,7 @@ def _queue_entries(
     Returns a list of order dicts: {ticker, shares, signal_price, reason}.
     """
     max_new = config["portfolio"]["max_new_trades_per_day"]
-    max_pct = config["portfolio"]["max_position_pct"]
+    max_pct = resolve_max_position_pct(config)
     max_exp = config["portfolio"]["max_total_exposure"]
 
     held = set(open_positions["ticker"].tolist()) if not open_positions.empty else set()
@@ -520,7 +521,20 @@ def compute_metrics(
         return {"error": "No equity data — backtest produced no trading days."}
 
     final_value = float(equity_df["total_portfolio_value"].iloc[-1])
-    total_return = (final_value - starting_value) / starting_value
+    total_pnl = final_value - starting_value
+    total_return = total_pnl / starting_value
+
+    # ── Capital deployment & return on invested capital ───────────────────────
+    # "Invested capital" = market value of open positions at each day's close.
+    # Averaging over ALL sim days (idle days count as 0) gives the time-weighted
+    # capital actually put to work, so ROIC is not inflated by brief deployments.
+    deployed = equity_df["open_positions_value"]
+    avg_deployed = float(deployed.mean())
+    peak_deployed = float(deployed.max())
+    pct_time_invested = float((deployed > 0).mean())
+    # Return on invested capital: total P&L per dollar of (time-averaged) capital
+    # deployed. Strips out cash drag — the headline "total_return" above keeps it.
+    return_on_invested_capital = (total_pnl / avg_deployed) if avg_deployed > 0 else None
 
     # Max drawdown
     roll_max = equity_df["total_portfolio_value"].cummax()
@@ -591,6 +605,12 @@ def compute_metrics(
         "starting_value": starting_value,
         "ending_value": final_value,
         "total_return": total_return,
+        "return_on_invested_capital": return_on_invested_capital,
+        "avg_capital_deployed": avg_deployed,
+        "avg_capital_deployed_pct": avg_deployed / starting_value,
+        "peak_capital_deployed": peak_deployed,
+        "peak_capital_deployed_pct": peak_deployed / starting_value,
+        "pct_time_invested": pct_time_invested,
         "max_drawdown": max_drawdown,
         "spy_return": spy_return,
         "qqq_return": qqq_return,
@@ -941,15 +961,17 @@ def _sensitivity_section(
 
 
 def _pct(v: Optional[float], default: str = "N/A") -> str:
-    return f"{v * 100:+.2f}%" if v is not None else default
+    # Treat None and NaN alike (e.g. first-day daily_return is NaN) → default, not "+nan%"
+    return default if v is None or pd.isna(v) else f"{v * 100:+.2f}%"
 
 
 def _dollar(v: Optional[float], default: str = "N/A") -> str:
-    return f"${v:,.2f}" if v is not None else default
+    # Treat None and NaN alike (e.g. BUY rows have NaN realized_pnl) → default, not "$nan"
+    return default if v is None or pd.isna(v) else f"${v:,.2f}"
 
 
 def _pf(v: Optional[float]) -> str:
-    return f"{v:.2f}" if v is not None else "N/A (no losses)"
+    return "N/A (no losses)" if v is None or pd.isna(v) else f"{v:.2f}"
 
 
 def generate_backtest_report(
@@ -1003,6 +1025,11 @@ def generate_backtest_report(
         "|--------|-------|",
         f"| Starting Value | {_dollar(m.get('starting_value'))} |",
         f"| Ending Value | {_dollar(m.get('ending_value'))} |",
+        f"| **Return on Invested Capital** | **{_pct(m.get('return_on_invested_capital'))}** |",
+        f"| Total Return (on full $ portfolio) | {_pct(m.get('total_return'))} |",
+        f"| Avg Capital Deployed | {_dollar(m.get('avg_capital_deployed'))} ({_pct(m.get('avg_capital_deployed_pct'))} of portfolio) |",
+        f"| Peak Capital Deployed | {_dollar(m.get('peak_capital_deployed'))} ({_pct(m.get('peak_capital_deployed_pct'))} of portfolio) |",
+        f"| Time Invested | {_pct(m.get('pct_time_invested'))} of trading days |",
         f"| Trading Days | {m.get('trading_days', 'N/A')} |",
         f"| Total Trades | {m.get('n_trades', 0)} ({m.get('n_buys', 0)} buys, {m.get('n_sells', 0)} sells) |",
         f"| Win Rate | {_pct(m.get('win_rate'))} |",
@@ -1016,16 +1043,28 @@ def generate_backtest_report(
         f"| Total Slippage Cost | {_dollar(m.get('total_slippage_cost'))} ({_pct(m.get('slippage_pct_of_portfolio'))} of start) |",
         f"| Avg Slippage / Trade | {_dollar(m.get('avg_slippage_per_trade'))} |",
         "",
+        "_**Return on Invested Capital** = total P&L ÷ time-averaged capital deployed; "
+        "it strips out idle-cash drag and is the truest measure of stock-picking. "
+        "**Total Return** is on the full starting portfolio (cash included) and is what "
+        "the SPY/QQQ/Equal-Wt comparisons above use, since those benchmarks are fully invested._",
+        "",
     ]
 
     # ── Strategy parameters ───────────────────────────────────────────────────
+    eff_max_pos = resolve_max_position_pct(config)
+    raw_max_pos = p.get("max_position_pct", "auto")
+    max_pos_label = (
+        f"{eff_max_pos * 100:.1f}% (auto: {p.get('max_total_exposure', 0) * 100:.0f}% ÷ {len(tickers)} tickers)"
+        if raw_max_pos is None or (isinstance(raw_max_pos, str) and raw_max_pos.strip().lower() == "auto")
+        else f"{eff_max_pos * 100:.1f}%"
+    )
     lines += [
         "## Strategy Parameters Used",
         "",
         "| Parameter | Value |",
         "|-----------|-------|",
         f"| Starting Portfolio | {_dollar(p.get('starting_value'))} |",
-        f"| Max Position Size | {p.get('max_position_pct', 0) * 100:.0f}% |",
+        f"| Max Position Size | {max_pos_label} |",
         f"| Max Total Exposure | {p.get('max_total_exposure', 0) * 100:.0f}% |",
         f"| Max New Trades / Day | {p.get('max_new_trades_per_day')} |",
         f"| Stop Loss | {r.get('stop_loss', 0) * 100:.0f}% |",
@@ -1054,8 +1093,9 @@ def generate_backtest_report(
             "|------|--------|--------|--------|-------|-------|--------|-----|-----------|",
         ]
         for _, row in display.iterrows():
-            pnl_str = _dollar(row.get("realized_pnl")) if row.get("realized_pnl") is not None else "—"
-            hold_str = str(row.get("holding_days", "—")) if row["action"] == "SELL" else "—"
+            # BUY rows carry NaN realized_pnl/holding_days → render as em dash
+            pnl_str = _dollar(row.get("realized_pnl"), "—")
+            hold_str = str(row.get("holding_days")) if row["action"] == "SELL" else "—"
             lines.append(
                 f"| {row['date']} | {row['action']} | {row['ticker']} "
                 f"| {int(row['shares'])} | {_dollar(row['price'])} "

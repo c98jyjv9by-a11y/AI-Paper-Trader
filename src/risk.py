@@ -6,6 +6,7 @@ without side effects.
 """
 import logging
 from datetime import date
+from typing import Any, Dict
 
 import pandas as pd
 
@@ -13,6 +14,30 @@ log = logging.getLogger(__name__)
 
 
 # ─── Position sizing ──────────────────────────────────────────────────────────
+
+
+def resolve_max_position_pct(config: Dict[str, Any]) -> float:
+    """
+    Resolve the effective per-position size cap from config.
+
+    If portfolio.max_position_pct is a number, it is used as-is (fixed cap).
+    If it is "auto" or null, it scales dynamically with the universe size so the
+    strategy can deploy up to max_total_exposure even with few tickers:
+
+        effective = max_total_exposure / n_tickers
+
+    This makes N equal-weight positions sum to exactly max_total_exposure, so a
+    2-ticker universe is no longer starved by a 5%-per-name cap. Falls back to a
+    sane value if the universe is empty.
+    """
+    portfolio = config.get("portfolio", {})
+    raw = portfolio.get("max_position_pct", "auto")
+    n_tickers = max(1, len(config.get("tickers", [])))
+
+    if raw is None or (isinstance(raw, str) and raw.strip().lower() == "auto"):
+        exposure = float(portfolio.get("max_total_exposure", 1.0))
+        return exposure / n_tickers
+    return float(raw)
 
 
 def position_size_shares(

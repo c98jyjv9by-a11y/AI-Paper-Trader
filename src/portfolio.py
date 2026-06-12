@@ -20,6 +20,7 @@ from risk import (
     can_add_position,
     holding_period_exceeded,
     position_size_shares,
+    resolve_max_position_pct,
     stop_loss_triggered,
     take_profit_triggered,
     total_exposure,
@@ -187,7 +188,7 @@ def generate_entries(
     Returns a list of BUY recommendation dicts.
     """
     max_new = config["portfolio"]["max_new_trades_per_day"]
-    max_pct = config["portfolio"]["max_position_pct"]
+    max_pct = resolve_max_position_pct(config)
     max_exp = config["portfolio"]["max_total_exposure"]
     slippage = config["risk"]["slippage"]
 
