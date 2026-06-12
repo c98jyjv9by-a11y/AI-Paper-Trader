@@ -1,0 +1,18 @@
+portfolio:
+  starting_value: 100000.0       # paper portfolio starting cash ($)
+  max_position_pct: 0.05         # max dollars per position = 5% of portfolio
+  max_total_exposure: 0.30       # max combined long exposure = 30% of portfolio
+  max_new_trades_per_day: 3      # cap on new BUY recommendations per run
+
+risk:
+  stop_loss: 0.05                # exit if position falls 5% below entry
+  take_profit: 0.10              # exit if position rises 10% above entry
+  max_holding_days: 10           # exit after ~10 trading days regardless
+  slippage: 0.001                # 0.10% slippage applied to every fill
+
+signals:
+  top_candidates: 10             # how many ranked tickers to consider for entry
+
+data:
+  period: "60d"                  # lookback window for yfinance download
+  interval: "1d"                 # daily bars

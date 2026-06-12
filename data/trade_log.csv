@@ -1,0 +1,8 @@
+date,action,ticker,shares,price_with_slippage,trade_value,reason,pnl,portfolio_value_after
+2026-06-12,BUY,BAC,89,55.9859,4982.75,momentum_score=0.856,,99999.99
+2026-06-12,BUY,IWM,17,293.8035,4994.66,momentum_score=0.848,,99999.99
+2026-06-12,BUY,XLF,93,53.3807,4964.41,momentum_score=0.796,,99999.99
+2026-06-12,BUY,JPM,15,321.0607,4815.91,momentum_score=0.772,,99992.47
+2026-06-12,BUY,XLK,26,185.195,4815.07,momentum_score=0.744,,99992.47
+2026-06-12,BUY,JNJ,20,241.0158,4820.32,momentum_score=0.728,,99992.47
+2026-06-12,BUY,HD,15,328.2679,4924.02,momentum_score=0.7,,99972.93
