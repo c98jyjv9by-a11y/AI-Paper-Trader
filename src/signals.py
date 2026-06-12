@@ -72,7 +72,7 @@ def calculate_signals(data: pd.DataFrame, tickers: List[str]) -> pd.DataFrame:
     return df
 
 
-def rank_candidates(signals: pd.DataFrame, top_n: int = 10) -> pd.DataFrame:
+def rank_candidates(signals: pd.DataFrame, top_n: int = 10, weights: dict = None) -> pd.DataFrame:
     """
     Score every ticker by a composite momentum rank and return the top-N.
 
@@ -80,19 +80,21 @@ def rank_candidates(signals: pd.DataFrame, top_n: int = 10) -> pd.DataFrame:
     then multiplied by its weight. The composite score is the weighted sum.
     Tickers with any missing signal value are excluded before ranking.
 
+    weights: optional dict overriding _WEIGHTS (used by sensitivity analysis).
     Returns a sorted DataFrame (best first) with at most top_n rows.
     """
-    required = list(_WEIGHTS.keys())
+    effective_weights = weights if weights is not None else _WEIGHTS
+    required = list(effective_weights.keys())
     df = signals.dropna(subset=required).copy()
 
     if df.empty:
         log.warning("No tickers survived the signal filter — ranked list is empty")
         return df
 
-    for col, weight in _WEIGHTS.items():
+    for col, weight in effective_weights.items():
         df[f"rank_{col}"] = df[col].rank(pct=True) * weight
 
-    rank_cols = [f"rank_{c}" for c in _WEIGHTS]
+    rank_cols = [f"rank_{c}" for c in effective_weights]
     df["composite_score"] = df[rank_cols].sum(axis=1).round(4)
 
     ranked = (

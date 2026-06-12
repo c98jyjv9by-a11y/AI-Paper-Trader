@@ -2,17 +2,23 @@ portfolio:
   starting_value: 100000.0       # paper portfolio starting cash ($)
   max_position_pct: 0.05         # max dollars per position = 5% of portfolio
   max_total_exposure: 0.30       # max combined long exposure = 30% of portfolio
-  max_new_trades_per_day: 3      # cap on new BUY recommendations per run
+  max_new_trades_per_day: 1      # reduced from 3; sensitivity showed lower churn helped
 
 risk:
-  stop_loss: 0.05                # exit if position falls 5% below entry
-  take_profit: 0.10              # exit if position rises 10% above entry
-  max_holding_days: 10           # exit after ~10 trading days regardless
-  slippage: 0.001                # 0.10% slippage applied to every fill
+  stop_loss: 0.075               # widened from 5% to 7.5%; best stop-loss sensitivity result
+  take_profit: 0.15              # raised from 10% to 15%; improved result versus baseline
+  max_holding_days: 20           # extended from 10; longer holds reduced churn and improved return
+  slippage: 0.001                # keep unchanged at 0.10% per fill
 
 signals:
-  top_candidates: 10             # how many ranked tickers to consider for entry
+  top_candidates: 10             # keep unchanged; still review enough names before filters
+  min_composite_score: 0.70      # modest quality filter; 0.80 helped more but may be too restrictive
+  weights:                       # more volume confirmation; best signal-weight profile
+    return_1d: 0.10
+    return_5d: 0.25
+    return_20d: 0.30
+    vol_ratio: 0.35
 
 data:
-  period: "60d"                  # lookback window for yfinance download
+  period: "90d"                  # keep unchanged for now
   interval: "1d"                 # daily bars

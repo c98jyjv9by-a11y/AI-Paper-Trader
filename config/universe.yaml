@@ -1,31 +1,27 @@
 tickers:
-  # Broad-market ETFs
-  - SPY    # S&P 500
-  - QQQ    # Nasdaq 100
-  - IWM    # Russell 2000
-
-  # Sector ETFs
-  - XLF    # Financials
-  - XLE    # Energy
-  - XLK    # Technology
-  - XLV    # Health Care
-
-  # Large-cap equities
-  - AAPL
-  - MSFT
-  - GOOGL
-  - AMZN
+  - TQQQ
+  - SQQQ
+  - SPY
+  - QQQ
+  - IWM
+  - XLK
+  - XLC
+  - XLY
+  - SMH
+  - SOXX
+  - MTUM
+  - SOXL
   - NVDA
+  - MSFT
   - META
   - TSLA
-  - JPM
-  - V
-  - JNJ
-  - WMT
-  - UNH
-  - HD
-  - BAC
-  - PG
-  - MA
-  - NFLX
-  - DIS
+  - AVGO
+  - AMD
+  - ARM
+  - MU
+  - ANET
+  - PLTR
+  - CRWD
+  - PANW
+  - COIN
+  - HOOD

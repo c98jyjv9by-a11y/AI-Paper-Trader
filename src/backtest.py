@@ -274,6 +274,51 @@ def _bench_return(
         return None
 
 
+def _ewh_return(
+    close: pd.DataFrame,
+    tickers: List[str],
+    current_ts: Any,
+    start_ts: Any,
+) -> Optional[float]:
+    """Equal-weight hold return: simple average of each ticker's buy-and-hold return."""
+    rets = []
+    for ticker in tickers:
+        if ticker not in close.columns:
+            continue
+        try:
+            p0 = float(close.loc[start_ts, ticker])
+            pt = float(close.loc[current_ts, ticker])
+            if p0 > 0 and not pd.isna(p0) and not pd.isna(pt):
+                rets.append(pt / p0 - 1)
+        except (KeyError, TypeError):
+            continue
+    if not rets:
+        return None
+    return round(sum(rets) / len(rets), 6)
+
+
+def _cum_ret_max_drawdown(cum_series: pd.Series) -> Optional[float]:
+    """Max drawdown computed from a cumulative-return series (e.g. 0.10 = +10%)."""
+    clean = cum_series.dropna()
+    if clean.empty:
+        return None
+    levels = 1.0 + clean
+    roll_max = levels.cummax()
+    return float(((levels - roll_max) / roll_max).min())
+
+
+def _trailing_return_from_cum_ret(cum_series: pd.Series, n_bars: int) -> Optional[float]:
+    """Return over the trailing n_bars window from a cumulative-return series."""
+    clean = cum_series.dropna()
+    if len(clean) < n_bars + 1:
+        return None
+    end_level = 1.0 + float(clean.iloc[-1])
+    start_level = 1.0 + float(clean.iloc[-n_bars])
+    if start_level <= 0 or pd.isna(start_level) or pd.isna(end_level):
+        return None
+    return round(end_level / start_level - 1, 6)
+
+
 # ─── Main simulation loop ─────────────────────────────────────────────────────
 
 
@@ -298,6 +343,8 @@ def run_backtest(
     max_holding = config["risk"]["max_holding_days"]
     starting_value = config["portfolio"]["starting_value"]
     top_n = config.get("signals", {}).get("top_candidates", 10)
+    weights = config.get("signals", {}).get("weights")
+    min_score = config.get("signals", {}).get("min_composite_score")
 
     close = price_data["Close"]
     all_timestamps = close.index.tolist()
@@ -397,7 +444,9 @@ def run_backtest(
             data_slice = price_data.iloc[: bar_idx + 1]   # ← only data up to today
             signals = calculate_signals(data_slice, tickers)
             if not signals.empty:
-                ranked = rank_candidates(signals, top_n=top_n)
+                ranked = rank_candidates(signals, top_n=top_n, weights=weights)
+                if min_score is not None and not ranked.empty:
+                    ranked = ranked[ranked["composite_score"] >= min_score].reset_index(drop=True)
                 pending_orders = _queue_entries(
                     ranked, positions, portfolio_value, cash, config
                 )
@@ -422,6 +471,7 @@ def run_backtest(
                 "cumulative_return": None,     # filled after loop
                 "spy_cumulative_return": _bench_return(close, "SPY", bar_ts, bench_start_ts),
                 "qqq_cumulative_return": _bench_return(close, "QQQ", bar_ts, bench_start_ts),
+                "ewh_cumulative_return": _ewh_return(close, tickers, bar_ts, bench_start_ts),
             }
         )
 
@@ -440,6 +490,7 @@ def run_backtest(
         "date", "cash", "open_positions_value", "total_portfolio_value",
         "realized_pnl_to_date", "unrealized_pnl", "daily_return",
         "cumulative_return", "spy_cumulative_return", "qqq_cumulative_return",
+        "ewh_cumulative_return",
     ]
     equity_df = equity_df.reindex(columns=[c for c in col_order if c in equity_df.columns])
 
@@ -470,6 +521,23 @@ def compute_metrics(
     roll_max = equity_df["total_portfolio_value"].cummax()
     drawdown = (equity_df["total_portfolio_value"] - roll_max) / roll_max
     max_drawdown = float(drawdown.min())
+
+    slippage_rate = config["risk"]["slippage"]
+
+    # Slippage cost: buy fill = price*(1+slip), so cost = TV*slip/(1+slip); sell is TV*slip/(1-slip)
+    if not trades_df.empty:
+        buy_tv  = float(trades_df.loc[trades_df["action"] == "BUY",  "trade_value"].sum())
+        sell_tv = float(trades_df.loc[trades_df["action"] == "SELL", "trade_value"].sum())
+        total_slippage = round(
+            buy_tv  * slippage_rate / (1 + slippage_rate) +
+            sell_tv * slippage_rate / (1 - slippage_rate),
+            2,
+        )
+        n_trades_total = len(trades_df)
+        avg_slippage_per_trade = round(total_slippage / n_trades_total, 2)
+        slippage_pct_portfolio = total_slippage / starting_value
+    else:
+        total_slippage = avg_slippage_per_trade = slippage_pct_portfolio = 0.0
 
     # Trade statistics
     sells = trades_df[trades_df["action"] == "SELL"] if not trades_df.empty else pd.DataFrame()
@@ -502,6 +570,14 @@ def compute_metrics(
 
     spy_return = _last_bench("spy_cumulative_return")
     qqq_return = _last_bench("qqq_cumulative_return")
+    ewh_return = _last_bench("ewh_cumulative_return")
+
+    def _bench_dd(col: str) -> Optional[float]:
+        return _cum_ret_max_drawdown(equity_df[col]) if col in equity_df.columns else None
+
+    def _bench_trailing(col: str, n: int) -> Optional[float]:
+        series = equity_df[col] if col in equity_df.columns else pd.Series(dtype=float)
+        return _trailing_return_from_cum_ret(series, n)
 
     return {
         "start_date": start_date.isoformat(),
@@ -513,8 +589,25 @@ def compute_metrics(
         "max_drawdown": max_drawdown,
         "spy_return": spy_return,
         "qqq_return": qqq_return,
+        "ewh_return": ewh_return,
+        "spy_max_drawdown": _bench_dd("spy_cumulative_return"),
+        "qqq_max_drawdown": _bench_dd("qqq_cumulative_return"),
+        "ewh_max_drawdown": _bench_dd("ewh_cumulative_return"),
         "excess_vs_spy": (total_return - spy_return) if spy_return is not None else None,
         "excess_vs_qqq": (total_return - qqq_return) if qqq_return is not None else None,
+        "excess_vs_ewh": (total_return - ewh_return) if ewh_return is not None else None,
+        "strategy_return_1y": _bench_trailing("cumulative_return", 252),
+        "strategy_return_2y": _bench_trailing("cumulative_return", 504),
+        "strategy_return_3y": _bench_trailing("cumulative_return", 756),
+        "spy_return_1y": _bench_trailing("spy_cumulative_return", 252),
+        "spy_return_2y": _bench_trailing("spy_cumulative_return", 504),
+        "spy_return_3y": _bench_trailing("spy_cumulative_return", 756),
+        "qqq_return_1y": _bench_trailing("qqq_cumulative_return", 252),
+        "qqq_return_2y": _bench_trailing("qqq_cumulative_return", 504),
+        "qqq_return_3y": _bench_trailing("qqq_cumulative_return", 756),
+        "ewh_return_1y": _bench_trailing("ewh_cumulative_return", 252),
+        "ewh_return_2y": _bench_trailing("ewh_cumulative_return", 504),
+        "ewh_return_3y": _bench_trailing("ewh_cumulative_return", 756),
         "n_trades": len(trades_df) if not trades_df.empty else 0,
         "n_buys": int((trades_df["action"] == "BUY").sum()) if not trades_df.empty else 0,
         "n_sells": n_sells,
@@ -526,7 +619,274 @@ def compute_metrics(
         "largest_winner": largest_winner,
         "largest_loser": largest_loser,
         "open_positions_at_end": len(positions),
+        "total_slippage_cost": total_slippage,
+        "avg_slippage_per_trade": avg_slippage_per_trade,
+        "slippage_pct_of_portfolio": slippage_pct_portfolio,
     }
+
+
+# ─── Sensitivity analysis ─────────────────────────────────────────────────────
+
+_WEIGHT_PROFILES: Dict[str, Dict[str, float]] = {
+    "baseline":    {"return_1d": 0.20, "return_5d": 0.30, "return_20d": 0.30, "vol_ratio": 0.20},
+    "no_1d":       {"return_1d": 0.00, "return_5d": 0.40, "return_20d": 0.40, "vol_ratio": 0.20},
+    "less_1d":     {"return_1d": 0.05, "return_5d": 0.35, "return_20d": 0.40, "vol_ratio": 0.20},
+    "more_volume": {"return_1d": 0.10, "return_5d": 0.25, "return_20d": 0.30, "vol_ratio": 0.35},
+}
+
+
+def _run_sensitivity_variants(
+    baseline_config: Dict[str, Any],
+    price_data: pd.DataFrame,
+    start_date: date,
+    end_date: date,
+) -> List[Dict[str, Any]]:
+    """
+    One-way sensitivity analysis: vary one parameter at a time, all others at baseline.
+
+    Calls run_backtest + compute_metrics for each of 22 variants. Uses deepcopy so
+    baseline_config is never mutated. Returns summary metric dicts only — no per-run
+    trade logs or equity curves are retained.
+    """
+    import copy
+
+    results: List[Dict[str, Any]] = []
+
+    def _run_one(param: str, display_val: str, cfg: Dict[str, Any]) -> None:
+        try:
+            t, e, pos = run_backtest(cfg, price_data, start_date, end_date)
+            m = compute_metrics(t, e, pos, cfg, start_date, end_date)
+            results.append(
+                {
+                    "parameter": param,
+                    "value": display_val,
+                    "total_return": m.get("total_return"),
+                    "excess_vs_spy": m.get("excess_vs_spy"),
+                    "excess_vs_qqq": m.get("excess_vs_qqq"),
+                    "excess_vs_ewh": m.get("excess_vs_ewh"),
+                    "max_drawdown": m.get("max_drawdown"),
+                    "total_trades": m.get("n_trades", 0),
+                    "win_rate": m.get("win_rate"),
+                    "profit_factor": m.get("profit_factor"),
+                    "avg_holding_period": m.get("avg_holding_days"),
+                }
+            )
+        except Exception as exc:
+            log.warning("Sensitivity %s=%s failed: %s", param, display_val, exc)
+
+    for val in [0.03, 0.05, 0.075, 0.10]:
+        cfg = copy.deepcopy(baseline_config)
+        cfg["risk"]["stop_loss"] = val
+        _run_one("stop_loss", f"{val:.1%}", cfg)
+
+    for val in [0.08, 0.10, 0.15]:
+        cfg = copy.deepcopy(baseline_config)
+        cfg["risk"]["take_profit"] = val
+        _run_one("take_profit", f"{val:.0%}", cfg)
+
+    for val in [5, 10, 20, 30]:
+        cfg = copy.deepcopy(baseline_config)
+        cfg["risk"]["max_holding_days"] = val
+        _run_one("max_holding_days", str(val), cfg)
+
+    for val in [1, 2, 3]:
+        cfg = copy.deepcopy(baseline_config)
+        cfg["portfolio"]["max_new_trades_per_day"] = val
+        _run_one("max_new_trades_per_day", str(val), cfg)
+
+    for val in [None, 0.60, 0.70, 0.80]:
+        cfg = copy.deepcopy(baseline_config)
+        cfg["signals"]["min_composite_score"] = val
+        _run_one("min_composite_score", "none" if val is None else f"{val:.2f}", cfg)
+
+    for name, wts in _WEIGHT_PROFILES.items():
+        cfg = copy.deepcopy(baseline_config)
+        cfg["signals"]["weights"] = wts
+        _run_one("signal_weights", name, cfg)
+
+    log.info("Sensitivity analysis: %d / 22 variants completed", len(results))
+    return results
+
+
+def _robustness_commentary(
+    results: List[Dict[str, Any]],
+    baseline_return: float,
+) -> str:
+    """Return plain-text robustness notes derived from sensitivity results."""
+    from collections import defaultdict
+
+    valid = [r for r in results if r.get("total_return") is not None]
+    if not valid:
+        return "_No valid results to analyze._"
+
+    n_beat = sum(1 for r in valid if r["total_return"] > baseline_return)
+    pct_beat = n_beat / len(valid) * 100
+
+    param_returns: Dict[str, List[float]] = defaultdict(list)
+    for r in valid:
+        param_returns[r["parameter"]].append(r["total_return"])
+    ranges = {p: max(v) - min(v) for p, v in param_returns.items() if len(v) > 1}
+
+    parts: List[str] = []
+
+    if pct_beat < 25:
+        parts.append(
+            f"The baseline outperforms {100 - pct_beat:.0f}% of all variants. "
+            "This is broadly consistent across parameter dimensions, suggesting the "
+            "baseline settings are reasonably competitive in-sample."
+        )
+    elif pct_beat < 55:
+        parts.append(
+            f"{pct_beat:.0f}% of variants beat the baseline. Improvements are mixed — "
+            "some directions help, others hurt — which is consistent with a strategy "
+            "that has modest but not dominant in-sample edge."
+        )
+    else:
+        parts.append(
+            f"{pct_beat:.0f}% of variants beat the baseline. The baseline settings may "
+            "not be well-suited to this period, or the strategy is broadly sensitive to "
+            "parameter choice. Be cautious about reading these improvements as durable."
+        )
+
+    if ranges:
+        most = max(ranges, key=lambda k: ranges[k])
+        least = min(ranges, key=lambda k: ranges[k])
+        parts.append(
+            f"The widest in-sample return spread belongs to `{most}` "
+            f"({ranges[most] * 100:.1f} pp range across its variants); "
+            f"`{least}` shows the narrowest spread "
+            f"({ranges[least] * 100:.1f} pp), suggesting the strategy is least "
+            "sensitive to that parameter in this period."
+        )
+
+    parts.append(
+        "Improvements that appear in only one or two variants should be treated with "
+        "skepticism — isolated peaks are more likely to reflect in-sample noise than "
+        "genuine edge. Prefer settings that perform consistently across the full sweep."
+    )
+
+    return "\n\n".join(parts)
+
+
+def _sensitivity_section(
+    results: List[Dict[str, Any]],
+    baseline_metrics: Dict[str, Any],
+    config: Dict[str, Any],
+) -> str:
+    """Build the ## Sensitivity Analysis block for the backtest Markdown report."""
+    if not results:
+        return "## Sensitivity Analysis\n\n_Sensitivity analysis produced no results._\n"
+
+    from collections import defaultdict
+
+    b = baseline_metrics
+    r_cfg = config["risk"]
+    p_cfg = config["portfolio"]
+    s_cfg = config.get("signals", {})
+
+    baseline_vals = {
+        "stop_loss": f"{r_cfg.get('stop_loss', 0.05):.1%}",
+        "take_profit": f"{r_cfg.get('take_profit', 0.10):.0%}",
+        "max_holding_days": str(r_cfg.get("max_holding_days", 10)),
+        "max_new_trades_per_day": str(p_cfg.get("max_new_trades_per_day", 3)),
+        "min_composite_score": (
+            "none" if s_cfg.get("min_composite_score") is None
+            else f"{s_cfg.get('min_composite_score'):.2f}"
+        ),
+        "signal_weights": "baseline",
+    }
+
+    lines: List[str] = [
+        "## Sensitivity Analysis",
+        "",
+        "> One parameter is varied at a time; all others remain at baseline values.",
+        "> Do not select parameters based on in-sample performance alone — see Robustness Notes below.",
+        "",
+        f"**Baseline:** {_pct(b.get('total_return'))} return  |  "
+        f"{_pct(b.get('max_drawdown'))} max drawdown  |  "
+        f"{_pct(b.get('win_rate'))} win rate  |  "
+        f"{_pf(b.get('profit_factor'))} profit factor",
+        "",
+    ]
+
+    grouped: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for r in results:
+        grouped[r["parameter"]].append(r)
+
+    col_header  = "| Value | Return | vs SPY | vs EWH | Max DD | Trades | Win Rate | PF |"
+    col_divider = "|-------|--------|--------|--------|--------|--------|----------|-----|"
+
+    def _data_row(r: Dict[str, Any], mark_baseline: bool) -> str:
+        marker = " ◀ baseline" if mark_baseline else ""
+        pf = _pf(r["profit_factor"]) if r.get("profit_factor") is not None else "—"
+        trades = r.get("total_trades", "—")
+        return (
+            f"| {r['value']}{marker} "
+            f"| {_pct(r.get('total_return'), '—')} "
+            f"| {_pct(r.get('excess_vs_spy'), '—')} "
+            f"| {_pct(r.get('excess_vs_ewh'), '—')} "
+            f"| {_pct(r.get('max_drawdown'), '—')} "
+            f"| {trades} "
+            f"| {_pct(r.get('win_rate'), '—')} "
+            f"| {pf} |"
+        )
+
+    for param, label in [
+        ("stop_loss",             "Stop Loss"),
+        ("take_profit",           "Take Profit"),
+        ("max_holding_days",      "Max Holding Days"),
+        ("max_new_trades_per_day","Max New Trades / Day"),
+        ("min_composite_score",   "Min Composite Score"),
+        ("signal_weights",        "Signal Weight Profile"),
+    ]:
+        rows = grouped.get(param, [])
+        if not rows:
+            continue
+        base_val = baseline_vals.get(param, "")
+        lines += [f"### {label}  (baseline: {base_val})", "", col_header, col_divider]
+        for r in rows:
+            lines.append(_data_row(r, mark_baseline=(r["value"] == base_val)))
+        lines.append("")
+
+    sortable = sorted(
+        [r for r in results if r.get("total_return") is not None],
+        key=lambda r: r["total_return"],
+        reverse=True,
+    )
+
+    rank_header  = "| Rank | Parameter | Value | Return | vs SPY | vs EWH | Max DD | PF |"
+    rank_divider = "|------|-----------|-------|--------|--------|--------|--------|-----|"
+
+    def _ranked_row(rank: int, r: Dict[str, Any]) -> str:
+        pf = _pf(r["profit_factor"]) if r.get("profit_factor") is not None else "—"
+        return (
+            f"| {rank} | {r['parameter']} | {r['value']} "
+            f"| {_pct(r.get('total_return'), '—')} "
+            f"| {_pct(r.get('excess_vs_spy'), '—')} "
+            f"| {_pct(r.get('excess_vs_ewh'), '—')} "
+            f"| {_pct(r.get('max_drawdown'), '—')} "
+            f"| {pf} |"
+        )
+
+    lines += ["### Best 5 Variants by Total Return", "", rank_header, rank_divider]
+    for i, r in enumerate(sortable[:5], 1):
+        lines.append(_ranked_row(i, r))
+    lines.append("")
+
+    worst5 = list(reversed(sortable[-5:])) if len(sortable) >= 5 else list(reversed(sortable))
+    lines += ["### Worst 5 Variants by Total Return", "", rank_header, rank_divider]
+    for i, r in enumerate(worst5, 1):
+        lines.append(_ranked_row(i, r))
+    lines.append("")
+
+    lines += [
+        "### Robustness Notes",
+        "",
+        _robustness_commentary(results, b.get("total_return", 0.0)),
+        "",
+    ]
+
+    return "\n".join(lines)
 
 
 # ─── Report builder ───────────────────────────────────────────────────────────
@@ -551,6 +911,7 @@ def generate_backtest_report(
     equity_df: pd.DataFrame,
     positions: pd.DataFrame,
     run_date: date,
+    sensitivity_results: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """Build and return the full Markdown backtest report as a string."""
     m = metrics
@@ -567,12 +928,24 @@ def generate_backtest_report(
         "",
         "## Results Summary",
         "",
-        "| Metric | Strategy | SPY | QQQ |",
-        "|--------|----------|-----|-----|",
-        f"| Total Return | {_pct(m.get('total_return'))} | {_pct(m.get('spy_return'))} | {_pct(m.get('qqq_return'))} |",
-        f"| Excess vs SPY | {_pct(m.get('excess_vs_spy'))} | — | — |",
-        f"| Excess vs QQQ | {_pct(m.get('excess_vs_qqq'))} | — | — |",
-        f"| Max Drawdown | {_pct(m.get('max_drawdown'))} | — | — |",
+        "| Metric | Strategy | SPY | QQQ | EWH |",
+        "|--------|----------|-----|-----|-----|",
+        f"| Total Return | {_pct(m.get('total_return'))} | {_pct(m.get('spy_return'))} | {_pct(m.get('qqq_return'))} | {_pct(m.get('ewh_return'))} |",
+        f"| Max Drawdown | {_pct(m.get('max_drawdown'))} | {_pct(m.get('spy_max_drawdown'), '—')} | {_pct(m.get('qqq_max_drawdown'), '—')} | {_pct(m.get('ewh_max_drawdown'), '—')} |",
+        f"| Excess vs SPY | {_pct(m.get('excess_vs_spy'))} | — | — | — |",
+        f"| Excess vs QQQ | {_pct(m.get('excess_vs_qqq'))} | — | — | — |",
+        f"| Excess vs EWH | {_pct(m.get('excess_vs_ewh'))} | — | — | — |",
+    ]
+    for _lbl, _k in [("1-Year Return", "1y"), ("2-Year Return", "2y"), ("3-Year Return", "3y")]:
+        _sv  = m.get(f"strategy_return_{_k}")
+        _spy = m.get(f"spy_return_{_k}")
+        _qqq = m.get(f"qqq_return_{_k}")
+        _ewh = m.get(f"ewh_return_{_k}")
+        if any(v is not None for v in [_sv, _spy, _qqq, _ewh]):
+            lines.append(
+                f"| {_lbl} | {_pct(_sv, '—')} | {_pct(_spy, '—')} | {_pct(_qqq, '—')} | {_pct(_ewh, '—')} |"
+            )
+    lines += [
         "",
         "| Metric | Value |",
         "|--------|-------|",
@@ -588,6 +961,8 @@ def generate_backtest_report(
         f"| Largest Winner | {_dollar(m.get('largest_winner'))} |",
         f"| Largest Loser | {_dollar(m.get('largest_loser'))} |",
         f"| Open Positions at End | {m.get('open_positions_at_end', 0)} |",
+        f"| Total Slippage Cost | {_dollar(m.get('total_slippage_cost'))} ({_pct(m.get('slippage_pct_of_portfolio'))} of start) |",
+        f"| Avg Slippage / Trade | {_dollar(m.get('avg_slippage_per_trade'))} |",
         "",
     ]
 
@@ -663,8 +1038,8 @@ def generate_backtest_report(
     else:
         sample = pd.concat([equity_df.head(5), equity_df.tail(5)]).drop_duplicates("date")
         lines += [
-            "| Date | Portfolio Value | Daily Ret | Cumulative Ret | SPY Ret | QQQ Ret |",
-            "|------|----------------|----------|----------------|---------|---------|",
+            "| Date | Portfolio Value | Daily Ret | Cumulative Ret | SPY Ret | QQQ Ret | EWH Ret |",
+            "|------|----------------|----------|----------------|---------|---------|---------|",
         ]
         for _, row in sample.iterrows():
             lines.append(
@@ -673,9 +1048,14 @@ def generate_backtest_report(
                 f"| {_pct(row.get('daily_return'), '—')} "
                 f"| {_pct(row.get('cumulative_return'), '—')} "
                 f"| {_pct(row.get('spy_cumulative_return'), '—')} "
-                f"| {_pct(row.get('qqq_cumulative_return'), '—')} |"
+                f"| {_pct(row.get('qqq_cumulative_return'), '—')} "
+                f"| {_pct(row.get('ewh_cumulative_return'), '—')} |"
             )
     lines.append("")
+
+    # ── Sensitivity analysis ──────────────────────────────────────────────────
+    if sensitivity_results is not None:
+        lines += ["", _sensitivity_section(sensitivity_results, metrics, config), ""]
 
     # ── Limitations ───────────────────────────────────────────────────────────
     lines += [
@@ -712,6 +1092,7 @@ def save_backtest_outputs(
     report: str,
     output_dir: Path,
     run_date: date,
+    sensitivity_results: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, str]:
     """Write all backtest artefacts and return a dict of {label: path}."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -730,6 +1111,12 @@ def save_backtest_outputs(
     report_path = output_dir / f"backtest_report_{tag}.md"
     report_path.write_text(report)
     paths["report"] = str(report_path)
+
+    if sensitivity_results:
+        sens_df = pd.DataFrame(sensitivity_results)
+        sens_path = output_dir / f"backtest_sensitivity_{tag}.csv"
+        sens_df.to_csv(sens_path, index=False)
+        paths["sensitivity"] = str(sens_path)
 
     return paths
 
@@ -787,11 +1174,18 @@ def main() -> None:
         trades_df, equity_df, final_positions, config, start_date, end_date
     )
 
+    log.info("Running sensitivity analysis (22 variants)...")
+    sensitivity_results = _run_sensitivity_variants(config, price_data, start_date, end_date)
+
     report = generate_backtest_report(
-        metrics, config, trades_df, equity_df, final_positions, run_date
+        metrics, config, trades_df, equity_df, final_positions, run_date,
+        sensitivity_results=sensitivity_results,
     )
 
-    paths = save_backtest_outputs(trades_df, equity_df, report, output_dir, run_date)
+    paths = save_backtest_outputs(
+        trades_df, equity_df, report, output_dir, run_date,
+        sensitivity_results=sensitivity_results,
+    )
 
     # ── Console summary ───────────────────────────────────────────────────────
     print()
@@ -807,6 +1201,8 @@ def main() -> None:
     print(f"  Report       : {paths['report']}")
     print(f"  Trades CSV   : {paths['trades']}")
     print(f"  Equity CSV   : {paths['equity_curve']}")
+    if "sensitivity" in paths:
+        print(f"  Sensitivity  : {paths['sensitivity']}")
     print()
 
 

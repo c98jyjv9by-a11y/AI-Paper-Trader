@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from backtest import (
     _bench_return,
     _evaluate_backtest_exits,
+    _ewh_return,
     _queue_entries,
     compute_metrics,
     run_backtest,
@@ -484,3 +485,65 @@ class TestBenchmarkComparison:
         )
         assert "spy_cumulative_return" in equity_df.columns
         assert "qqq_cumulative_return" in equity_df.columns
+
+
+# ─── 10. Equal-weight hold benchmark ────────────────────────────────────────
+
+
+class TestEqualWeightHold:
+    def _make_ewh_data(
+        self, tickers: list, start_prices: list, end_prices: list
+    ) -> pd.DataFrame:
+        dates = pd.date_range("2024-01-01", periods=2, freq="B")
+        close_data = {t: [s, e] for t, s, e in zip(tickers, start_prices, end_prices)}
+        vol_data = {t: [1_000_000.0, 1_000_000.0] for t in tickers}
+        close_df = pd.DataFrame(close_data, index=dates)
+        vol_df = pd.DataFrame(vol_data, index=dates)
+        close_df.columns = pd.MultiIndex.from_product([["Close"], close_df.columns])
+        vol_df.columns = pd.MultiIndex.from_product([["Volume"], vol_df.columns])
+        return pd.concat([close_df, vol_df], axis=1)
+
+    def test_ewh_return_is_average_of_individual_returns(self):
+        # AAPL +10%, MSFT +20% → EWH = 15%
+        tickers = ["AAPL", "MSFT"]
+        data = self._make_ewh_data(tickers, [100.0, 200.0], [110.0, 240.0])
+        ts = data.index.tolist()
+        result = _ewh_return(data["Close"], tickers, ts[1], ts[0])
+        assert result == pytest.approx(0.15, rel=1e-4)
+
+    def test_ewh_return_zero_when_prices_flat(self):
+        tickers = ["AAPL", "MSFT"]
+        data = self._make_ewh_data(tickers, [100.0, 200.0], [100.0, 200.0])
+        ts = data.index.tolist()
+        result = _ewh_return(data["Close"], tickers, ts[1], ts[0])
+        assert result == pytest.approx(0.0, abs=1e-6)
+
+    def test_ewh_missing_ticker_skipped(self):
+        tickers = ["AAPL", "MSFT"]
+        data = self._make_ewh_data(tickers, [100.0, 200.0], [110.0, 220.0])
+        ts = data.index.tolist()
+        result = _ewh_return(data["Close"], ["NONEXISTENT"], ts[1], ts[0])
+        assert result is None
+
+    def test_ewh_column_in_equity_df(self):
+        tickers = ["AAPL", "SPY", "QQQ"]
+        config = _make_config(tickers)
+        data = _make_price_data(tickers, n_days=40)
+        dates = data.index
+        _, equity_df, _ = run_backtest(config, data, dates[22].date(), dates[-1].date())
+        assert "ewh_cumulative_return" in equity_df.columns
+
+    def test_ewh_in_metrics(self):
+        tickers = ["AAPL", "SPY", "QQQ"]
+        config = _make_config(tickers)
+        data = _make_price_data(tickers, n_days=40)
+        dates = data.index
+        trades_df, equity_df, positions = run_backtest(
+            config, data, dates[22].date(), dates[-1].date()
+        )
+        m = compute_metrics(
+            trades_df, equity_df, positions, config,
+            dates[22].date(), dates[-1].date(),
+        )
+        assert "ewh_return" in m
+        assert "excess_vs_ewh" in m

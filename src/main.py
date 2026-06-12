@@ -85,7 +85,8 @@ def main() -> None:
     # ── Signals ────────────────────────────────────────────────────────────────
     signals = calculate_signals(price_data, tickers)
     top_n = config.get("signals", {}).get("top_candidates", 10)
-    ranked = rank_candidates(signals, top_n=top_n)
+    weights = config.get("signals", {}).get("weights")
+    ranked = rank_candidates(signals, top_n=top_n, weights=weights)
 
     # ── Portfolio state ────────────────────────────────────────────────────────
     state = load_portfolio_state(str(state_path), config["portfolio"]["starting_value"])
