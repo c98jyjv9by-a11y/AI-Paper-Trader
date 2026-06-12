@@ -7,6 +7,7 @@
 
 | Metric | Strategy | SPY | QQQ | Equal-Wt Hold |
 |--------|----------|-----|-----|-----|
+| Ending Balance | $148,870.44 | $216,052.60 | $240,619.00 | $408,464.00 |
 | Total Return | +48.87% | +116.05% | +140.62% | +308.46% |
 | Max Drawdown | -19.47% | -24.50% | -35.12% | -41.24% |
 | Excess vs SPY | -67.18% | — | — | — |
@@ -21,10 +22,10 @@ _Benchmarks: **SPY** and **QQQ** are buy-and-hold of those ETFs. **Equal-Wt Hold
 | Metric | Value |
 |--------|-------|
 | Starting Value | $100,000.00 |
-| Ending Value | $148,870.36 |
-| **Return on Invested Capital** | **+1.22%** |
+| Ending Value | $148,870.44 |
+| **IRR (annualized, money-weighted)** | **+18.89%** |
 | Total Return (on full $ portfolio) | +48.87% |
-| Total Capital Deployed (all entries) | $4,003,596.01 |
+| Total Capital Deployed (all entries) | $4,003,595.96 |
 | Avg Capital Deployed (snapshot) | $43,992.46 (+43.99% of portfolio) |
 | Peak Capital Deployed (snapshot) | $81,116.90 (+81.12% of portfolio) |
 | Time Invested | +99.93% of trading days |
@@ -41,7 +42,7 @@ _Benchmarks: **SPY** and **QQQ** are buy-and-hold of those ETFs. **Equal-Wt Hold
 | Total Slippage Cost | $8,010.08 (+8.01% of start) |
 | Avg Slippage / Trade | $3.38 |
 
-_**Return on Invested Capital** = total P&L ÷ total capital deployed across all entries (cost basis). It strips out idle-cash drag and is bounded at -100% for a long-only book. Note it counts each redeployment of capital separately, so with high turnover the denominator can exceed the starting portfolio. **Total Return** is on the full starting portfolio (cash included) and is what the SPY/QQQ/Equal-Wt comparisons above use, since those benchmarks are fully invested._
+_**IRR** is the annualized money-weighted (internal) rate of return on the capital actually put into positions: it solves for the rate that discounts the dated BUY outflows, SELL inflows, and the terminal mark-to-market of open positions to zero. It ignores idle cash, so it measures how the *deployed* capital performed, and is bounded at -100%. Being annualized, short backtests can extrapolate to large figures. **Total Return** is on the full starting portfolio (cash included) and is what the SPY/QQQ/Equal-Wt comparisons above use, since those benchmarks are fully invested._
 
 ## Strategy Parameters Used
 
@@ -106,15 +107,15 @@ _**Return on Invested Capital** = total P&L ÷ total capital deployed across all
 | Date | Portfolio Value | Daily Ret | Cumulative Ret | SPY Ret | QQQ Ret | EqWt Ret |
 |------|----------------|----------|----------------|---------|---------|---------|
 | 2021-01-04 | $100,000.00 | — | +0.00% | +0.00% | +0.00% | +0.00% |
-| 2021-01-05 | $99,994.11 | -0.01% | -0.01% | +0.69% | +0.82% | +0.94% |
+| 2021-01-05 | $99,994.12 | -0.01% | -0.01% | +0.69% | +0.82% | +0.94% |
 | 2021-01-06 | $99,976.99 | -0.02% | -0.02% | +1.29% | -0.57% | -0.03% |
-| 2021-01-07 | $100,329.78 | +0.35% | +0.33% | +2.80% | +1.83% | +3.04% |
-| 2021-01-08 | $100,190.76 | -0.14% | +0.19% | +3.38% | +3.14% | +3.76% |
-| 2026-06-08 | $148,171.93 | -0.04% | +48.17% | +115.32% | +138.86% | +309.58% |
-| 2026-06-09 | $147,918.34 | -0.17% | +47.92% | +114.68% | +136.11% | +305.06% |
-| 2026-06-10 | $147,256.06 | -0.45% | +47.26% | +111.30% | +131.40% | +293.38% |
-| 2026-06-11 | $148,712.10 | +0.99% | +48.71% | +114.89% | +139.21% | +308.18% |
-| 2026-06-12 | $148,870.36 | +0.11% | +48.87% | +116.05% | +140.62% | +308.46% |
+| 2021-01-07 | $100,329.77 | +0.35% | +0.33% | +2.80% | +1.83% | +3.04% |
+| 2021-01-08 | $100,190.75 | -0.14% | +0.19% | +3.38% | +3.14% | +3.76% |
+| 2026-06-08 | $148,172.01 | -0.04% | +48.17% | +115.32% | +138.86% | +309.58% |
+| 2026-06-09 | $147,918.42 | -0.17% | +47.92% | +114.68% | +136.11% | +305.06% |
+| 2026-06-10 | $147,256.14 | -0.45% | +47.26% | +111.30% | +131.40% | +293.38% |
+| 2026-06-11 | $148,712.18 | +0.99% | +48.71% | +114.89% | +139.21% | +308.18% |
+| 2026-06-12 | $148,870.44 | +0.11% | +48.87% | +116.05% | +140.62% | +308.46% |
 
 
 ## Sensitivity Analysis

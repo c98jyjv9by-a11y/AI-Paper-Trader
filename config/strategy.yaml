@@ -22,3 +22,44 @@ signals:
 data:
   period: "90d"                  # keep unchanged for now
   interval: "1d"                 # daily bars
+
+# Optional groups for P&L attribution diagnostics. Tickers not in the active
+# universe are simply ignored; only groups that actually trade appear in the report.
+ticker_groups:
+  leveraged_etfs:
+    - TQQQ
+    - SQQQ
+    - SOXL
+  broad_etfs:
+    - SPY
+    - QQQ
+    - IWM
+  sector_etfs:
+    - XLK
+    - XLC
+    - XLY
+    - SMH
+    - SOXX
+  mega_cap_growth:
+    - NVDA
+    - MSFT
+    - AAPL
+    - AMZN
+    - GOOGL
+    - META
+    - TSLA
+  semiconductors:
+    - AVGO
+    - AMD
+    - ARM
+    - MU
+  software_cybersecurity:
+    - CRM
+    - NOW
+    - CRWD
+    - PANW
+  financial_crypto_beta:
+    - JPM
+    - BAC
+    - COIN
+    - HOOD

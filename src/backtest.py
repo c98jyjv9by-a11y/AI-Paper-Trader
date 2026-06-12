@@ -40,6 +40,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+from diagnostics import compute_diagnostics, diagnostics_csv, render_diagnostics_md
 from logger import setup_logging
 from portfolio import update_current_prices
 from risk import (
@@ -407,6 +408,7 @@ def run_backtest(
     price_data: pd.DataFrame,
     start_date: date,
     end_date: date,
+    signal_sink: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Walk-forward simulation over [start_date, end_date].
@@ -415,6 +417,12 @@ def run_backtest(
         trades_df    — every simulated BUY and SELL
         equity_df    — daily equity curve with benchmark columns
         positions    — positions still open at the end of the period
+
+    signal_sink: optional list; when provided, each sim day's full-universe scored
+    signals (every ticker, not just the top-N) are appended as dicts for post-hoc
+    diagnostics. This only *reads* signals already computed for trading — it never
+    affects any decision — so it cannot introduce look-ahead. Left None by the
+    sensitivity runs and tests so their behaviour and speed are unchanged.
     """
     tickers: List[str] = config["tickers"]
     slippage = config["risk"]["slippage"]
@@ -536,6 +544,22 @@ def run_backtest(
                 pending_orders = _queue_entries(
                     ranked, positions, portfolio_value, cash, config
                 )
+                if signal_sink is not None:
+                    # Score the whole cross-section (not just top-N) for diagnostics.
+                    scored_all = rank_candidates(signals, top_n=len(signals), weights=weights)
+                    for _, srow in scored_all.iterrows():
+                        signal_sink.append(
+                            {
+                                "date": bar_date.isoformat(),
+                                "bar_idx": bar_idx,
+                                "ticker": srow["ticker"],
+                                "return_1d": srow.get("return_1d"),
+                                "return_5d": srow.get("return_5d"),
+                                "return_20d": srow.get("return_20d"),
+                                "vol_ratio": srow.get("vol_ratio"),
+                                "composite_score": srow.get("composite_score"),
+                            }
+                        )
 
         # ── 6. Record equity curve row ────────────────────────────────────────
         unrealized = (
@@ -1132,6 +1156,7 @@ def generate_backtest_report(
     positions: pd.DataFrame,
     run_date: date,
     sensitivity_results: Optional[List[Dict[str, Any]]] = None,
+    diagnostics_md: Optional[str] = None,
 ) -> str:
     """Build and return the full Markdown backtest report as a string."""
     m = metrics
@@ -1300,6 +1325,10 @@ def generate_backtest_report(
             )
     lines.append("")
 
+    # ── Strategy diagnostics ──────────────────────────────────────────────────
+    if diagnostics_md:
+        lines += ["", diagnostics_md, ""]
+
     # ── Sensitivity analysis ──────────────────────────────────────────────────
     if sensitivity_results is not None:
         lines += ["", _sensitivity_section(sensitivity_results, metrics, config), ""]
@@ -1340,6 +1369,7 @@ def save_backtest_outputs(
     output_dir: Path,
     run_date: date,
     sensitivity_results: Optional[List[Dict[str, Any]]] = None,
+    diagnostics_df: Optional[pd.DataFrame] = None,
 ) -> Dict[str, str]:
     """Write all backtest artefacts and return a dict of {label: path}."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1364,6 +1394,11 @@ def save_backtest_outputs(
         sens_path = output_dir / f"backtest_sensitivity_{tag}.csv"
         sens_df.to_csv(sens_path, index=False)
         paths["sensitivity"] = str(sens_path)
+
+    if diagnostics_df is not None and not diagnostics_df.empty:
+        diag_path = output_dir / f"backtest_diagnostics_{tag}.csv"
+        diagnostics_df.to_csv(diag_path, index=False)
+        paths["diagnostics"] = str(diag_path)
 
     return paths
 
@@ -1413,13 +1448,22 @@ def main() -> None:
 
     price_data = fetch_backtest_data(config["tickers"], start_date, end_date)
 
+    signal_history: List[Dict[str, Any]] = []
     trades_df, equity_df, final_positions = run_backtest(
-        config, price_data, start_date, end_date
+        config, price_data, start_date, end_date, signal_sink=signal_history
     )
 
     metrics = compute_metrics(
         trades_df, equity_df, final_positions, config, start_date, end_date
     )
+
+    log.info("Computing strategy diagnostics...")
+    diag = compute_diagnostics(
+        config, price_data, trades_df, equity_df, final_positions,
+        signal_history, metrics, start_date, end_date,
+    )
+    diagnostics_md = render_diagnostics_md(diag, config)
+    diagnostics_df = diagnostics_csv(diag)
 
     log.info("Running one-way sensitivity analysis...")
     sensitivity_results = _run_sensitivity_variants(config, price_data, start_date, end_date)
@@ -1427,11 +1471,13 @@ def main() -> None:
     report = generate_backtest_report(
         metrics, config, trades_df, equity_df, final_positions, run_date,
         sensitivity_results=sensitivity_results,
+        diagnostics_md=diagnostics_md,
     )
 
     paths = save_backtest_outputs(
         trades_df, equity_df, report, output_dir, run_date,
         sensitivity_results=sensitivity_results,
+        diagnostics_df=diagnostics_df,
     )
 
     # ── Console summary ───────────────────────────────────────────────────────
@@ -1450,6 +1496,8 @@ def main() -> None:
     print(f"  Equity CSV   : {paths['equity_curve']}")
     if "sensitivity" in paths:
         print(f"  Sensitivity  : {paths['sensitivity']}")
+    if "diagnostics" in paths:
+        print(f"  Diagnostics  : {paths['diagnostics']}")
     print()
 
 
