@@ -2,277 +2,200 @@
 
 A local Python CLI tool for running a simple, auditable paper-trading strategy on U.S. equities and ETFs.
 
-The project fetches market data, calculates momentum signals, ranks trade candidates, applies risk controls, tracks simulated positions, and generates daily Markdown reports. It is designed for research, strategy testing, and paper-trading analysis only.
-
 > **This project does not place real trades. It is not financial advice.**
 
 ---
 
-## Overview
+## What it does
 
-AI Paper Trader is a local paper-trading research agent. Each run:
+Two commands, two modes:
 
-1. Loads a fixed ticker universe from `config/universe.yaml`
-2. Loads strategy and risk assumptions from `config/strategy.yaml`
-3. Fetches recent historical price data
-4. Calculates momentum signals
-5. Ranks trade candidates
-6. Evaluates exits for existing paper positions
-7. Generates new paper trade recommendations
-8. Updates local CSV/JSON state files
-9. Produces a daily Markdown report
+| Command | What it does |
+|---------|-------------|
+| `python src/main.py` | Daily paper-trading agent — fetches live prices, ranks signals, recommends up to 3 trades, updates positions, writes a report |
+| `python src/backtest.py --start YYYY-MM-DD --end YYYY-MM-DD` | Walk-forward backtest — replays the same strategy over a historical date range, outputs an equity curve, trade log, and performance report |
 
-The current strategy is a **long-only momentum strategy** using price and volume signals.
+Both use the same signal engine, risk rules, slippage assumptions, position sizing, and exposure limits defined in `config/strategy.yaml`. No API keys required.
 
 ---
 
-## Current Strategy
-
-The signal engine ranks tickers using:
-
-- 1-day return
-- 5-day return
-- 20-day return
-- Volume ratio versus 20-day average volume
-
-Each signal is percentile-ranked and combined into a composite score.
-
-Default ranking weights:
-
-```yaml
-1_day_return: 20%
-5_day_return: 30%
-20_day_return: 30%
-volume_ratio: 20%
-```
-
-The strategy is intentionally simple so that assumptions, trade selection, and performance can be audited.
-
----
-
-## Risk Controls
-
-Default risk assumptions are stored in `config/strategy.yaml`.
-
-```yaml
-portfolio:
-  starting_value: 100000.0
-  max_position_pct: 0.05
-  max_total_exposure: 0.30
-  max_new_trades_per_day: 3
-
-risk:
-  stop_loss: 0.05
-  take_profit: 0.10
-  max_holding_days: 10
-  slippage: 0.001
-```
-
-This means:
-
-- Starting paper portfolio: `$100,000`
-- Max single position: `5%`
-- Max total long exposure: `30%`
-- Max new trades per day: `3`
-- Stop loss: `-5%`
-- Take profit: `+10%`
-- Max holding period: `10 trading days`
-- Slippage assumption: `0.10%` per trade
-
----
-
-## Project Structure
-
-```text
-ai-paper-trader/
-├── config/
-│   ├── universe.yaml
-│   └── strategy.yaml
-├── data/
-│   ├── trade_log.csv
-│   ├── positions.csv
-│   └── portfolio_state.json
-├── reports/
-│   └── report_YYYY-MM-DD.md
-├── src/
-│   ├── main.py
-│   ├── market_data.py
-│   ├── signals.py
-│   ├── risk.py
-│   ├── portfolio.py
-│   ├── report.py
-│   └── logger.py
-├── tests/
-│   ├── test_risk.py
-│   └── test_signals.py
-├── requirements.txt
-├── .env.example
-├── CLAUDE.md
-└── README.md
-```
-
----
-
-## File Descriptions
-
-| File | Purpose |
-|---|---|
-| `src/main.py` | Main orchestrator and CLI entry point |
-| `src/market_data.py` | Fetches price data using `yfinance` |
-| `src/signals.py` | Calculates momentum signals and ranks candidates |
-| `src/risk.py` | Pure risk functions for sizing, slippage, exposure, stops, and holding-period checks |
-| `src/portfolio.py` | Loads and saves portfolio state, evaluates exits, and generates entries |
-| `src/report.py` | Builds and saves Markdown reports |
-| `src/logger.py` | Appends trades to the audit log |
-| `config/universe.yaml` | Fixed ticker universe |
-| `config/strategy.yaml` | Strategy, signal, risk, and data assumptions |
-| `data/trade_log.csv` | Append-only trade recommendation/action log |
-| `data/positions.csv` | Current open paper positions |
-| `data/portfolio_state.json` | Current paper cash balance and starting value |
-| `reports/` | Generated daily reports |
-| `tests/` | Unit tests for risk and signal logic |
-
----
-
-## Installation
-
-### 1. Clone the repository
+## Quickstart
 
 ```bash
 git clone https://github.com/YOUR_USERNAME/ai-paper-trader.git
 cd ai-paper-trader
-```
-
-### 2. Create a virtual environment
-
-```bash
-python -m venv .venv
-```
-
-Activate it:
-
-```bash
-source .venv/bin/activate
-```
-
-On Windows:
-
-```bash
-.venv\Scripts\activate
-```
-
-### 3. Install dependencies
-
-```bash
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
----
-
-## Usage
-
-Run the daily paper-trading agent:
+**Run the daily agent:**
 
 ```bash
 python src/main.py
 ```
 
-The script will:
+**Run a backtest:**
 
-- Fetch market data
-- Calculate signals
-- Evaluate current positions
-- Generate new paper trade recommendations
-- Update local state files
-- Save a Markdown report in `reports/`
+```bash
+python src/backtest.py --start 2024-01-01 --end 2024-12-31
+```
 
-Example output:
+**Run the tests:**
 
-```text
-Report saved to reports/report_2026-06-12.md
+```bash
+pytest
 ```
 
 ---
 
-## Reports
+## Strategy
 
-Each run creates a daily Markdown report under `reports/`.
+Long-only momentum. The signal engine ranks every ticker in the universe by a composite score:
 
-A typical report includes:
+| Signal | Weight |
+|--------|--------|
+| 1-day return | 20% |
+| 5-day return | 30% |
+| 20-day return | 30% |
+| Volume vs. 20-day average | 20% |
 
-- Market data summary
-- Ranked momentum candidates
-- Buy recommendations
-- Sell recommendations for existing positions
-- Open positions
-- Risk summary
-- Trade log summary
-- Data limitations
-- Catalyst/news placeholder
-
-News and catalyst scoring are currently disabled unless a future verified news source is added.
+Each signal is converted to a 0–1 percentile rank before weighting. The top-ranked candidates are selected subject to all risk controls.
 
 ---
 
-## Data Files
+## Risk controls
 
-### `trade_log.csv`
+All parameters live in `config/strategy.yaml` and are used identically by both the daily agent and the backtester.
 
-Append-only audit log of recommendations and exits.
+| Parameter | Default |
+|-----------|---------|
+| Starting portfolio | $100,000 |
+| Max single position | 5% of portfolio |
+| Max total long exposure | 30% of portfolio |
+| Max new trades per day | 3 |
+| Stop loss | −5% from entry |
+| Take profit | +10% from entry |
+| Max holding period | ~10 trading days |
+| Slippage | 0.10% per fill |
 
-Columns:
+---
+
+## Project structure
 
 ```text
+ai-paper-trader/
+├── config/
+│   ├── universe.yaml          # 25-ticker universe (ETFs + large-caps)
+│   └── strategy.yaml          # all risk and signal parameters
+├── data/
+│   ├── trade_log.csv          # append-only audit log (live agent)
+│   ├── positions.csv          # open paper positions (live agent)
+│   └── portfolio_state.json   # cash balance (live agent)
+├── reports/
+│   └── report_YYYY-MM-DD.md   # daily paper-trading reports
+├── backtests/
+│   ├── backtest_report_YYYY-MM-DD.md
+│   ├── backtest_trades_YYYY-MM-DD.csv
+│   └── backtest_equity_curve_YYYY-MM-DD.csv
+├── src/
+│   ├── main.py                # daily paper-trading agent
+│   ├── backtest.py            # walk-forward backtesting engine
+│   ├── market_data.py         # yfinance wrapper
+│   ├── signals.py             # momentum signal calculation and ranking
+│   ├── risk.py                # pure functions: sizing, slippage, exit triggers
+│   ├── portfolio.py           # state I/O, exit evaluation, entry generation
+│   ├── report.py              # Markdown report builder (daily agent)
+│   └── logger.py              # logging setup and trade log appender
+├── tests/
+│   ├── test_risk.py           # 29 tests for risk.py
+│   ├── test_signals.py        # 15 tests for signals.py
+│   └── test_backtest.py       # 24 tests for backtest.py
+├── requirements.txt
+├── .env.example
+└── CLAUDE.md
+```
+
+---
+
+## Daily agent (`src/main.py`)
+
+Each run:
+
+1. Loads `config/universe.yaml` and `config/strategy.yaml`
+2. Fetches 60 days of OHLCV data via yfinance
+3. Calculates momentum signals and ranks all tickers
+4. Loads `data/positions.csv` and refreshes current prices
+5. Checks every open position for stop-loss, take-profit, or max-holding-period exits
+6. Recommends up to 3 new entries from the top-ranked candidates
+7. Saves updated `data/positions.csv` and `data/portfolio_state.json`
+8. Appends all recommendations to `data/trade_log.csv`
+9. Writes `reports/report_YYYY-MM-DD.md`
+
+State persists across daily runs — each run picks up where the last left off.
+
+---
+
+## Backtester (`src/backtest.py`)
+
+Walks forward one trading day at a time over the requested date range. On each day:
+
+- Signals are computed using **only data available up to that date** (no look-ahead)
+- Buy orders queue at day T's signals and **fill at day T+1's close** (next-day execution)
+- Exit triggers (stop-loss, take-profit, holding period) fire and fill at day T's close
+- Benchmark returns (SPY, QQQ) are tracked close-to-close from the first sim date
+
+**Output files** (written to `backtests/`, named by the date you ran it):
+
+| File | Contents |
+|------|----------|
+| `backtest_report_YYYY-MM-DD.md` | Full performance report with all metrics |
+| `backtest_trades_YYYY-MM-DD.csv` | Every simulated buy and sell |
+| `backtest_equity_curve_YYYY-MM-DD.csv` | Daily portfolio value, cash, P&L, benchmark returns |
+
+**Metrics reported:** total return, max drawdown, SPY/QQQ comparison, excess return, win rate, average win/loss, profit factor, average holding period, largest winner/loser, number of trades.
+
+**Execution assumptions** (documented in every report):
+
+- Entry fills at next-day close — not the same close used to rank signals
+- Exit fills at same-day close (mild optimism vs. a true next-open fill)
+- Holding period uses calendar days × 5/7 (not a real trading-day calendar)
+- No commissions beyond the configured slippage
+
+---
+
+## Data files (live agent)
+
+**`data/trade_log.csv`** — append-only audit log:
+```
 date, action, ticker, shares, price_with_slippage, trade_value, reason, pnl, portfolio_value_after
 ```
 
-### `positions.csv`
-
-Current open paper positions.
-
-Columns:
-
-```text
+**`data/positions.csv`** — open paper positions:
+```
 ticker, shares, entry_price, entry_date, current_price
 ```
 
-### `portfolio_state.json`
-
-Stores cash and starting value.
-
-Example:
-
+**`data/portfolio_state.json`** — cash balance:
 ```json
-{
-  "cash": 85000.0,
-  "starting_value": 100000.0
-}
+{"cash": 85000.0, "starting_value": 100000.0}
 ```
 
 ---
 
 ## Configuration
 
-### Ticker Universe
-
-Edit `config/universe.yaml` to change the approved trading universe.
-
-Example:
+**Ticker universe** — edit `config/universe.yaml`:
 
 ```yaml
 tickers:
   - SPY
   - QQQ
-  - NVDA
-  - MSFT
   - AAPL
+  - MSFT
+  # add or remove tickers here
 ```
 
-### Strategy Assumptions
-
-Edit `config/strategy.yaml` to change risk limits, signal settings, or market data settings.
-
-Example:
+**Strategy and risk parameters** — edit `config/strategy.yaml`:
 
 ```yaml
 portfolio:
@@ -289,94 +212,36 @@ risk:
 
 signals:
   top_candidates: 10
-
-data:
-  period: "60d"
-  interval: "1d"
 ```
+
+Changes to `strategy.yaml` take effect on the next run of either command.
 
 ---
 
-## Testing
+## Tests
 
-Run the test suite:
+68 tests, no network calls:
 
 ```bash
-pytest
+pytest tests/ -v
 ```
 
-Current tests cover:
-
-- Position sizing
-- Slippage
-- Exposure calculation
-- Stop-loss triggers
-- Take-profit triggers
-- Holding-period checks
-- Signal calculation
-- Candidate ranking
+Coverage: position sizing, slippage, exposure caps, stop-loss/take-profit/holding-period triggers, signal calculation, candidate ranking, no-look-ahead bias, cash mechanics, equity curve invariants, benchmark comparison.
 
 ---
 
-## Current Limitations
+## Limitations
 
-This is an early-stage paper-trading research tool.
-
-Known limitations:
-
-- Uses `yfinance`, which may have missing, delayed, or adjusted data issues
-- No live brokerage integration
-- No real trade execution
-- No short selling
-- No options
-- No news or catalyst scoring yet
-- Fixed ticker universe
-- Long-only strategy
-- Holding-period logic may be approximate depending on implementation
-- CSV/JSON state files are simple and should be handled carefully
-- Backtesting support may need further development before strategy conclusions are reliable
-
----
-
-## Planned Improvements
-
-Potential next improvements:
-
-- Add dry-run versus commit mode
-- Add historical backtesting
-- Add benchmark comparison versus SPY and QQQ
-- Add performance metrics such as drawdown, win rate, average win/loss, and profit factor
-- Add richer data quality checks
-- Add actual trading-day calendar logic
-- Add verified news/catalyst scoring
-- Add rejected-trade explanations
-- Add better portfolio accounting and equity curve tracking
-- Add Makefile commands for daily workflow
-
----
-
-## Backtesting Roadmap
-
-A future backtesting module should:
-
-- Reuse `config/strategy.yaml`
-- Reuse the existing signal engine
-- Replay historical dates one day at a time
-- Avoid look-ahead bias
-- Apply slippage, sizing, exposure caps, stop loss, take profit, and holding-period rules
-- Generate:
-  - `backtest_trades.csv`
-  - `backtest_equity_curve.csv`
-  - `backtest_report_YYYY-MM-DD.md`
-
-The goal is to test whether the strategy logic and assumptions are reasonable before relying on daily paper-trading recommendations.
+- **yfinance data** may be delayed, adjusted, or missing for some tickers
+- **Long-only, no options, no short selling**
+- **Fixed ticker universe** — tickers delisted during a backtest period may silently disappear from results
+- **Holding-period approximation** uses calendar days × 5/7 rather than a real trading-day calendar
+- **No commissions** — only slippage is modelled
+- **No news/catalyst scoring** — the daily report includes a placeholder; enable it by adding a `NEWS_API_KEY` to `.env`
+- **Past simulated results do not predict future performance**
 
 ---
 
 ## Disclaimer
 
-This project is for educational and research purposes only.
-
-It does not provide financial advice, investment advice, or trading recommendations for real-money portfolios. The system is intended for paper trading and strategy analysis only. Past performance, simulated or otherwise, does not guarantee future results.
-
-Use at your own risk.
+For educational and research purposes only. Not financial advice. Use at your own risk.
