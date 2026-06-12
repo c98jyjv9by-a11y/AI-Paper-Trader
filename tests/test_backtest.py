@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from backtest import (
     _bench_return,
     _evaluate_backtest_exits,
-    _ewh_return,
+    _equal_weight_hold_return,
     _queue_entries,
     compute_metrics,
     run_backtest,
@@ -491,7 +491,7 @@ class TestBenchmarkComparison:
 
 
 class TestEqualWeightHold:
-    def _make_ewh_data(
+    def _make_equal_weight_data(
         self, tickers: list, start_prices: list, end_prices: list
     ) -> pd.DataFrame:
         dates = pd.date_range("2024-01-01", periods=2, freq="B")
@@ -503,37 +503,37 @@ class TestEqualWeightHold:
         vol_df.columns = pd.MultiIndex.from_product([["Volume"], vol_df.columns])
         return pd.concat([close_df, vol_df], axis=1)
 
-    def test_ewh_return_is_average_of_individual_returns(self):
-        # AAPL +10%, MSFT +20% → EWH = 15%
+    def test_equal_weight_hold_return_is_average_of_individual_returns(self):
+        # AAPL +10%, MSFT +20% → Equal-weight hold = 15%
         tickers = ["AAPL", "MSFT"]
-        data = self._make_ewh_data(tickers, [100.0, 200.0], [110.0, 240.0])
+        data = self._make_equal_weight_data(tickers, [100.0, 200.0], [110.0, 240.0])
         ts = data.index.tolist()
-        result = _ewh_return(data["Close"], tickers, ts[1], ts[0])
+        result = _equal_weight_hold_return(data["Close"], tickers, ts[1], ts[0])
         assert result == pytest.approx(0.15, rel=1e-4)
 
-    def test_ewh_return_zero_when_prices_flat(self):
+    def test_equal_weight_hold_return_zero_when_prices_flat(self):
         tickers = ["AAPL", "MSFT"]
-        data = self._make_ewh_data(tickers, [100.0, 200.0], [100.0, 200.0])
+        data = self._make_equal_weight_data(tickers, [100.0, 200.0], [100.0, 200.0])
         ts = data.index.tolist()
-        result = _ewh_return(data["Close"], tickers, ts[1], ts[0])
+        result = _equal_weight_hold_return(data["Close"], tickers, ts[1], ts[0])
         assert result == pytest.approx(0.0, abs=1e-6)
 
-    def test_ewh_missing_ticker_skipped(self):
+    def test_equal_weight_missing_ticker_skipped(self):
         tickers = ["AAPL", "MSFT"]
-        data = self._make_ewh_data(tickers, [100.0, 200.0], [110.0, 220.0])
+        data = self._make_equal_weight_data(tickers, [100.0, 200.0], [110.0, 220.0])
         ts = data.index.tolist()
-        result = _ewh_return(data["Close"], ["NONEXISTENT"], ts[1], ts[0])
+        result = _equal_weight_hold_return(data["Close"], ["NONEXISTENT"], ts[1], ts[0])
         assert result is None
 
-    def test_ewh_column_in_equity_df(self):
+    def test_equal_weight_column_in_equity_df(self):
         tickers = ["AAPL", "SPY", "QQQ"]
         config = _make_config(tickers)
         data = _make_price_data(tickers, n_days=40)
         dates = data.index
         _, equity_df, _ = run_backtest(config, data, dates[22].date(), dates[-1].date())
-        assert "ewh_cumulative_return" in equity_df.columns
+        assert "equal_weight_cumulative_return" in equity_df.columns
 
-    def test_ewh_in_metrics(self):
+    def test_equal_weight_in_metrics(self):
         tickers = ["AAPL", "SPY", "QQQ"]
         config = _make_config(tickers)
         data = _make_price_data(tickers, n_days=40)
@@ -545,5 +545,5 @@ class TestEqualWeightHold:
             trades_df, equity_df, positions, config,
             dates[22].date(), dates[-1].date(),
         )
-        assert "ewh_return" in m
-        assert "excess_vs_ewh" in m
+        assert "equal_weight_return" in m
+        assert "excess_vs_equal_weight" in m

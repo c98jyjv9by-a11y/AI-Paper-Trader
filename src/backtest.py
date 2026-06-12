@@ -274,13 +274,18 @@ def _bench_return(
         return None
 
 
-def _ewh_return(
+def _equal_weight_hold_return(
     close: pd.DataFrame,
     tickers: List[str],
     current_ts: Any,
     start_ts: Any,
 ) -> Optional[float]:
-    """Equal-weight hold return: simple average of each ticker's buy-and-hold return."""
+    """
+    Equal-weight buy-and-hold return: simple average of every universe ticker's
+    return since the first sim date. This is a SYNTHETIC benchmark computed from the
+    universe — it is not a fetched security. (Note: 'EWH' is a real, unrelated ETF;
+    do not label this series 'EWH'. It is shown as 'Equal-Wt Hold' in reports.)
+    """
     rets = []
     for ticker in tickers:
         if ticker not in close.columns:
@@ -471,7 +476,7 @@ def run_backtest(
                 "cumulative_return": None,     # filled after loop
                 "spy_cumulative_return": _bench_return(close, "SPY", bar_ts, bench_start_ts),
                 "qqq_cumulative_return": _bench_return(close, "QQQ", bar_ts, bench_start_ts),
-                "ewh_cumulative_return": _ewh_return(close, tickers, bar_ts, bench_start_ts),
+                "equal_weight_cumulative_return": _equal_weight_hold_return(close, tickers, bar_ts, bench_start_ts),
             }
         )
 
@@ -490,7 +495,7 @@ def run_backtest(
         "date", "cash", "open_positions_value", "total_portfolio_value",
         "realized_pnl_to_date", "unrealized_pnl", "daily_return",
         "cumulative_return", "spy_cumulative_return", "qqq_cumulative_return",
-        "ewh_cumulative_return",
+        "equal_weight_cumulative_return",
     ]
     equity_df = equity_df.reindex(columns=[c for c in col_order if c in equity_df.columns])
 
@@ -570,7 +575,7 @@ def compute_metrics(
 
     spy_return = _last_bench("spy_cumulative_return")
     qqq_return = _last_bench("qqq_cumulative_return")
-    ewh_return = _last_bench("ewh_cumulative_return")
+    equal_weight_return = _last_bench("equal_weight_cumulative_return")
 
     def _bench_dd(col: str) -> Optional[float]:
         return _cum_ret_max_drawdown(equity_df[col]) if col in equity_df.columns else None
@@ -589,13 +594,13 @@ def compute_metrics(
         "max_drawdown": max_drawdown,
         "spy_return": spy_return,
         "qqq_return": qqq_return,
-        "ewh_return": ewh_return,
+        "equal_weight_return": equal_weight_return,
         "spy_max_drawdown": _bench_dd("spy_cumulative_return"),
         "qqq_max_drawdown": _bench_dd("qqq_cumulative_return"),
-        "ewh_max_drawdown": _bench_dd("ewh_cumulative_return"),
+        "equal_weight_max_drawdown": _bench_dd("equal_weight_cumulative_return"),
         "excess_vs_spy": (total_return - spy_return) if spy_return is not None else None,
         "excess_vs_qqq": (total_return - qqq_return) if qqq_return is not None else None,
-        "excess_vs_ewh": (total_return - ewh_return) if ewh_return is not None else None,
+        "excess_vs_equal_weight": (total_return - equal_weight_return) if equal_weight_return is not None else None,
         "strategy_return_1y": _bench_trailing("cumulative_return", 252),
         "strategy_return_2y": _bench_trailing("cumulative_return", 504),
         "strategy_return_3y": _bench_trailing("cumulative_return", 756),
@@ -605,9 +610,9 @@ def compute_metrics(
         "qqq_return_1y": _bench_trailing("qqq_cumulative_return", 252),
         "qqq_return_2y": _bench_trailing("qqq_cumulative_return", 504),
         "qqq_return_3y": _bench_trailing("qqq_cumulative_return", 756),
-        "ewh_return_1y": _bench_trailing("ewh_cumulative_return", 252),
-        "ewh_return_2y": _bench_trailing("ewh_cumulative_return", 504),
-        "ewh_return_3y": _bench_trailing("ewh_cumulative_return", 756),
+        "equal_weight_return_1y": _bench_trailing("equal_weight_cumulative_return", 252),
+        "equal_weight_return_2y": _bench_trailing("equal_weight_cumulative_return", 504),
+        "equal_weight_return_3y": _bench_trailing("equal_weight_cumulative_return", 756),
         "n_trades": len(trades_df) if not trades_df.empty else 0,
         "n_buys": int((trades_df["action"] == "BUY").sum()) if not trades_df.empty else 0,
         "n_sells": n_sells,
@@ -627,12 +632,46 @@ def compute_metrics(
 
 # ─── Sensitivity analysis ─────────────────────────────────────────────────────
 
-_WEIGHT_PROFILES: Dict[str, Dict[str, float]] = {
-    "baseline":    {"return_1d": 0.20, "return_5d": 0.30, "return_20d": 0.30, "vol_ratio": 0.20},
+# Default composite-score weights, used as the fallback "baseline" profile when
+# config/strategy.yaml does not define signals.weights. The alternative profiles
+# below are fixed comparison hypotheses, NOT derived from the config baseline.
+_DEFAULT_WEIGHTS: Dict[str, float] = {
+    "return_1d": 0.20, "return_5d": 0.30, "return_20d": 0.30, "vol_ratio": 0.20,
+}
+_ALT_WEIGHT_PROFILES: Dict[str, Dict[str, float]] = {
     "no_1d":       {"return_1d": 0.00, "return_5d": 0.40, "return_20d": 0.40, "vol_ratio": 0.20},
     "less_1d":     {"return_1d": 0.05, "return_5d": 0.35, "return_20d": 0.40, "vol_ratio": 0.20},
     "more_volume": {"return_1d": 0.10, "return_5d": 0.25, "return_20d": 0.30, "vol_ratio": 0.35},
 }
+
+# Test points swept for each numeric parameter. The live config baseline is always
+# merged into its sweep at runtime (see _sweep_with_baseline), so changing a value
+# in strategy.yaml automatically adds it to the table and flags it as the baseline.
+_SENSITIVITY_TEST_POINTS: Dict[str, List[Optional[float]]] = {
+    "stop_loss": [0.03, 0.05, 0.075, 0.10],
+    "take_profit": [0.08, 0.10, 0.15],
+    "max_holding_days": [5, 15, 30, 60],
+    "max_new_trades_per_day": [1, 2, 3, 5],
+    "min_composite_score": [None, 0.60, 0.70, 0.80],
+}
+
+
+def _sweep_with_baseline(
+    test_points: List[Optional[float]],
+    baseline_value: Optional[float],
+) -> List[Optional[float]]:
+    """
+    Merge the live config baseline into a parameter's test sweep.
+
+    Guarantees the current baseline appears in the swept values (so it is always
+    represented and gets the '◀ baseline' marker), then dedupes and sorts with any
+    None ('disabled') first.
+    """
+    vals = list(test_points)
+    if baseline_value not in vals:
+        vals.append(baseline_value)
+    numeric = sorted(v for v in vals if v is not None)
+    return ([None] if None in vals else []) + numeric
 
 
 def _run_sensitivity_variants(
@@ -642,13 +681,19 @@ def _run_sensitivity_variants(
     end_date: date,
 ) -> List[Dict[str, Any]]:
     """
-    One-way sensitivity analysis: vary one parameter at a time, all others at baseline.
+    One-way sensitivity analysis: vary one parameter at a time, all others held at
+    the live config baseline.
 
-    Calls run_backtest + compute_metrics for each of 22 variants. Uses deepcopy so
-    baseline_config is never mutated. Returns summary metric dicts only — no per-run
-    trade logs or equity curves are retained.
+    Each numeric sweep is built from a fixed set of test points plus the current
+    baseline value from config/strategy.yaml, so the report stays correct as you
+    edit baselines. Uses deepcopy so baseline_config is never mutated. Returns
+    summary metric dicts only — no per-run trade logs or equity curves are retained.
     """
     import copy
+
+    r = baseline_config["risk"]
+    p = baseline_config["portfolio"]
+    s = baseline_config.get("signals", {})
 
     results: List[Dict[str, Any]] = []
 
@@ -663,7 +708,7 @@ def _run_sensitivity_variants(
                     "total_return": m.get("total_return"),
                     "excess_vs_spy": m.get("excess_vs_spy"),
                     "excess_vs_qqq": m.get("excess_vs_qqq"),
-                    "excess_vs_ewh": m.get("excess_vs_ewh"),
+                    "excess_vs_equal_weight": m.get("excess_vs_equal_weight"),
                     "max_drawdown": m.get("max_drawdown"),
                     "total_trades": m.get("n_trades", 0),
                     "win_rate": m.get("win_rate"),
@@ -674,37 +719,40 @@ def _run_sensitivity_variants(
         except Exception as exc:
             log.warning("Sensitivity %s=%s failed: %s", param, display_val, exc)
 
-    for val in [0.03, 0.05, 0.075, 0.10]:
+    for val in _sweep_with_baseline(_SENSITIVITY_TEST_POINTS["stop_loss"], r["stop_loss"]):
         cfg = copy.deepcopy(baseline_config)
         cfg["risk"]["stop_loss"] = val
         _run_one("stop_loss", f"{val:.1%}", cfg)
 
-    for val in [0.08, 0.10, 0.15]:
+    for val in _sweep_with_baseline(_SENSITIVITY_TEST_POINTS["take_profit"], r["take_profit"]):
         cfg = copy.deepcopy(baseline_config)
         cfg["risk"]["take_profit"] = val
         _run_one("take_profit", f"{val:.0%}", cfg)
 
-    for val in [5, 10, 20, 30]:
+    for val in _sweep_with_baseline(_SENSITIVITY_TEST_POINTS["max_holding_days"], r["max_holding_days"]):
         cfg = copy.deepcopy(baseline_config)
         cfg["risk"]["max_holding_days"] = val
         _run_one("max_holding_days", str(val), cfg)
 
-    for val in [1, 2, 3]:
+    for val in _sweep_with_baseline(_SENSITIVITY_TEST_POINTS["max_new_trades_per_day"], p["max_new_trades_per_day"]):
         cfg = copy.deepcopy(baseline_config)
         cfg["portfolio"]["max_new_trades_per_day"] = val
         _run_one("max_new_trades_per_day", str(val), cfg)
 
-    for val in [None, 0.60, 0.70, 0.80]:
+    for val in _sweep_with_baseline(_SENSITIVITY_TEST_POINTS["min_composite_score"], s.get("min_composite_score")):
         cfg = copy.deepcopy(baseline_config)
         cfg["signals"]["min_composite_score"] = val
         _run_one("min_composite_score", "none" if val is None else f"{val:.2f}", cfg)
 
-    for name, wts in _WEIGHT_PROFILES.items():
+    # "baseline" profile reflects the live config weights; alternatives are fixed.
+    config_weights = s.get("weights") or _DEFAULT_WEIGHTS
+    weight_profiles = {"baseline": config_weights, **_ALT_WEIGHT_PROFILES}
+    for name, wts in weight_profiles.items():
         cfg = copy.deepcopy(baseline_config)
         cfg["signals"]["weights"] = wts
         _run_one("signal_weights", name, cfg)
 
-    log.info("Sensitivity analysis: %d / 22 variants completed", len(results))
+    log.info("Sensitivity analysis: %d variants completed", len(results))
     return results
 
 
@@ -813,7 +861,7 @@ def _sensitivity_section(
     for r in results:
         grouped[r["parameter"]].append(r)
 
-    col_header  = "| Value | Return | vs SPY | vs EWH | Max DD | Trades | Win Rate | PF |"
+    col_header  = "| Value | Return | vs SPY | vs EqWt | Max DD | Trades | Win Rate | PF |"
     col_divider = "|-------|--------|--------|--------|--------|--------|----------|-----|"
 
     def _data_row(r: Dict[str, Any], mark_baseline: bool) -> str:
@@ -824,7 +872,7 @@ def _sensitivity_section(
             f"| {r['value']}{marker} "
             f"| {_pct(r.get('total_return'), '—')} "
             f"| {_pct(r.get('excess_vs_spy'), '—')} "
-            f"| {_pct(r.get('excess_vs_ewh'), '—')} "
+            f"| {_pct(r.get('excess_vs_equal_weight'), '—')} "
             f"| {_pct(r.get('max_drawdown'), '—')} "
             f"| {trades} "
             f"| {_pct(r.get('win_rate'), '—')} "
@@ -854,7 +902,7 @@ def _sensitivity_section(
         reverse=True,
     )
 
-    rank_header  = "| Rank | Parameter | Value | Return | vs SPY | vs EWH | Max DD | PF |"
+    rank_header  = "| Rank | Parameter | Value | Return | vs SPY | vs EqWt | Max DD | PF |"
     rank_divider = "|------|-----------|-------|--------|--------|--------|--------|-----|"
 
     def _ranked_row(rank: int, r: Dict[str, Any]) -> str:
@@ -863,7 +911,7 @@ def _sensitivity_section(
             f"| {rank} | {r['parameter']} | {r['value']} "
             f"| {_pct(r.get('total_return'), '—')} "
             f"| {_pct(r.get('excess_vs_spy'), '—')} "
-            f"| {_pct(r.get('excess_vs_ewh'), '—')} "
+            f"| {_pct(r.get('excess_vs_equal_weight'), '—')} "
             f"| {_pct(r.get('max_drawdown'), '—')} "
             f"| {pf} |"
         )
@@ -928,24 +976,28 @@ def generate_backtest_report(
         "",
         "## Results Summary",
         "",
-        "| Metric | Strategy | SPY | QQQ | EWH |",
+        "| Metric | Strategy | SPY | QQQ | Equal-Wt Hold |",
         "|--------|----------|-----|-----|-----|",
-        f"| Total Return | {_pct(m.get('total_return'))} | {_pct(m.get('spy_return'))} | {_pct(m.get('qqq_return'))} | {_pct(m.get('ewh_return'))} |",
-        f"| Max Drawdown | {_pct(m.get('max_drawdown'))} | {_pct(m.get('spy_max_drawdown'), '—')} | {_pct(m.get('qqq_max_drawdown'), '—')} | {_pct(m.get('ewh_max_drawdown'), '—')} |",
+        f"| Total Return | {_pct(m.get('total_return'))} | {_pct(m.get('spy_return'))} | {_pct(m.get('qqq_return'))} | {_pct(m.get('equal_weight_return'))} |",
+        f"| Max Drawdown | {_pct(m.get('max_drawdown'))} | {_pct(m.get('spy_max_drawdown'), '—')} | {_pct(m.get('qqq_max_drawdown'), '—')} | {_pct(m.get('equal_weight_max_drawdown'), '—')} |",
         f"| Excess vs SPY | {_pct(m.get('excess_vs_spy'))} | — | — | — |",
         f"| Excess vs QQQ | {_pct(m.get('excess_vs_qqq'))} | — | — | — |",
-        f"| Excess vs EWH | {_pct(m.get('excess_vs_ewh'))} | — | — | — |",
+        f"| Excess vs Equal-Wt | {_pct(m.get('excess_vs_equal_weight'))} | — | — | — |",
     ]
     for _lbl, _k in [("1-Year Return", "1y"), ("2-Year Return", "2y"), ("3-Year Return", "3y")]:
         _sv  = m.get(f"strategy_return_{_k}")
         _spy = m.get(f"spy_return_{_k}")
         _qqq = m.get(f"qqq_return_{_k}")
-        _ewh = m.get(f"ewh_return_{_k}")
-        if any(v is not None for v in [_sv, _spy, _qqq, _ewh]):
+        _eqw = m.get(f"equal_weight_return_{_k}")
+        if any(v is not None for v in [_sv, _spy, _qqq, _eqw]):
             lines.append(
-                f"| {_lbl} | {_pct(_sv, '—')} | {_pct(_spy, '—')} | {_pct(_qqq, '—')} | {_pct(_ewh, '—')} |"
+                f"| {_lbl} | {_pct(_sv, '—')} | {_pct(_spy, '—')} | {_pct(_qqq, '—')} | {_pct(_eqw, '—')} |"
             )
     lines += [
+        "",
+        "_Benchmarks: **SPY** and **QQQ** are buy-and-hold of those ETFs. "
+        "**Equal-Wt Hold** is a synthetic equal-weight buy-and-hold of the strategy's "
+        "own universe (not the unrelated EWH ETF)._",
         "",
         "| Metric | Value |",
         "|--------|-------|",
@@ -1038,7 +1090,7 @@ def generate_backtest_report(
     else:
         sample = pd.concat([equity_df.head(5), equity_df.tail(5)]).drop_duplicates("date")
         lines += [
-            "| Date | Portfolio Value | Daily Ret | Cumulative Ret | SPY Ret | QQQ Ret | EWH Ret |",
+            "| Date | Portfolio Value | Daily Ret | Cumulative Ret | SPY Ret | QQQ Ret | EqWt Ret |",
             "|------|----------------|----------|----------------|---------|---------|---------|",
         ]
         for _, row in sample.iterrows():
@@ -1049,7 +1101,7 @@ def generate_backtest_report(
                 f"| {_pct(row.get('cumulative_return'), '—')} "
                 f"| {_pct(row.get('spy_cumulative_return'), '—')} "
                 f"| {_pct(row.get('qqq_cumulative_return'), '—')} "
-                f"| {_pct(row.get('ewh_cumulative_return'), '—')} |"
+                f"| {_pct(row.get('equal_weight_cumulative_return'), '—')} |"
             )
     lines.append("")
 
@@ -1174,7 +1226,7 @@ def main() -> None:
         trades_df, equity_df, final_positions, config, start_date, end_date
     )
 
-    log.info("Running sensitivity analysis (22 variants)...")
+    log.info("Running one-way sensitivity analysis...")
     sensitivity_results = _run_sensitivity_variants(config, price_data, start_date, end_date)
 
     report = generate_backtest_report(

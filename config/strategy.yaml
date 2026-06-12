@@ -1,13 +1,13 @@
 portfolio:
   starting_value: 100000.0       # paper portfolio starting cash ($)
   max_position_pct: 0.05         # max dollars per position = 5% of portfolio
-  max_total_exposure: 0.30       # max combined long exposure = 30% of portfolio
+  max_total_exposure: 0.75       # max combined long exposure = 30% of portfolio
   max_new_trades_per_day: 1      # reduced from 3; sensitivity showed lower churn helped
 
 risk:
   stop_loss: 0.075               # widened from 5% to 7.5%; best stop-loss sensitivity result
   take_profit: 0.15              # raised from 10% to 15%; improved result versus baseline
-  max_holding_days: 20           # extended from 10; longer holds reduced churn and improved return
+  max_holding_days: 30           # extended from 10; longer holds reduced churn and improved return
   slippage: 0.001                # keep unchanged at 0.10% per fill
 
 signals:
