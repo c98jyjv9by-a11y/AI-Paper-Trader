@@ -20,8 +20,12 @@ python run.py active --train-start … --train-end … --test-start … --test-e
 python run.py screen --train-start … --train-end … --test-start … --test-end …  # factor screen: rank candidate signals by OOS rank-IC
 python run.py suite  --train-start … --train-end … --test-start … --test-end …  # run the whole stack once -> one consolidated summary report
 python run.py scenario davids_model --start … --end …                            # run a named scenario (config/scenarios/<name>.yaml)
-python run.py adaptive --start … --end … [--rebalance-days N --lookback-days N --top-n N]  # per-ticker weekly rotating-signal backtest
+python run.py adaptive --start … --end … [--rebalance-days N --lookback-days N --top-n N]  # per-ticker weekly rotating-signal backtest (auto-writes per-ticker charts; --no-charts to skip)
 ```
+
+`src/scenario_charts.py` renders per-ticker annotated price charts (▲buys/▼sells + reasons, held-period
+shading, active-vs-buy-and-hold) — used standalone (`python src/scenario_charts.py --scenario <name> [--since …]`)
+and auto-invoked by the `adaptive` command (reusing the already-fetched price panel).
 
 Named scenarios live in `config/scenarios/<name>.yaml` (trimmed universe + per-ticker `ticker_groups`
 overrides on the base config); `src/scenarios.py` loads + overlays them and runs a scenario-tagged

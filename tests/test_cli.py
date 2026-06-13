@@ -42,7 +42,8 @@ def captured(monkeypatch):
     monkeypatch.setattr(scenarios, "run_scenario",
                         lambda name, s, e: calls.update(cmd="scenario", name=name, s=s, e=e))
     monkeypatch.setattr(adaptive_backtest, "run",
-                        lambda s, e, rb=None, lb=None, tn=None: calls.update(cmd="adaptive", s=s, e=e, rb=rb, lb=lb, tn=tn))
+                        lambda s, e, rb=None, lb=None, tn=None, charts=True: calls.update(
+                            cmd="adaptive", s=s, e=e, rb=rb, lb=lb, tn=tn, charts=charts))
     monkeypatch.setattr(agent, "main", lambda: calls.update(cmd="agent"))
     return calls
 
@@ -140,6 +141,12 @@ def test_adaptive_dispatch(captured):
               "--rebalance-days", "5", "--top-n", "5"])
     assert captured["cmd"] == "adaptive"
     assert captured["s"] == date(2021, 1, 1) and captured["rb"] == 5 and captured["tn"] == 5
+    assert captured["charts"] is True                 # charts on by default
+
+
+def test_adaptive_no_charts_flag(captured):
+    cli.main(["adaptive", "--start", "2021-01-01", "--end", "2025-12-31", "--no-charts"])
+    assert captured["charts"] is False
 
 
 def test_agent_dispatch(captured):

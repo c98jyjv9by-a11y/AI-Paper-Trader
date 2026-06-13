@@ -135,7 +135,8 @@ def _cmd_scenario(args: argparse.Namespace) -> None:
 def _cmd_adaptive(args: argparse.Namespace) -> None:
     import adaptive_backtest
     s, e = _dates(args)
-    adaptive_backtest.run(s, e, args.rebalance_days, args.lookback_days, args.top_n)
+    adaptive_backtest.run(s, e, args.rebalance_days, args.lookback_days, args.top_n,
+                          charts=not args.no_charts)
 
 
 def _cmd_agent(args: argparse.Namespace) -> None:
@@ -226,6 +227,7 @@ def build_parser() -> argparse.ArgumentParser:
     ad.add_argument("--rebalance-days", type=int, default=None, help="rebalance cadence (default 5)")
     ad.add_argument("--lookback-days", type=int, default=None, help="recent-edge window (default 63)")
     ad.add_argument("--top-n", type=int, default=None, help="max focus tickers (default 5)")
+    ad.add_argument("--no-charts", action="store_true", help="skip the auto per-ticker charts")
     ad.set_defaults(func=_cmd_adaptive)
 
     a = sub.add_parser("agent", help="Run the LIVE daily paper-trading agent (mutates data/)")

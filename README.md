@@ -22,7 +22,7 @@ Everything runs through one front door — `python run.py <command>`:
 | `run.py screen --train-start … --train-end … --test-start … --test-end …` | Factor discovery — rank candidate signals by out-of-sample predictive power (rank-IC); no trading |
 | `run.py suite --train-start … --train-end … --test-start … --test-end …` | **Runs the whole stack once → one consolidated summary report** with the salient takeaway from every stage + an auto verdict |
 | `run.py scenario <name> --start … --end …` | Run a **named scenario** (trimmed universe + per-ticker rules from `config/scenarios/<name>.yaml`), e.g. `davids_model`. `--list` shows available |
-| `run.py adaptive --start … --end … [--rebalance-days N --lookback-days N --top-n N]` | **Adaptive rotating-signal backtest** — weekly, each ticker trades its recently-best signal or sits in cash; reports a signal-rotation log. (High-turnover, overfit-prone — validate OOS.) |
+| `run.py adaptive --start … --end … [--rebalance-days N --lookback-days N --top-n N] [--no-charts]` | **Adaptive rotating-signal backtest** — weekly, each ticker trades its recently-best signal or sits in cash; reports a signal-rotation log and **auto-writes per-ticker annotated price charts** (buy/sell reasons vs buy-and-hold). High-turnover, overfit-prone — validate OOS. |
 
 All share the same signal engine, risk rules, slippage, sizing, and exposure limits from `config/strategy.yaml`. No API keys required. Each command is also runnable directly (e.g. `python src/backtest.py …`); `run.py` just centralises them. Run `python run.py -h` for the full list.
 

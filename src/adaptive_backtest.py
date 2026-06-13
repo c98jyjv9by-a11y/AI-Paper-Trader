@@ -310,7 +310,8 @@ def _pct(v: Optional[float], d: str = "—") -> str:
 
 
 def run(start_date: date, end_date: date, rebalance_days: Optional[int] = None,
-        lookback_days: Optional[int] = None, top_n: Optional[int] = None) -> Dict[str, str]:
+        lookback_days: Optional[int] = None, top_n: Optional[int] = None,
+        charts: bool = True) -> Dict[str, str]:
     setup_logging()
     run_date = date.today()
     root = Path(__file__).parent.parent
@@ -349,6 +350,18 @@ def run(start_date: date, end_date: date, rebalance_days: Optional[int] = None,
     (root / "reports").mkdir(parents=True, exist_ok=True)
     md.write_text(report)
 
+    chart_dir = None
+    if charts and not trades.empty:
+        try:
+            import scenario_charts
+            chart_dir = root / "reports" / f"charts_adaptive_{tag}"
+            n = len(scenario_charts.make_charts(Path(paths["trades"]), chart_dir, "adaptive",
+                                                close=price_data["Close"]))
+            log.info("Wrote %d per-ticker charts to %s", n, chart_dir)
+        except Exception as exc:                       # charts are a nicety; never fail the run
+            log.warning("Chart generation skipped: %s", exc)
+            chart_dir = None
+
     print()
     print(f"  Total Return : {_pct(metrics.get('total_return'))}  (IRR {_pct(metrics.get('irr'))})")
     print(f"  Equal-Wt Hold: {_pct(metrics.get('equal_weight_return'))}   "
@@ -356,9 +369,14 @@ def run(start_date: date, end_date: date, rebalance_days: Optional[int] = None,
     print(f"  Max Drawdown : {_pct(metrics.get('max_drawdown'))}  |  trades: {metrics.get('n_trades', 0)}")
     print()
     print(f"  Report : {md}")
+    if chart_dir is not None:
+        print(f"  Charts : {chart_dir}  (per-ticker price + buy/sell reasons vs hold)")
     print("  NOTE: weekly rotation is overfit-prone — re-run on a disjoint window before trusting.")
     print()
-    return {"report": str(md)}
+    out = {"report": str(md)}
+    if chart_dir is not None:
+        out["charts"] = str(chart_dir)
+    return out
 
 
 def main() -> None:
@@ -368,6 +386,7 @@ def main() -> None:
     ap.add_argument("--rebalance-days", type=int, default=None)
     ap.add_argument("--lookback-days", type=int, default=None)
     ap.add_argument("--top-n", type=int, default=None)
+    ap.add_argument("--no-charts", action="store_true", help="skip per-ticker annotated charts")
     args = ap.parse_args()
     try:
         s, e = date.fromisoformat(args.start), date.fromisoformat(args.end)
@@ -377,7 +396,7 @@ def main() -> None:
     if e <= s:
         print("Error: --end must be after --start")
         sys.exit(1)
-    run(s, e, args.rebalance_days, args.lookback_days, args.top_n)
+    run(s, e, args.rebalance_days, args.lookback_days, args.top_n, charts=not args.no_charts)
 
 
 if __name__ == "__main__":
