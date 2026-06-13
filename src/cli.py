@@ -62,7 +62,7 @@ def _cmd_ticker_experiments(args: argparse.Namespace) -> None:
 def _cmd_calibrate(args: argparse.Namespace) -> None:
     import signal_calibration
     s, e = _dates(args)
-    signal_calibration.run(s, e)
+    signal_calibration.run(s, e, objective=args.objective)
 
 
 def _cmd_evaluate(args: argparse.Namespace) -> None:
@@ -111,6 +111,9 @@ def build_parser() -> argparse.ArgumentParser:
     c = sub.add_parser("calibrate",
                        help="Per-ticker single-name timing vs buy-and-hold (walk-forward)")
     _add_dates(c)
+    c.add_argument("--objective", default="total_return",
+                   choices=("total_return", "sharpe", "calmar"),
+                   help="What the train-window grid search maximises (default: total_return)")
     c.set_defaults(func=_cmd_calibrate)
 
     ev = sub.add_parser("evaluate",

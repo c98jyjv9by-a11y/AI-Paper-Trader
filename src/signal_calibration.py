@@ -157,6 +157,21 @@ def _hold_return(close: np.ndarray, a: int, b: int) -> float:
 # ─── Walk-forward per ticker ──────────────────────────────────────────────────
 
 
+OBJECTIVES = ("total_return", "sharpe", "calmar")
+
+
+def _objective_value(res: Dict[str, float], objective: str) -> float:
+    """Score a single train-window simulation by the chosen calibration objective."""
+    daily = res["daily_returns"]
+    if objective == "sharpe":
+        v = _sharpe(daily)
+        return v if v is not None else -np.inf
+    if objective == "calmar":
+        v = _calmar(res["total_return"], len(daily) + 1, _max_drawdown(daily))
+        return v if v is not None else -np.inf
+    return res["total_return"]
+
+
 def _build_folds(first: int, last: int) -> List[Tuple[int, int, int, int]]:
     """(train_a, train_b, test_a, test_b) folds within [first, last]."""
     folds = []
@@ -173,10 +188,12 @@ def _build_folds(first: int, last: int) -> List[Tuple[int, int, int, int]]:
 
 
 def walk_forward_ticker(close: np.ndarray, sma: Dict[int, np.ndarray],
-                        first_valid: int, last: int, slippage: float) -> Optional[Dict[str, Any]]:
+                        first_valid: int, last: int, slippage: float,
+                        objective: str = "total_return") -> Optional[Dict[str, Any]]:
     """
-    Calibrate the rule on each train window, apply to the next (OOS) test window,
-    and compound the OOS test returns. Compare to buy-and-hold over the same OOS span.
+    Calibrate the rule on each train window (maximising `objective`), apply to the
+    next (OOS) test window, and compound the OOS test returns. Compare to
+    buy-and-hold over the same OOS span. objective ∈ OBJECTIVES.
     """
     grid = [(f, s, t) for f, s, t in product(FAST_WINDOWS, SLOW_WINDOWS, TRAILING_STOPS)]
     # need slow-window warmup before the first decision
@@ -192,12 +209,13 @@ def walk_forward_ticker(close: np.ndarray, sma: Dict[int, np.ndarray],
     oos_daily_parts: List[np.ndarray] = []
 
     for (tr_a, tr_b, te_a, te_b) in folds:
-        # grid search on TRAIN only
-        best, best_ret = None, -np.inf
+        # grid search on TRAIN only, maximising the chosen objective
+        best, best_score = None, -np.inf
         for (f, s, ts) in grid:
-            r = _simulate(close, tr_a, tr_b, sma, f, s, ts, slippage)["total_return"]
-            if r > best_ret:
-                best, best_ret = (f, s, ts), r
+            r = _simulate(close, tr_a, tr_b, sma, f, s, ts, slippage)
+            score = _objective_value(r, objective)
+            if score > best_score:
+                best, best_score = (f, s, ts), score
         # apply best params to TEST (out-of-sample)
         res = _simulate(close, te_a, te_b, sma, best[0], best[1], best[2], slippage)
         chosen.append(best)
@@ -254,7 +272,8 @@ def walk_forward_ticker(close: np.ndarray, sma: Dict[int, np.ndarray],
 
 
 def calibrate_universe(price_data: pd.DataFrame, tickers: List[str],
-                       start_date: date, end_date: date, slippage: float) -> List[Dict[str, Any]]:
+                       start_date: date, end_date: date, slippage: float,
+                       objective: str = "total_return") -> List[Dict[str, Any]]:
     close_panel = price_data["Close"]
     all_ts = close_panel.index
     # restrict decisions to the requested [start, end] window
@@ -277,7 +296,7 @@ def calibrate_universe(price_data: pd.DataFrame, tickers: List[str],
         if valid.size == 0:
             continue
         first_valid = max(win_first, int(valid[0]))
-        res = walk_forward_ticker(close, sma, first_valid, win_last, slippage)
+        res = walk_forward_ticker(close, sma, first_valid, win_last, slippage, objective)
         if res is None:
             log.info("%s: not enough history for walk-forward — skipped", ticker)
             continue
@@ -360,7 +379,7 @@ def _num(v: Optional[float], d: str = "—") -> str:
 
 
 def render_report(results: List[Dict[str, Any]], run_date: date,
-                  start_date: date, end_date: date) -> str:
+                  start_date: date, end_date: date, objective: str = "total_return") -> str:
     valid = [r for r in results if r.get("outperformance") is not None]
     n = len(valid)
     n_beat = sum(1 for r in valid if r["outperformance"] > 0)
@@ -370,10 +389,10 @@ def render_report(results: List[Dict[str, Any]], run_date: date,
         "# Per-Ticker Signal Calibration — Timing vs Buy-and-Hold",
         f"**Period:** {start_date} → {end_date}  |  **Generated:** {run_date.isoformat()}",
         "",
-        "> **Out-of-sample, walk-forward.** Each ticker's rule is calibrated on a 252-day "
-        "train window and reported ONLY on the following 63-day test window, stepped quarterly. "
-        "Headline metric: timed total return vs buy-and-hold of the same ticker over the same "
-        "out-of-sample span.",
+        f"> **Out-of-sample, walk-forward.** Calibration objective: **{objective}** (the rule chosen "
+        "on each 252-day train window maximises this), reported ONLY on the following 63-day test "
+        "window, stepped quarterly. Comparison is timed vs buy-and-hold of the same ticker over the "
+        "same out-of-sample span.",
         "",
         "---",
         "",
@@ -614,10 +633,12 @@ def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="AI Paper Trader — Per-Ticker Signal Calibration")
     p.add_argument("--start", required=True, metavar="YYYY-MM-DD")
     p.add_argument("--end", required=True, metavar="YYYY-MM-DD")
+    p.add_argument("--objective", default="total_return", choices=OBJECTIVES,
+                   help="What the train-window grid search maximises (default: total_return)")
     return p.parse_args()
 
 
-def run(start_date: date, end_date: date) -> Dict[str, str]:
+def run(start_date: date, end_date: date, objective: str = "total_return") -> Dict[str, str]:
     """Calibrate per-ticker timing rules walk-forward and write outputs."""
     setup_logging()
     run_date = date.today()
@@ -625,10 +646,10 @@ def run(start_date: date, end_date: date) -> Dict[str, str]:
     config = load_config(root / "config")
     slippage = config["risk"].get("slippage", 0.001)
 
-    log.info("=== Per-Ticker Signal Calibration (walk-forward) ===")
+    log.info("=== Per-Ticker Signal Calibration (walk-forward, objective=%s) ===", objective)
     price_data = fetch_backtest_data(config["tickers"], start_date, end_date)
-    results = calibrate_universe(price_data, config["tickers"], start_date, end_date, slippage)
-    report = render_report(results, run_date, start_date, end_date)
+    results = calibrate_universe(price_data, config["tickers"], start_date, end_date, slippage, objective)
+    report = render_report(results, run_date, start_date, end_date, objective)
     csv_df = results_csv(results)
     paths = save_outputs(report, csv_df, root / "reports", root / "backtests", run_date)
     # Data-derived per-ticker criteria config (dated; never overwrites the seed).
@@ -639,6 +660,7 @@ def run(start_date: date, end_date: date) -> Dict[str, str]:
     valid = [r for r in results if r.get("outperformance") is not None]
     n_beat = sum(1 for r in valid if r["outperformance"] > 0)
     n_cand = sum(1 for r in valid if r.get("beats_exposure_matched") and (r.get("param_stability") or 0) >= 0.5)
+    print(f"  Objective          : {objective}")
     print(f"  Tickers calibrated : {len(valid)}")
     print(f"  Beat buy-and-hold  : {n_beat}/{len(valid)} (out-of-sample)")
     print(f"  Candidate criteria : {n_cand}/{len(valid)} (beat exp-matched + stable params)")
@@ -704,7 +726,7 @@ def main() -> None:
     if end_date <= start_date:
         print("Error: --end must be after --start")
         sys.exit(1)
-    run(start_date, end_date)
+    run(start_date, end_date, args.objective)
 
 
 if __name__ == "__main__":

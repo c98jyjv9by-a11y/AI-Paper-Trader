@@ -24,7 +24,8 @@ def captured(monkeypatch):
     monkeypatch.setattr(backtest, "run", lambda s, e, o=None: calls.update(cmd="backtest", s=s, e=e, o=o))
     monkeypatch.setattr(experiments, "run", lambda s, e, o=None: calls.update(cmd="experiments", s=s, e=e, o=o))
     monkeypatch.setattr(ticker_experiments, "run", lambda s, e: calls.update(cmd="ticker", s=s, e=e))
-    monkeypatch.setattr(signal_calibration, "run", lambda s, e: calls.update(cmd="calibrate", s=s, e=e))
+    monkeypatch.setattr(signal_calibration, "run",
+                        lambda s, e, objective="total_return": calls.update(cmd="calibrate", s=s, e=e, objective=objective))
     monkeypatch.setattr(signal_calibration, "run_evaluate",
                         lambda s, e, c: calls.update(cmd="evaluate", s=s, e=e, crit=c))
     monkeypatch.setattr(agent, "main", lambda: calls.update(cmd="agent"))
@@ -56,6 +57,16 @@ def test_ticker_experiments_dispatch(captured):
 def test_calibrate_dispatch(captured):
     cli.main(["calibrate", "--start", "2024-01-01", "--end", "2024-12-31"])
     assert captured["cmd"] == "calibrate"
+
+
+def test_calibrate_objective_dispatch(captured):
+    cli.main(["calibrate", "--start", "2024-01-01", "--end", "2024-12-31", "--objective", "sharpe"])
+    assert captured["cmd"] == "calibrate" and captured["objective"] == "sharpe"
+
+
+def test_calibrate_default_objective(captured):
+    cli.main(["calibrate", "--start", "2024-01-01", "--end", "2024-12-31"])
+    assert captured["objective"] == "total_return"
 
 
 def test_evaluate_dispatch_default_criteria(captured):

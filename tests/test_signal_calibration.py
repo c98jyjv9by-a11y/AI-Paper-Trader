@@ -152,6 +152,29 @@ class TestCriteriaExport:
             assert trailing is None or 0 < trailing < 1
 
 
+class TestCalibrationObjective:
+    def test_objective_value_picks_metric(self):
+        # a simulation with known daily returns
+        res = {"total_return": 0.20, "daily_returns": np.array([0.01, -0.005, 0.02, 0.0, 0.015])}
+        assert sc._objective_value(res, "total_return") == 0.20
+        assert sc._objective_value(res, "sharpe") == pytest.approx(sc._sharpe(res["daily_returns"]))
+        # calmar uses annualized/maxdd
+        cal = sc._objective_value(res, "calmar")
+        assert cal == pytest.approx(sc._calmar(0.20, 6, sc._max_drawdown(res["daily_returns"])))
+
+    def test_walk_forward_accepts_objective(self):
+        n = sc.TRAIN_BARS + 4 * sc.TEST_BARS + 120
+        rng = np.random.default_rng(2)
+        close = 100 * np.cumprod(1 + rng.normal(0.0008, 0.013, n))
+        s = pd.Series(close)
+        smas = {w: s.rolling(w).mean().to_numpy() for w in sc._ALL_WINDOWS}
+        r_tr = sc.walk_forward_ticker(close, smas, 0, n - 1, 0.001, objective="total_return")
+        r_sh = sc.walk_forward_ticker(close, smas, 0, n - 1, 0.001, objective="sharpe")
+        assert r_tr is not None and r_sh is not None
+        # both produce valid OOS results; selection may differ but structure is identical
+        assert set(r_tr) == set(r_sh)
+
+
 class TestEvaluateCriteria:
     def test_evaluate_applies_fixed_rule(self):
         n = 400
