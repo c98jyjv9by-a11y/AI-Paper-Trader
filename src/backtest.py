@@ -511,7 +511,10 @@ def run_backtest(
     min_score = config.get("signals", {}).get("min_composite_score")
     # Optional entry gates (default off — baseline behaviour unchanged):
     regime_ma = config.get("entry_filters", {}).get("qqq_above_ma")     # int N or None
+    price_above_ma = config.get("entry_filters", {}).get("price_above_ma")   # per-name trend gate
+    near_high_pct = config.get("entry_filters", {}).get("near_52w_high")     # per-name strength gate
     cooldown_days = config.get("risk", {}).get("stop_cooldown_days")    # int N or None
+    reclaim_ma = config.get("risk", {}).get("reentry_reclaim_ma")       # require price>SMA(N) to re-enter after a stop
 
     ticker_overrides = _build_ticker_overrides(config)   # per-ticker exit/sizing
     ticker_weights = _build_ticker_weights(config) or None  # per-group signal weights
@@ -520,6 +523,13 @@ def run_backtest(
     all_timestamps = close.index.tolist()
     qqq_arr = close["QQQ"].to_numpy() if "QQQ" in close.columns else None
     stop_cooldown: Dict[str, int] = {}   # ticker -> bar_idx of its last stop-loss exit
+    awaiting_reclaim: set = set()         # tickers stopped out, awaiting MA reclaim before re-entry
+
+    # Precompute per-name trend features for the entry gates (vectorized, no look-ahead:
+    # rolling windows only use bars ≤ each row). Computed once on the full close panel.
+    sma_gate = close.rolling(int(price_above_ma)).mean() if price_above_ma else None
+    sma_reclaim = close.rolling(int(reclaim_ma)).mean() if reclaim_ma else None
+    high_252 = close.rolling(252).max() if near_high_pct else None
 
     sim_timestamps = [
         ts for ts in all_timestamps
@@ -612,8 +622,11 @@ def run_backtest(
             cash += e["trade_value"]
             realized_pnl += e["realized_pnl"]
             all_trades.append(e)
-            if cooldown_days and "stop_loss" in str(e["reason"]):
-                stop_cooldown[e["ticker"]] = bar_idx
+            if "stop_loss" in str(e["reason"]):
+                if cooldown_days:
+                    stop_cooldown[e["ticker"]] = bar_idx
+                if reclaim_ma:
+                    awaiting_reclaim.add(e["ticker"])    # blocked until price reclaims its MA
 
         # ── 4. Portfolio value snapshot ───────────────────────────────────────
         equity = (
@@ -641,6 +654,29 @@ def run_backtest(
                             lambda t: (bar_idx - stop_cooldown.get(t, -10**9)) >= cooldown_days
                         )
                     ].reset_index(drop=True)
+                # Reclaim gate: a stopped-out name re-clears `awaiting_reclaim` only once its
+                # price is back above its reclaim-MA — then it's eligible to re-enter again.
+                if reclaim_ma and sma_reclaim is not None and awaiting_reclaim:
+                    for tk in list(awaiting_reclaim):
+                        if tk in close.columns:
+                            px = close[tk].iloc[bar_idx]
+                            ma = sma_reclaim[tk].iloc[bar_idx]
+                            if not pd.isna(px) and not pd.isna(ma) and px > ma:
+                                awaiting_reclaim.discard(tk)
+                    if not ranked.empty:
+                        ranked = ranked[~ranked["ticker"].isin(awaiting_reclaim)].reset_index(drop=True)
+                # Per-name trend gate: price above its own N-day MA at the decision bar.
+                if price_above_ma and sma_gate is not None and not ranked.empty:
+                    ranked = ranked[ranked["ticker"].map(
+                        lambda t: t in close.columns and not pd.isna(sma_gate[t].iloc[bar_idx])
+                        and close[t].iloc[bar_idx] > sma_gate[t].iloc[bar_idx]
+                    )].reset_index(drop=True)
+                # Per-name strength gate: price within near_high_pct of its 252-day high.
+                if near_high_pct and high_252 is not None and not ranked.empty:
+                    ranked = ranked[ranked["ticker"].map(
+                        lambda t: t in close.columns and not pd.isna(high_252[t].iloc[bar_idx])
+                        and close[t].iloc[bar_idx] >= near_high_pct * high_252[t].iloc[bar_idx]
+                    )].reset_index(drop=True)
                 # Regime gate: only enter while QQQ is above its N-day moving average.
                 regime_ok = True
                 if regime_ma and qqq_arr is not None and bar_idx >= regime_ma:

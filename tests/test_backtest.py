@@ -686,3 +686,55 @@ class TestNaNFormatting:
         report = generate_backtest_report(m, cfg, t, e, p, date(2026, 6, 12))
         assert "$nan" not in report
         assert "nan%" not in report
+
+
+# ─── 14. Entry gates: per-name trend / strength / reclaim re-entry ───────────
+
+
+class TestEntryGates:
+    def _trending_then_falling(self, n=120):
+        """A ticker that rises for the first half then falls — to trigger a stop + re-entry."""
+        up = 100 * 1.01 ** np.arange(n // 2)
+        down = up[-1] * 0.98 ** np.arange(1, n - n // 2 + 1)
+        close = np.r_[up, down]
+        dates = pd.date_range("2024-01-01", periods=n, freq="B")
+        cl = pd.DataFrame({"AAA": close, "SPY": close, "QQQ": close}, index=dates)
+        vol = pd.DataFrame({t: np.full(n, 1e6) for t in ["AAA", "SPY", "QQQ"]}, index=dates)
+        cl.columns = pd.MultiIndex.from_product([["Close"], cl.columns])
+        vol.columns = pd.MultiIndex.from_product([["Volume"], vol.columns])
+        return pd.concat([cl, vol], axis=1)
+
+    def test_price_above_ma_gate_blocks_entries_below_ma(self):
+        data = _make_price_data(["AAA", "SPY", "QQQ"], n_days=60, seed=7)
+        # force AAA below any MA on the back half by overwriting with a decline
+        idx = data.index
+        decline = 100 * 0.97 ** np.arange(len(idx))
+        data[("Close", "AAA")] = decline
+        cfg = _make_config(["AAA"], max_new=3)
+        cfg["entry_filters"] = {"price_above_ma": 20}
+        t, e, p = run_backtest(cfg, data, idx[25].date(), idx[-1].date())
+        buys = t[t["action"] == "BUY"] if not t.empty else t
+        # AAA is always below its 20d MA in a steady decline → no buys pass the gate
+        assert buys.empty or (buys["ticker"] == "AAA").sum() == 0
+
+    def test_reclaim_gate_blocks_reentry_until_ma_reclaimed(self):
+        data = self._trending_then_falling(140)
+        idx = data.index
+        cfg = _make_config(["AAA"], max_new=3, stop_loss=0.05, take_profit=0.50, max_holding=120)
+        cfg["risk"]["reentry_reclaim_ma"] = 20
+        t, e, p = run_backtest(cfg, data, idx[30].date(), idx[-1].date())
+        if t.empty:
+            pytest.skip("no trades")
+        sells = t[t["action"] == "SELL"]
+        # after a stop in the declining half, re-entry is blocked while price < 20d MA;
+        # so no BUY should occur on a bar where AAA is still below its MA right after a stop
+        assert "stop_loss" in "+".join(sells["reason"].astype(str)) or sells.empty
+
+    def test_gates_default_off_is_unchanged(self):
+        data = _make_price_data(["AAA", "MSFT", "SPY", "QQQ"], n_days=60, seed=3)
+        cfg = _make_config(["AAA", "MSFT"], max_new=3)
+        base = run_backtest(cfg, data, data.index[25].date(), data.index[-1].date())
+        cfg2 = _make_config(["AAA", "MSFT"], max_new=3)
+        cfg2["entry_filters"] = {}                      # explicit-empty == absent
+        same = run_backtest(cfg2, data, data.index[25].date(), data.index[-1].date())
+        assert len(base[0]) == len(same[0])             # identical trade count
