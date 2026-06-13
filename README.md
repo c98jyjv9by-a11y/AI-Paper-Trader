@@ -24,6 +24,23 @@ All share the same signal engine, risk rules, slippage, sizing, and exposure lim
 
 ---
 
+## Research goals & workflow
+
+Beyond the daily agent, this repo is a research harness built around one question:
+
+> **Does an active signal/exit strategy actually beat simply buying and holding the same names — on a fair, exposure-adjusted, out-of-sample basis?**
+
+Everything is labelled **in-sample** until validated out-of-sample, and the tools refuse to crown a "best" parameter set without that validation. The honest progression:
+
+1. **Understand** — `backtest` runs the strategy and emits diagnostics: signal predictiveness (does composite ranking sort winners from losers?), entry-vs-exit attribution, P&L attribution, turnover, and benchmark capture. `sensitivity` shows whether results are robust or a single lucky cell.
+2. **Compare** — `experiments` and `ticker-experiments` test signal/exit variants and grouped ticker-aware assumptions against SPY, QQQ, equal-weight buy-and-hold, and the **capital-matched** equal-weight benchmark (own the same names at the strategy's own average exposure — the fair test).
+3. **Determine per-ticker criteria** — `calibrate` walk-forward-fits a small per-ticker timing rule and writes a dated `config/ticker_timing_criteria_<date>.yaml` (flagging `candidate: true` only when a ticker beat its exposure-matched hold with stable parameters). `evaluate` then applies a fixed criteria file (seed or calibrated) over a **held-out** window with no re-fitting.
+4. **Stress-test the whole idea** — `active` grid-searches a fixed per-ticker rule set, gates each ticker through an explicit eligibility test, builds a portfolio of only eligible tickers, and validates on a disjoint **train/test** split.
+
+The recurring finding so far (on this universe/period): the momentum/timing signal does **not** show durable per-ticker alpha — most edge that appears in-sample is exposure timing or grid-search luck, and trend-timing mostly reduces drawdown at a cost to return in a bull market. The tooling is designed to surface exactly that, rather than hide it.
+
+---
+
 ## Quickstart
 
 ```bash
@@ -46,6 +63,9 @@ python run.py backtest           --start 2024-01-01 --end 2024-12-31
 python run.py experiments        --start 2024-01-01 --end 2024-12-31
 python run.py ticker-experiments --start 2024-01-01 --end 2024-12-31
 python run.py calibrate          --start 2024-01-01 --end 2024-12-31
+python run.py evaluate           --start 2025-01-01 --end 2026-06-12   # apply a fixed criteria file
+python run.py active --train-start 2021-06-12 --train-end 2024-06-12 \
+                     --test-start  2024-06-12 --test-end  2026-06-12   # active-vs-BH, OOS
 ```
 
 **Run the tests:**
@@ -58,33 +78,36 @@ pytest
 
 ## Strategy
 
-Long-only momentum. The signal engine ranks every ticker in the universe by a composite score:
+Long-only momentum. The signal engine ranks every ticker in the universe by a composite score; each signal is converted to a 0–1 percentile rank before weighting, and the top-ranked candidates are selected subject to all risk controls. Weights are configurable in `config/strategy.yaml` — current defaults:
 
 | Signal | Weight |
 |--------|--------|
-| 1-day return | 20% |
-| 5-day return | 30% |
+| 1-day return | 10% |
+| 5-day return | 25% |
 | 20-day return | 30% |
-| Volume vs. 20-day average | 20% |
+| Volume vs. 20-day average | 35% |
 
-Each signal is converted to a 0–1 percentile rank before weighting. The top-ranked candidates are selected subject to all risk controls.
+Also computed and available as alternative weight inputs: `realized_vol_20d` and `vol_adj_mom_20d` (return-per-unit-of-risk). Weights can be set per behaviour group (see the experiment tools below).
 
 ---
 
 ## Risk controls
 
-All parameters live in `config/strategy.yaml` and are used identically by both the daily agent and the backtester.
+All parameters live in `config/strategy.yaml` and are used identically by the daily agent and every backtest tool. Current defaults:
 
 | Parameter | Default |
 |-----------|---------|
 | Starting portfolio | $100,000 |
-| Max single position | 5% of portfolio |
-| Max total long exposure | 30% of portfolio |
-| Max new trades per day | 3 |
-| Stop loss | −5% from entry |
-| Take profit | +10% from entry |
-| Max holding period | ~10 trading days |
+| Max single position | `auto` (= max exposure ÷ #tickers; or a fixed fraction) |
+| Max total long exposure | 75% of portfolio |
+| Max new trades per day | 2 |
+| Stop loss | −7.5% from entry |
+| Take profit | +10% from entry (`null` to disable) |
+| Trailing stop | off by default (set `risk.trailing_stop`) |
+| Max holding period | ~30 trading days |
 | Slippage | 0.10% per fill |
+
+Optional, default-off knobs: `entry_filters.qqq_above_ma` (regime filter), `risk.stop_cooldown_days` (no re-entry after a stop), `portfolio.sizing_mode: score_weighted`, and per-group overrides under `ticker_groups`.
 
 ---
 
@@ -92,32 +115,33 @@ All parameters live in `config/strategy.yaml` and are used identically by both t
 
 ```text
 ai-paper-trader/
+├── run.py                     # unified entry point → src/cli.py
 ├── config/
-│   ├── universe.yaml          # 25-ticker universe (ETFs + large-caps)
-│   └── strategy.yaml          # all risk and signal parameters
-├── data/
-│   ├── trade_log.csv          # append-only audit log (live agent)
-│   ├── positions.csv          # open paper positions (live agent)
-│   └── portfolio_state.json   # cash balance (live agent)
-├── reports/
-│   └── report_YYYY-MM-DD.md   # daily paper-trading reports
-├── backtests/
-│   ├── backtest_report_YYYY-MM-DD.md
-│   ├── backtest_trades_YYYY-MM-DD.csv
-│   └── backtest_equity_curve_YYYY-MM-DD.csv
+│   ├── universe.yaml          # 25-ticker universe (large-caps + semis)
+│   ├── strategy.yaml          # all risk/signal params, ticker_groups, entry filters
+│   └── ticker_timing_criteria.yaml   # seed per-ticker timing rules (see calibrate/evaluate)
+├── data/                      # LIVE paper state — only the daily agent writes here
+│   ├── trade_log.csv          # append-only audit log
+│   ├── positions.csv          # open paper positions
+│   └── portfolio_state.json   # cash balance
+├── reports/                   # human-readable Markdown reports (per tool, dated)
+├── backtests/                 # CSV outputs from every backtest/research tool (dated)
 ├── src/
+│   ├── cli.py                 # subcommand dispatcher (backtest/experiments/…/active/agent)
 │   ├── main.py                # daily paper-trading agent
-│   ├── backtest.py            # walk-forward backtesting engine
 │   ├── market_data.py         # yfinance wrapper
-│   ├── signals.py             # momentum signal calculation and ranking
-│   ├── risk.py                # pure functions: sizing, slippage, exit triggers
-│   ├── portfolio.py           # state I/O, exit evaluation, entry generation
-│   ├── report.py              # Markdown report builder (daily agent)
-│   └── logger.py              # logging setup and trade log appender
-├── tests/
-│   ├── test_risk.py           # 29 tests for risk.py
-│   ├── test_signals.py        # 15 tests for signals.py
-│   └── test_backtest.py       # 24 tests for backtest.py
+│   ├── signals.py             # momentum signals + (per-group) composite ranking
+│   ├── risk.py                # pure functions: sizing, slippage, exit triggers (stop/TP/trail)
+│   ├── portfolio.py           # live state I/O, exit evaluation, entry generation
+│   ├── report.py              # daily-agent Markdown report
+│   ├── logger.py              # logging setup + trade-log appender
+│   ├── backtest.py            # walk-forward engine + per-ticker overrides + sensitivity
+│   ├── diagnostics.py         # signal predictiveness, P&L attribution, turnover, capture
+│   ├── experiments.py         # strategy-variant profiles vs benchmarks
+│   ├── ticker_experiments.py  # grouped ticker assumptions vs capital-matched buy-and-hold
+│   ├── signal_calibration.py  # per-ticker single-name timing (walk-forward) + evaluate
+│   └── active_experiment.py   # ticker active-vs-BH grid + eligible-ticker portfolio (OOS)
+├── tests/                     # 177 tests, no network calls (one file per module)
 ├── requirements.txt
 ├── .env.example
 └── CLAUDE.md
@@ -130,11 +154,11 @@ ai-paper-trader/
 Each run:
 
 1. Loads `config/universe.yaml` and `config/strategy.yaml`
-2. Fetches 60 days of OHLCV data via yfinance
+2. Fetches recent OHLCV data via yfinance (`data.period`, default 90 days)
 3. Calculates momentum signals and ranks all tickers
 4. Loads `data/positions.csv` and refreshes current prices
-5. Checks every open position for stop-loss, take-profit, or max-holding-period exits
-6. Recommends up to 3 new entries from the top-ranked candidates
+5. Checks every open position for stop-loss, take-profit, trailing-stop, or max-holding exits
+6. Recommends new entries (up to `max_new_trades_per_day`) from the top-ranked candidates
 7. Saves updated `data/positions.csv` and `data/portfolio_state.json`
 8. Appends all recommendations to `data/trade_log.csv`
 9. Writes `reports/report_YYYY-MM-DD.md`
@@ -208,33 +232,40 @@ tickers:
 ```yaml
 portfolio:
   starting_value: 100000.0
-  max_position_pct: 0.05
-  max_total_exposure: 0.30
-  max_new_trades_per_day: 3
+  max_position_pct: auto          # or a fixed fraction, e.g. 0.05
+  max_total_exposure: 0.75
+  max_new_trades_per_day: 2
 
 risk:
-  stop_loss: 0.05
-  take_profit: 0.10
-  max_holding_days: 10
+  stop_loss: 0.075
+  take_profit: 0.10               # null disables take-profit
+  max_holding_days: 30
   slippage: 0.001
+  # trailing_stop: 0.15           # optional
+  # stop_cooldown_days: 5         # optional: no re-entry after a stop
 
 signals:
   top_candidates: 10
+  min_composite_score: 0.70       # null to disable the quality filter
+  weights: { return_1d: 0.10, return_5d: 0.25, return_20d: 0.30, vol_ratio: 0.35 }
+
+# ticker_groups: { … }            # optional per-group exits / sizing / signal_weights
+# entry_filters: { qqq_above_ma: 50 }   # optional regime filter
 ```
 
-Changes to `strategy.yaml` take effect on the next run of either command.
+Changes take effect on the next run of any command.
 
 ---
 
 ## Tests
 
-68 tests, no network calls:
+177 tests, no network calls (all use synthetic data):
 
 ```bash
 pytest tests/ -v
 ```
 
-Coverage: position sizing, slippage, exposure caps, stop-loss/take-profit/holding-period triggers, signal calculation, candidate ranking, no-look-ahead bias, cash mechanics, equity curve invariants, benchmark comparison.
+Coverage: position sizing, slippage, exposure caps, stop-loss/take-profit/trailing-stop/holding-period triggers, per-ticker overrides and per-group signal weights, signal calculation and ranking, no-look-ahead bias, cash and equity-curve invariants, benchmark/capital-matched comparison, diagnostics (MFE/MAE/giveback, predictiveness, capture), walk-forward calibration and the evaluate/active out-of-sample machinery, and the CLI dispatcher.
 
 ---
 
