@@ -515,7 +515,7 @@ def run_backtest(
     near_high_pct = config.get("entry_filters", {}).get("near_52w_high")     # per-name strength gate
     cooldown_days = config.get("risk", {}).get("stop_cooldown_days")    # int N or None
     reclaim_ma = config.get("risk", {}).get("reentry_reclaim_ma")       # require price>SMA(N) to re-enter after a stop
-    recover_pct = config.get("risk", {}).get("reentry_recover_pct")     # require price up this % above the stop sale price to re-enter
+    recover_pct = config.get("risk", {}).get("reentry_recover_pct")     # require price up this % above its LOWEST price since the stop, to re-enter
 
     ticker_overrides = _build_ticker_overrides(config)   # per-ticker exit/sizing
     ticker_weights = _build_ticker_weights(config) or None  # per-group signal weights
@@ -525,7 +525,7 @@ def run_backtest(
     qqq_arr = close["QQQ"].to_numpy() if "QQQ" in close.columns else None
     stop_cooldown: Dict[str, int] = {}   # ticker -> bar_idx of its last stop-loss exit
     awaiting_reclaim: set = set()         # tickers stopped out, awaiting MA reclaim before re-entry
-    stop_recover_price: Dict[str, float] = {}   # ticker -> stop sale price; re-entry blocked until +recover_pct above it
+    stop_recover_low: Dict[str, float] = {}   # ticker -> lowest price since its stop; re-entry blocked until +recover_pct above this trough
 
     # Precompute per-name trend features for the entry gates (vectorized, no look-ahead:
     # rolling windows only use bars ≤ each row). Computed once on the full close panel.
@@ -630,7 +630,7 @@ def run_backtest(
                 if reclaim_ma:
                     awaiting_reclaim.add(e["ticker"])    # blocked until price reclaims its MA
                 if recover_pct:
-                    stop_recover_price[e["ticker"]] = float(e["price"])   # blocked until +recover_pct above this
+                    stop_recover_low[e["ticker"]] = float(e["price"])   # seed trough at the stop sale price
 
         # ── 4. Portfolio value snapshot ───────────────────────────────────────
         equity = (
@@ -669,16 +669,21 @@ def run_backtest(
                                 awaiting_reclaim.discard(tk)
                     if not ranked.empty:
                         ranked = ranked[~ranked["ticker"].isin(awaiting_reclaim)].reset_index(drop=True)
-                # Stop-recovery gate: a stopped-out name can't be re-bought until its price
-                # has recovered `recover_pct` above the price it was stopped out at.
-                if recover_pct and stop_recover_price:
-                    for tk in list(stop_recover_price):
+                # Stop-recovery gate (anti falling-knife): after a stop, track the name's
+                # running LOW; it stays blocked from re-entry until price bounces recover_pct
+                # above that trough. This only *unblocks* — the ranker must still pick it.
+                if recover_pct and stop_recover_low:
+                    for tk in list(stop_recover_low):
                         if tk in close.columns:
                             px = close[tk].iloc[bar_idx]
-                            if not pd.isna(px) and px >= stop_recover_price[tk] * (1 + recover_pct):
-                                stop_recover_price.pop(tk, None)     # recovered → re-entry allowed
+                            if pd.isna(px):
+                                continue
+                            if px < stop_recover_low[tk]:
+                                stop_recover_low[tk] = float(px)            # new low since the stop
+                            elif px >= stop_recover_low[tk] * (1 + recover_pct):
+                                stop_recover_low.pop(tk, None)              # bounced off the low → unblocked
                     if not ranked.empty:
-                        ranked = ranked[~ranked["ticker"].isin(stop_recover_price)].reset_index(drop=True)
+                        ranked = ranked[~ranked["ticker"].isin(stop_recover_low)].reset_index(drop=True)
                 # Per-name trend gate: price above its own N-day MA at the decision bar.
                 if price_above_ma and sma_gate is not None and not ranked.empty:
                     ranked = ranked[ranked["ticker"].map(

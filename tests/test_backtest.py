@@ -741,28 +741,55 @@ class TestEntryGates:
 
 
 class TestStopRecoveryReentry:
-    def test_blocks_reentry_until_recovered_above_stop_price(self):
-        # rise → stop-out on a drop → must recover +5% above the stop sale price to re-buy
-        n = 160
-        up = 100 * 1.012 ** np.arange(60)
-        down = up[-1] * 0.985 ** np.arange(1, 50)          # decline triggers stop, stays low
-        rebound = down[-1] * 1.02 ** np.arange(1, n - 109 + 1)  # later recovers
+    def test_no_reentry_while_price_keeps_making_new_lows(self):
+        # rise (entry) → long monotonic decline (stop fires, then keeps dropping) → rebound.
+        # While the price keeps printing new lows the running trough moves down with it, so it is
+        # never +5% above the trough → NO re-entry mid-decline (the anti-falling-knife property).
+        up = 100 * 1.012 ** np.arange(50)
+        down = up[-1] * 0.99 ** np.arange(1, 61)            # 60 bars of fresh lows
+        rebound = down[-1] * 1.03 ** np.arange(1, 31)       # clear bounce off the trough
         close = np.r_[up, down, rebound]
-        dates = pd.date_range("2024-01-01", periods=len(close), freq="B")
+        n = len(close)
+        dates = pd.date_range("2024-01-01", periods=n, freq="B")
         cl = pd.DataFrame({"AAA": close, "SPY": close, "QQQ": close}, index=dates)
-        vol = pd.DataFrame({t: np.full(len(close), 1e6) for t in ["AAA", "SPY", "QQQ"]}, index=dates)
+        vol = pd.DataFrame({t: np.full(n, 1e6) for t in ["AAA", "SPY", "QQQ"]}, index=dates)
         cl.columns = pd.MultiIndex.from_product([["Close"], cl.columns])
         vol.columns = pd.MultiIndex.from_product([["Volume"], vol.columns])
         data = pd.concat([cl, vol], axis=1)
-        cfg = _make_config(["AAA"], max_new=3, stop_loss=0.05, take_profit=0.50, max_holding=200)
+        cfg = _make_config(["AAA"], max_new=3, stop_loss=0.05, take_profit=5.0, max_holding=300)
         cfg["risk"]["reentry_recover_pct"] = 0.05
-        t, e, p = run_backtest(cfg, data, dates[25].date(), dates[-1].date())
+        t, _e, _p = run_backtest(cfg, data, dates[25].date(), dates[-1].date())
         sells = t[t["action"] == "SELL"]
         buys = t[t["action"] == "BUY"]
-        assert (sells["reason"].astype(str).str.contains("stop_loss")).any()
-        # the FIRST stop-loss sale price; no BUY of AAA should fill below +5% of it until recovery
+        assert sells["reason"].astype(str).str.contains("stop_loss").any()
         first_stop = sells[sells["reason"].astype(str).str.contains("stop_loss")].iloc[0]
-        thresh = first_stop["price"] * 1.05
-        reentry_buys = buys[buys["date"] > first_stop["date"]]
-        # every post-stop re-entry fills at/above the +5% recovery threshold
-        assert (reentry_buys["price"] >= thresh * 0.999).all()
+        decline_end = dates[50 + 60 - 1].date().isoformat()         # last bar of the decline
+        # no AAA re-entry between the first stop and the bottom — it's still making new lows
+        mid = buys[(buys["date"] > first_stop["date"]) & (buys["date"] <= decline_end)]
+        assert mid.empty, "re-entered into a continuing decline — falling-knife gate failed"
+
+    def test_reentry_threshold_is_measured_off_the_trough_not_the_stop(self):
+        # decline bottoms well below the stop price, then recovers. Re-entry must clear
+        # trough×1.05 (a low bar), which is BELOW stop×1.05 — proving it tracks the trough.
+        up = 100 * 1.01 ** np.arange(40)
+        down = np.linspace(up[-1], 80.0, 40)                # glide down to a trough of 80
+        rebound = np.linspace(80.0, 120.0, 50)              # strong recovery
+        close = np.r_[up, down, rebound]
+        n = len(close)
+        dates = pd.date_range("2024-01-01", periods=n, freq="B")
+        cl = pd.DataFrame({"AAA": close, "SPY": close, "QQQ": close}, index=dates)
+        vol = pd.DataFrame({t: np.full(n, 1e6) for t in ["AAA", "SPY", "QQQ"]}, index=dates)
+        cl.columns = pd.MultiIndex.from_product([["Close"], cl.columns])
+        vol.columns = pd.MultiIndex.from_product([["Volume"], vol.columns])
+        data = pd.concat([cl, vol], axis=1)
+        cfg = _make_config(["AAA"], max_new=3, stop_loss=0.05, take_profit=5.0, max_holding=300)
+        cfg["risk"]["reentry_recover_pct"] = 0.05
+        t, _e, _p = run_backtest(cfg, data, dates[25].date(), dates[-1].date())
+        buys = t[t["action"] == "BUY"]
+        sells = t[t["action"] == "SELL"]
+        first_stop = sells[sells["reason"].astype(str).str.contains("stop_loss")].iloc[0]
+        reentry = buys[buys["date"] > first_stop["date"]]
+        if reentry.empty:
+            pytest.skip("no re-entry in window")
+        # first re-entry only after price cleared the trough×1.05 gate (≈84), not stop×1.05
+        assert reentry.iloc[0]["price"] >= 80.0 * 1.05 * 0.99

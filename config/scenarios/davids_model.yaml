@@ -31,10 +31,10 @@ portfolio:
 signals:
   min_composite_score: null       # 3-name universe — no quality filter to apply
 
-# Stop-recovery re-entry gate: after a STOP-LOSS exit, a name can't be re-bought
-# until its price has recovered ≥5% above the price it was stopped out at. Targets
-# the stop-then-rebuy-into-a-continuing-decline whipsaw specifically (only fires
-# after stops; take-profit/max-hold exits are unaffected).
+# Anti-falling-knife re-entry gate: after a STOP-LOSS exit, track the name's lowest
+# price since that stop and block re-entry until it bounces ≥5% above that trough.
+# Waits for the bottom to form before re-buying. Only fires after stops (take-profit/
+# max-hold unaffected); it merely UNBLOCKS — the ranker still has to pick the name.
 risk:
   reentry_recover_pct: 0.05
 
