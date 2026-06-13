@@ -31,11 +31,12 @@ portfolio:
 signals:
   min_composite_score: null       # 3-name universe — no quality filter to apply
 
-# Strength gate: only enter a name within 10% of its 52-week high — avoids buying
-# falling knives / rebuying right after a stop-out into a continuing decline. In the
-# 2021–2026 A/B this halved max drawdown (−37%→−16%) and was best on return/DD.
-entry_filters:
-  near_52w_high: 0.90
+# Stop-recovery re-entry gate: after a STOP-LOSS exit, a name can't be re-bought
+# until its price has recovered ≥5% above the price it was stopped out at. Targets
+# the stop-then-rebuy-into-a-continuing-decline whipsaw specifically (only fires
+# after stops; take-profit/max-hold exits are unaffected).
+risk:
+  reentry_recover_pct: 0.05
 
 # Per-ticker exit/sizing rules (one group per ticker → true per-ticker overrides).
 ticker_groups:
@@ -53,12 +54,6 @@ ticker_groups:
     max_holding_days: 60
   crowdstrike:
     tickers: [CRWD]
-    stop_loss: 0.10
-    take_profit: 0.15
-    trailing_stop: 0.10
-    max_holding_days: 30
-  tesla:
-    tickers: [ TSLA ]
     stop_loss: 0.10
     take_profit: 0.15
     trailing_stop: 0.10

@@ -738,3 +738,31 @@ class TestEntryGates:
         cfg2["entry_filters"] = {}                      # explicit-empty == absent
         same = run_backtest(cfg2, data, data.index[25].date(), data.index[-1].date())
         assert len(base[0]) == len(same[0])             # identical trade count
+
+
+class TestStopRecoveryReentry:
+    def test_blocks_reentry_until_recovered_above_stop_price(self):
+        # rise → stop-out on a drop → must recover +5% above the stop sale price to re-buy
+        n = 160
+        up = 100 * 1.012 ** np.arange(60)
+        down = up[-1] * 0.985 ** np.arange(1, 50)          # decline triggers stop, stays low
+        rebound = down[-1] * 1.02 ** np.arange(1, n - 109 + 1)  # later recovers
+        close = np.r_[up, down, rebound]
+        dates = pd.date_range("2024-01-01", periods=len(close), freq="B")
+        cl = pd.DataFrame({"AAA": close, "SPY": close, "QQQ": close}, index=dates)
+        vol = pd.DataFrame({t: np.full(len(close), 1e6) for t in ["AAA", "SPY", "QQQ"]}, index=dates)
+        cl.columns = pd.MultiIndex.from_product([["Close"], cl.columns])
+        vol.columns = pd.MultiIndex.from_product([["Volume"], vol.columns])
+        data = pd.concat([cl, vol], axis=1)
+        cfg = _make_config(["AAA"], max_new=3, stop_loss=0.05, take_profit=0.50, max_holding=200)
+        cfg["risk"]["reentry_recover_pct"] = 0.05
+        t, e, p = run_backtest(cfg, data, dates[25].date(), dates[-1].date())
+        sells = t[t["action"] == "SELL"]
+        buys = t[t["action"] == "BUY"]
+        assert (sells["reason"].astype(str).str.contains("stop_loss")).any()
+        # the FIRST stop-loss sale price; no BUY of AAA should fill below +5% of it until recovery
+        first_stop = sells[sells["reason"].astype(str).str.contains("stop_loss")].iloc[0]
+        thresh = first_stop["price"] * 1.05
+        reentry_buys = buys[buys["date"] > first_stop["date"]]
+        # every post-stop re-entry fills at/above the +5% recovery threshold
+        assert (reentry_buys["price"] >= thresh * 0.999).all()
