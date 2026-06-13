@@ -19,6 +19,7 @@ import active_experiment
 import signal_screen
 import research_suite
 import scenarios
+import adaptive_backtest
 import main as agent
 
 
@@ -40,6 +41,8 @@ def captured(monkeypatch):
                         lambda ts, te, vs, ve: calls.update(cmd="suite", ts=ts, te=te, vs=vs, ve=ve))
     monkeypatch.setattr(scenarios, "run_scenario",
                         lambda name, s, e: calls.update(cmd="scenario", name=name, s=s, e=e))
+    monkeypatch.setattr(adaptive_backtest, "run",
+                        lambda s, e, rb=None, lb=None, tn=None: calls.update(cmd="adaptive", s=s, e=e, rb=rb, lb=lb, tn=tn))
     monkeypatch.setattr(agent, "main", lambda: calls.update(cmd="agent"))
     return calls
 
@@ -132,6 +135,13 @@ def test_scenario_list_does_not_run(captured):
     assert "cmd" not in captured            # --list just prints; no scenario executed
 
 
+def test_adaptive_dispatch(captured):
+    cli.main(["adaptive", "--start", "2021-01-01", "--end", "2025-12-31",
+              "--rebalance-days", "5", "--top-n", "5"])
+    assert captured["cmd"] == "adaptive"
+    assert captured["s"] == date(2021, 1, 1) and captured["rb"] == 5 and captured["tn"] == 5
+
+
 def test_agent_dispatch(captured):
     cli.main(["agent"])
     assert captured["cmd"] == "agent"
@@ -159,5 +169,5 @@ def test_all_subcommands_registered():
     for action in parser._actions:
         if hasattr(action, "choices") and action.choices:
             choices.update(action.choices.keys())
-    assert {"backtest", "experiments", "ticker-experiments", "calibrate",
-            "evaluate", "active", "screen", "suite", "scenario", "agent"}.issubset(choices)
+    assert {"backtest", "experiments", "ticker-experiments", "calibrate", "evaluate",
+            "active", "screen", "suite", "scenario", "adaptive", "agent"}.issubset(choices)

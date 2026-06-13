@@ -20,6 +20,7 @@ python run.py active --train-start … --train-end … --test-start … --test-e
 python run.py screen --train-start … --train-end … --test-start … --test-end …  # factor screen: rank candidate signals by OOS rank-IC
 python run.py suite  --train-start … --train-end … --test-start … --test-end …  # run the whole stack once -> one consolidated summary report
 python run.py scenario davids_model --start … --end …                            # run a named scenario (config/scenarios/<name>.yaml)
+python run.py adaptive --start … --end … [--rebalance-days N --lookback-days N --top-n N]  # per-ticker weekly rotating-signal backtest
 ```
 
 Named scenarios live in `config/scenarios/<name>.yaml` (trimmed universe + per-ticker `ticker_groups`

@@ -15,6 +15,7 @@ Commands:
     screen              Factor screen — rank candidate signals by out-of-sample predictive power
     suite               Run the whole stack once → ONE consolidated summary report
     scenario            Run a named scenario (trimmed universe + per-ticker rules)
+    adaptive            Adaptive per-ticker rotating-signal backtest (weekly signal rotation)
     agent               Run the LIVE daily paper-trading agent (mutates data/)
 
 Each command also remains runnable on its own (e.g. `python src/backtest.py ...`);
@@ -131,6 +132,12 @@ def _cmd_scenario(args: argparse.Namespace) -> None:
     scenarios.run_scenario(args.name, s, e)
 
 
+def _cmd_adaptive(args: argparse.Namespace) -> None:
+    import adaptive_backtest
+    s, e = _dates(args)
+    adaptive_backtest.run(s, e, args.rebalance_days, args.lookback_days, args.top_n)
+
+
 def _cmd_agent(args: argparse.Namespace) -> None:
     import main as agent
     agent.main()
@@ -212,6 +219,14 @@ def build_parser() -> argparse.ArgumentParser:
     scn.add_argument("--end", metavar="YYYY-MM-DD")
     scn.add_argument("--list", action="store_true", help="list available scenarios and exit")
     scn.set_defaults(func=_cmd_scenario)
+
+    ad = sub.add_parser("adaptive",
+                        help="Adaptive per-ticker rotating-signal backtest (weekly, holds the recently-best signal per name)")
+    _add_dates(ad)
+    ad.add_argument("--rebalance-days", type=int, default=None, help="rebalance cadence (default 5)")
+    ad.add_argument("--lookback-days", type=int, default=None, help="recent-edge window (default 63)")
+    ad.add_argument("--top-n", type=int, default=None, help="max focus tickers (default 5)")
+    ad.set_defaults(func=_cmd_adaptive)
 
     a = sub.add_parser("agent", help="Run the LIVE daily paper-trading agent (mutates data/)")
     a.set_defaults(func=_cmd_agent)

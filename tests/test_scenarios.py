@@ -71,6 +71,9 @@ class TestLoading:
         base = {"tickers": ["MSFT", "ORCL", "CRWD"], "portfolio": {}, "risk": {}, "signals": {}}
         cfg = sc.build_config(base, sc.load_scenario("davids_model"))
         ov = _build_ticker_overrides(cfg)
-        assert ov["MSFT"]["trailing_stop"] == 0.10 and ov["MSFT"]["take_profit"] is None
-        assert ov["ORCL"]["take_profit"] == 0.15 and ov["ORCL"]["max_holding_days"] == 60
+        # Per-ticker resolution mechanism (stable design choices, not the tunable TP values):
+        assert set(ov) == {"MSFT", "ORCL", "CRWD"}
+        assert ov["MSFT"]["trailing_stop"] == 0.10            # MSFT/CRWD use a trailing stop
         assert ov["CRWD"]["trailing_stop"] == 0.10
+        assert ov["ORCL"]["trailing_stop"] is None            # ORCL deliberately has none
+        assert all("stop_loss" in ov[t] for t in ("MSFT", "ORCL", "CRWD"))
