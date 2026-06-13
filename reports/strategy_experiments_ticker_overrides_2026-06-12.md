@@ -85,7 +85,7 @@ _Does composite ranking actually sort winners from losers? Exit/sizing-only prof
 |---------|---|---|---|---|---|---|
 | baseline | $3,254 | $17,379 | $17,998 | $3,958 | +39.31% | +29.90% |
 | trailing_stop_baseline | $8,526 | $24,239 | $29,893 | $11,892 | +31.21% | +29.15% |
-| grouped_ticker_overrides_v1 | $11,311 | $23,599 | $59,104 | $6,722 | +35.89% | +58.67% |
+| grouped_ticker_overrides_v1 | $11,310 | $23,599 | $59,104 | $6,722 | +35.89% | +58.67% |
 | grouped_ticker_overrides_conservative | $14,496 | $22,894 | $44,060 | $6,823 | +31.67% | +49.91% |
 | grouped_ticker_overrides_aggressive | $9,998 | $19,437 | $69,579 | $4,878 | +44.53% | +66.97% |
 | grouped_signal_weights_only | $4,623 | $12,932 | $20,278 | $4,285 | +37.83% | +48.15% |

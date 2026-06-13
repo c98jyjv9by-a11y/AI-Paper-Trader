@@ -1,7 +1,7 @@
 # Per-Ticker Signal Calibration — Timing vs Buy-and-Hold
 **Period:** 2018-06-12 → 2023-06-12  |  **Generated:** 2026-06-12
 
-> **Out-of-sample, walk-forward.** Each ticker's rule is calibrated on a 252-day train window and reported ONLY on the following 63-day test window, stepped quarterly. Headline metric: timed total return vs buy-and-hold of the same ticker over the same out-of-sample span.
+> **Out-of-sample, walk-forward.** Calibration objective: **total_return** (the rule chosen on each 252-day train window maximises this), reported ONLY on the following 63-day test window, stepped quarterly. Comparison is timed vs buy-and-hold of the same ticker over the same out-of-sample span.
 
 ---
 
@@ -24,7 +24,7 @@
 | NFLX | -19.68% | +8.85% | -28.53% | +20.00% | 122 | +41.38% | +40.00% | 20/50/none |
 | TSM | +94.93% | +125.21% | -30.28% | +40.00% | 99 | +46.67% | +66.67% | 20/50/none |
 | MU | +17.01% | +47.58% | -30.58% | +33.33% | 86 | +37.25% | +86.67% | 20/100/none |
-| JPM | -10.46% | +42.30% | -52.77% | +26.67% | 121 | +43.81% | +33.33% | 10/50/none |
+| JPM | -8.89% | +42.30% | -51.19% | +26.67% | 119 | +43.92% | +33.33% | 10/50/none |
 | ASML | +147.42% | +214.81% | -67.39% | +33.33% | 100 | +51.75% | +53.33% | 20/100/none |
 | COST | +22.85% | +92.57% | -69.72% | +26.67% | 108 | +53.54% | +86.67% | 20/50/none |
 | CRWD | -12.64% | +59.00% | -71.64% | +33.33% | 70 | +42.06% | +41.67% | 20/100/none |
@@ -36,7 +36,7 @@
 | AVGO | +0.17% | +165.81% | -165.64% | +20.00% | 144 | +54.18% | +33.33% | 10/100/none |
 | PANW | -10.99% | +171.04% | -182.03% | +26.67% | 87 | +51.53% | +40.00% | 20/50/none |
 | TSLA | +756.94% | +1003.95% | -247.02% | +46.67% | 80 | +50.16% | +26.67% | 20/100/15% |
-| NVDA | +266.85% | +661.78% | -394.93% | +33.33% | 113 | +56.61% | +40.00% | 20/100/none |
+| NVDA | +266.84% | +661.78% | -394.93% | +33.33% | 113 | +56.61% | +40.00% | 20/100/none |
 
 ## Risk-Adjusted & Exposure-Matched (out-of-sample)
 
@@ -55,7 +55,7 @@ _A timing strategy sits in cash part of the time, so compare risk-adjusted and a
 | NFLX | -19.68% | +3.66% | ❌ | -0.09 | 0.30 | -49.92% | -75.95% | -0.12 | 0.03 |
 | TSM | +94.93% | +58.43% | ✅ | 0.87 | 0.76 | -34.09% | -56.47% | 0.58 | 0.44 |
 | MU | +17.01% | +17.72% | ❌ | 0.29 | 0.46 | -30.06% | -49.63% | 0.14 | 0.22 |
-| JPM | -10.46% | +18.53% | ❌ | -0.08 | 0.44 | -36.95% | -43.63% | -0.08 | 0.23 |
+| JPM | -8.89% | +18.58% | ❌ | -0.06 | 0.44 | -36.20% | -43.63% | -0.07 | 0.23 |
 | ASML | +147.42% | +111.16% | ✅ | 1.11 | 0.92 | -24.46% | -56.86% | 1.14 | 0.64 |
 | COST | +22.85% | +49.57% | ❌ | 0.44 | 0.81 | -21.01% | -31.40% | 0.27 | 0.62 |
 | CRWD | -12.64% | +24.82% | ❌ | 0.02 | 0.56 | -52.62% | -67.69% | -0.08 | 0.25 |
@@ -67,7 +67,7 @@ _A timing strategy sits in cash part of the time, so compare risk-adjusted and a
 | AVGO | +0.17% | +89.84% | ❌ | 0.11 | 0.88 | -31.85% | -48.30% | 0.00 | 0.63 |
 | PANW | -10.99% | +88.15% | ❌ | -0.02 | 0.86 | -57.08% | -47.03% | -0.05 | 0.66 |
 | TSLA | +756.94% | +503.57% | ✅ | 1.45 | 1.27 | -41.44% | -73.63% | 1.90 | 1.24 |
-| NVDA | +266.85% | +374.66% | ❌ | 1.21 | 1.28 | -33.31% | -66.34% | 1.27 | 1.10 |
+| NVDA | +266.84% | +374.66% | ❌ | 1.21 | 1.28 | -33.31% | -66.34% | 1.27 | 1.10 |
 
 ## Interpretation
 
