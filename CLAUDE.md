@@ -18,6 +18,7 @@ python run.py calibrate          --start … --end …           # per-ticker ti
 python run.py evaluate           --start … --end … [--criteria FILE]  # score a fixed criteria file (no re-fitting)
 python run.py active --train-start … --train-end … --test-start … --test-end …  # ticker active-vs-BH grid + portfolio, OOS
 python run.py screen --train-start … --train-end … --test-start … --test-end …  # factor screen: rank candidate signals by OOS rank-IC
+python run.py suite  --train-start … --train-end … --test-start … --test-end …  # run the whole stack once -> one consolidated summary report
 ```
 
 Per-ticker timing criteria live in `config/ticker_timing_criteria.yaml` (seed). `calibrate` writes a

@@ -17,6 +17,7 @@ import ticker_experiments
 import signal_calibration
 import active_experiment
 import signal_screen
+import research_suite
 import main as agent
 
 
@@ -34,6 +35,8 @@ def captured(monkeypatch):
                         lambda ts, te, vs, ve: calls.update(cmd="active", ts=ts, te=te, vs=vs, ve=ve))
     monkeypatch.setattr(signal_screen, "run",
                         lambda ts, te, vs, ve: calls.update(cmd="screen", ts=ts, te=te, vs=vs, ve=ve))
+    monkeypatch.setattr(research_suite, "run",
+                        lambda ts, te, vs, ve: calls.update(cmd="suite", ts=ts, te=te, vs=vs, ve=ve))
     monkeypatch.setattr(agent, "main", lambda: calls.update(cmd="agent"))
     return calls
 
@@ -107,6 +110,13 @@ def test_screen_dispatch(captured):
     assert captured["ts"] == date(2021, 1, 1) and captured["ve"] == date(2025, 12, 31)
 
 
+def test_suite_dispatch(captured):
+    cli.main(["suite", "--train-start", "2021-01-01", "--train-end", "2023-12-31",
+              "--test-start", "2024-01-01", "--test-end", "2025-12-31"])
+    assert captured["cmd"] == "suite"
+    assert captured["ts"] == date(2021, 1, 1) and captured["ve"] == date(2025, 12, 31)
+
+
 def test_agent_dispatch(captured):
     cli.main(["agent"])
     assert captured["cmd"] == "agent"
@@ -135,4 +145,4 @@ def test_all_subcommands_registered():
         if hasattr(action, "choices") and action.choices:
             choices.update(action.choices.keys())
     assert {"backtest", "experiments", "ticker-experiments", "calibrate",
-            "evaluate", "active", "screen", "agent"}.issubset(choices)
+            "evaluate", "active", "screen", "suite", "agent"}.issubset(choices)

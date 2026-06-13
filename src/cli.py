@@ -13,6 +13,7 @@ Commands:
     evaluate            Apply a fixed ticker criteria file, score timed vs buy-and-hold
     active              Ticker-level active-vs-BH grid + eligible-ticker portfolio (train/test OOS)
     screen              Factor screen — rank candidate signals by out-of-sample predictive power
+    suite               Run the whole stack once → ONE consolidated summary report
     agent               Run the LIVE daily paper-trading agent (mutates data/)
 
 Each command also remains runnable on its own (e.g. `python src/backtest.py ...`);
@@ -103,6 +104,20 @@ def _cmd_screen(args: argparse.Namespace) -> None:
     signal_screen.run(ts, te, vs, ve)
 
 
+def _cmd_suite(args: argparse.Namespace) -> None:
+    import research_suite
+    try:
+        ts, te = date.fromisoformat(args.train_start), date.fromisoformat(args.train_end)
+        vs, ve = date.fromisoformat(args.test_start), date.fromisoformat(args.test_end)
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        sys.exit(1)
+    if te <= ts or ve <= vs:
+        print("Error: each --*-end must be after its --*-start")
+        sys.exit(1)
+    research_suite.run(ts, te, vs, ve)
+
+
 def _cmd_agent(args: argparse.Namespace) -> None:
     import main as agent
     agent.main()
@@ -168,6 +183,14 @@ def build_parser() -> argparse.ArgumentParser:
     sc.add_argument("--test-start", required=True, metavar="YYYY-MM-DD")
     sc.add_argument("--test-end", required=True, metavar="YYYY-MM-DD")
     sc.set_defaults(func=_cmd_screen)
+
+    su = sub.add_parser("suite",
+                        help="Run the whole stack once → one consolidated summary report")
+    su.add_argument("--train-start", required=True, metavar="YYYY-MM-DD")
+    su.add_argument("--train-end", required=True, metavar="YYYY-MM-DD")
+    su.add_argument("--test-start", required=True, metavar="YYYY-MM-DD")
+    su.add_argument("--test-end", required=True, metavar="YYYY-MM-DD")
+    su.set_defaults(func=_cmd_suite)
 
     a = sub.add_parser("agent", help="Run the LIVE daily paper-trading agent (mutates data/)")
     a.set_defaults(func=_cmd_agent)
