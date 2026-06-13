@@ -50,11 +50,66 @@ tickers:
   - PYPL                           # broken-growth fintech — long laggard off 2021 peak
   - SEDG                           # solar collapse (~-95%) — falling-knife stress test
   - PLUG                           # green-hydrogen collapse (~-95%) — extreme left tail
+  # ── Growth / tech / mega-cap breadth adds (50 names) ──
+  # Large-cap software / SaaS
+  - ADBE
+  - CRM
+  - NOW
+  - INTU
+  - SAP
+  - WDAY
+  - SNOW
+  - DDOG
+  - NET
+  - MDB
+  - ZS
+  - FTNT
+  - TEAM
+  - OKTA
+  - TWLO
+  - HUBS
+  - SNPS
+  - CDNS
+  # Semiconductors / hardware / AI infra
+  - QCOM
+  - TXN
+  - AMAT
+  - LRCX
+  - KLAC
+  - NXPI
+  - MRVL
+  - ADI
+  - MCHP
+  - "ON"                           # quoted — bare ON is parsed as boolean true in YAML
+  - ARM                            # IPO Sep-2023 — short history
+  - ANET
+  - CSCO
+  - IBM
+  - DELL
+  - SMCI
+  - VRT
+  - APP
+  # Internet / platform / consumer growth
+  - SHOP
+  - UBER
+  - ABNB                           # listed Dec-2020
+  - MELI
+  - SE
+  - SPOT
+  - DASH                           # listed Dec-2020
+  - RBLX                           # listed 2021
+  - PINS
+  - SNAP
+  - TTD
+  - NU                             # listed 2021
+  # Fintech / high-beta growth
+  - HOOD                           # listed 2021
+  - SOFI                           # listed 2021
 
 portfolio:
-  max_position_pct: 0.085         # manual per-name cap (33-name universe)
+  max_position_pct: 0.085         # manual per-name cap (83-name universe)
   max_total_exposure: 0.90
-  max_new_trades_per_day: 3
+  max_new_trades_per_day: 2
 
 signals:
   min_composite_score: 0.70      # ranker still orders the full universe each day
