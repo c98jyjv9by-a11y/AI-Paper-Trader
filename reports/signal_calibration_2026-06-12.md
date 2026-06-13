@@ -1,5 +1,5 @@
 # Per-Ticker Signal Calibration — Timing vs Buy-and-Hold
-**Period:** 2021-06-12 → 2026-06-12  |  **Generated:** 2026-06-12
+**Period:** 2018-06-12 → 2023-06-12  |  **Generated:** 2026-06-12
 
 > **Out-of-sample, walk-forward.** Each ticker's rule is calibrated on a 252-day train window and reported ONLY on the following 63-day test window, stepped quarterly. Headline metric: timed total return vs buy-and-hold of the same ticker over the same out-of-sample span.
 
@@ -7,8 +7,8 @@
 
 ## Does timing beat holding? (out-of-sample)
 
-- **0 / 21 tickers** had positive OOS timed-minus-hold outperformance.
-- Median OOS outperformance: **-154.83%**.
+- **3 / 21 tickers** had positive OOS timed-minus-hold outperformance.
+- Median OOS outperformance: **-69.72%**.
 
 > ⚠️ With ~25 names tested, roughly half would beat hold by chance even with no skill. Treat a result as real only if outperformance is large, the per-fold parameters are stable, and it survives a fresh out-of-sample period. Few trades per ticker = high variance.
 
@@ -16,32 +16,63 @@
 
 | Ticker | Timed Ret | Hold Ret | Outperf | Test-win rate | OOS Trades | % In-Market | Param Stability | Modal Rule (fast/slow/trail) |
 |--------|-----------|----------|---------|---------------|------------|-------------|-----------------|------------------------------|
-| TSLA | +18.35% | +50.41% | -32.06% | +53.33% | 83 | +36.19% | +33.33% | 20/100/none |
-| MSFT | +6.88% | +48.65% | -41.77% | +33.33% | 104 | +45.82% | +40.00% | 10/50/none |
-| BAC | +14.77% | +64.71% | -49.95% | +40.00% | 105 | +48.36% | +40.00% | 10/50/none |
-| COST | +42.19% | +97.84% | -55.65% | +33.33% | 98 | +51.96% | +53.33% | 20/100/none |
-| AMZN | +30.60% | +88.79% | -58.20% | +33.33% | 99 | +51.64% | +53.33% | 20/50/none |
-| AAPL | +21.11% | +81.62% | -60.50% | +40.00% | 71 | +48.04% | +53.33% | 20/100/none |
-| ORCL | +72.44% | +153.51% | -81.07% | +26.67% | 108 | +46.14% | +40.00% | 20/50/none |
-| META | +153.40% | +263.67% | -110.28% | +40.00% | 99 | +47.51% | +53.33% | 10/100/none |
-| COIN | -23.68% | +123.15% | -146.82% | +33.33% | 95 | +35.03% | +33.33% | 20/50/none |
-| AMD | +191.14% | +338.17% | -147.03% | +40.00% | 77 | +42.75% | +40.00% | 20/50/none |
-| GS | +55.86% | +210.69% | -154.83% | +26.67% | 113 | +53.33% | +66.67% | 10/100/none |
-| GOOGL | +74.00% | +232.47% | -158.47% | +26.67% | 85 | +51.85% | +80.00% | 20/100/none |
-| JPM | +24.90% | +188.88% | -163.98% | +20.00% | 114 | +57.67% | +60.00% | 20/50/none |
-| ASML | +6.21% | +172.53% | -166.32% | +33.33% | 113 | +46.88% | +33.33% | 20/100/none |
-| PANW | -14.47% | +158.01% | -172.48% | +20.00% | 85 | +49.21% | +73.33% | 20/50/none |
-| CRWD | +8.45% | +185.70% | -177.26% | +33.33% | 91 | +47.51% | +60.00% | 20/50/none |
-| NFLX | +62.56% | +286.54% | -223.98% | +33.33% | 110 | +52.91% | +46.67% | 10/100/none |
-| TSM | +89.74% | +370.29% | -280.56% | +26.67% | 90 | +54.18% | +60.00% | 20/50/none |
-| AVGO | +71.61% | +710.33% | -638.72% | +20.00% | 136 | +51.85% | +53.33% | 10/50/none |
-| MU | +288.09% | +1151.15% | -863.07% | +13.33% | 109 | +47.72% | +46.67% | 10/100/none |
-| NVDA | +185.93% | +1064.54% | -878.61% | +20.00% | 114 | +57.25% | +40.00% | 20/100/none |
+| META | +63.91% | +25.99% | +37.92% | +46.67% | 92 | +38.62% | +46.67% | 10/100/none |
+| COIN | -47.86% | -53.99% | +6.12% | +50.00% | 31 | +23.81% | +50.00% | 10/50/none |
+| AMZN | +22.79% | +18.02% | +4.77% | +33.33% | 81 | +40.21% | +66.67% | 20/50/none |
+| GS | +64.85% | +73.00% | -8.14% | +40.00% | 95 | +42.33% | +60.00% | 10/100/none |
+| BAC | -13.39% | +8.31% | -21.70% | +33.33% | 107 | +38.20% | +53.33% | 10/50/none |
+| NFLX | -19.68% | +8.85% | -28.53% | +20.00% | 122 | +41.38% | +40.00% | 20/50/none |
+| TSM | +94.93% | +125.21% | -30.28% | +40.00% | 99 | +46.67% | +66.67% | 20/50/none |
+| MU | +17.01% | +47.58% | -30.58% | +33.33% | 86 | +37.25% | +86.67% | 20/100/none |
+| JPM | -10.46% | +42.30% | -52.77% | +26.67% | 121 | +43.81% | +33.33% | 10/50/none |
+| ASML | +147.42% | +214.81% | -67.39% | +33.33% | 100 | +51.75% | +53.33% | 20/100/none |
+| COST | +22.85% | +92.57% | -69.72% | +26.67% | 108 | +53.54% | +86.67% | 20/50/none |
+| CRWD | -12.64% | +59.00% | -71.64% | +33.33% | 70 | +42.06% | +41.67% | 20/100/none |
+| GOOGL | -9.19% | +83.30% | -92.49% | +20.00% | 118 | +51.22% | +66.67% | 20/50/none |
+| ORCL | -12.72% | +93.12% | -105.84% | +13.33% | 114 | +45.19% | +53.33% | 20/50/none |
+| MSFT | +20.34% | +136.86% | -116.52% | +40.00% | 135 | +56.19% | +33.33% | 20/100/none |
+| AMD | +76.89% | +225.59% | -148.70% | +26.67% | 102 | +39.68% | +40.00% | 10/100/none |
+| AAPL | +107.77% | +258.88% | -151.11% | +46.67% | 88 | +56.08% | +73.33% | 20/50/none |
+| AVGO | +0.17% | +165.81% | -165.64% | +20.00% | 144 | +54.18% | +33.33% | 10/100/none |
+| PANW | -10.99% | +171.04% | -182.03% | +26.67% | 87 | +51.53% | +40.00% | 20/50/none |
+| TSLA | +756.94% | +1003.95% | -247.02% | +46.67% | 80 | +50.16% | +26.67% | 20/100/15% |
+| NVDA | +266.85% | +661.78% | -394.93% | +33.33% | 113 | +56.61% | +40.00% | 20/100/none |
+
+## Risk-Adjusted & Exposure-Matched (out-of-sample)
+
+_A timing strategy sits in cash part of the time, so compare risk-adjusted and against an **exposure-matched** hold (same % time in market, rest cash). 'Beats exp-matched' is the fair test of whether *when* you were in beat simply being in that fraction of the time._
+
+- **6 / 21** tickers had a higher timed Sharpe than buy-and-hold.
+- **6 / 21** tickers beat their exposure-matched hold (the fair return test).
+
+| Ticker | Timed Ret | Exp-Matched Hold | Beats Exp-Matched | Timed Sharpe | Hold Sharpe | Timed MaxDD | Hold MaxDD | Timed Calmar | Hold Calmar |
+|--------|-----------|------------------|-------------------|--------------|-------------|-------------|------------|--------------|-------------|
+| META | +63.91% | +10.04% | ✅ | 0.69 | 0.37 | -28.58% | -76.74% | 0.50 | 0.08 |
+| COIN | -47.86% | -12.85% | ❌ | -0.83 | -0.06 | -52.30% | -78.98% | -0.92 | -0.69 |
+| AMZN | +22.79% | +7.25% | ✅ | 0.37 | 0.31 | -37.70% | -56.15% | 0.15 | 0.08 |
+| GS | +64.85% | +30.90% | ✅ | 0.89 | 0.59 | -22.10% | -45.62% | 0.66 | 0.35 |
+| BAC | -13.39% | +3.17% | ❌ | -0.16 | 0.25 | -34.10% | -48.95% | -0.11 | 0.04 |
+| NFLX | -19.68% | +3.66% | ❌ | -0.09 | 0.30 | -49.92% | -75.95% | -0.12 | 0.03 |
+| TSM | +94.93% | +58.43% | ✅ | 0.87 | 0.76 | -34.09% | -56.47% | 0.58 | 0.44 |
+| MU | +17.01% | +17.72% | ❌ | 0.29 | 0.46 | -30.06% | -49.63% | 0.14 | 0.22 |
+| JPM | -10.46% | +18.53% | ❌ | -0.08 | 0.44 | -36.95% | -43.63% | -0.08 | 0.23 |
+| ASML | +147.42% | +111.16% | ✅ | 1.11 | 0.92 | -24.46% | -56.86% | 1.14 | 0.64 |
+| COST | +22.85% | +49.57% | ❌ | 0.44 | 0.81 | -21.01% | -31.40% | 0.27 | 0.62 |
+| CRWD | -12.64% | +24.82% | ❌ | 0.02 | 0.56 | -52.62% | -67.69% | -0.08 | 0.25 |
+| GOOGL | -9.19% | +42.66% | ❌ | -0.05 | 0.65 | -38.76% | -44.32% | -0.07 | 0.40 |
+| ORCL | -12.72% | +42.08% | ❌ | -0.13 | 0.71 | -27.67% | -40.36% | -0.13 | 0.48 |
+| MSFT | +20.34% | +76.90% | ❌ | 0.37 | 0.86 | -27.73% | -37.15% | 0.19 | 0.71 |
+| AMD | +76.89% | +89.52% | ❌ | 0.64 | 0.85 | -35.59% | -65.45% | 0.47 | 0.58 |
+| AAPL | +107.77% | +145.19% | ❌ | 1.04 | 1.16 | -25.02% | -31.43% | 0.87 | 1.31 |
+| AVGO | +0.17% | +89.84% | ❌ | 0.11 | 0.88 | -31.85% | -48.30% | 0.00 | 0.63 |
+| PANW | -10.99% | +88.15% | ❌ | -0.02 | 0.86 | -57.08% | -47.03% | -0.05 | 0.66 |
+| TSLA | +756.94% | +503.57% | ✅ | 1.45 | 1.27 | -41.44% | -73.63% | 1.90 | 1.24 |
+| NVDA | +266.85% | +374.66% | ❌ | 1.21 | 1.28 | -33.31% | -66.34% | 1.27 | 1.10 |
 
 ## Interpretation
 
-- **0/21** beat buy-and-hold OOS; median edge -154.83%. Most names did worse timed than held — the rule mostly costs return via whipsaws/cash drag.
-- **No ticker** combined a >+5% OOS edge with stable per-fold parameters. That is the signature of curve-fitting: the 'best' train parameters keep changing and don't carry to test data — i.e. there is no reliable per-ticker timing edge here.
-- **Time-in-market matters:** timed strategies sit in cash part of the time, so even when timed return ≈ hold return, the timed version took less risk. (You chose total-return as the headline; ask me to add Sharpe/Calmar and exposure-adjusted comparison if you want the risk-adjusted verdict.)
+- **3/21** beat buy-and-hold OOS; median edge -69.72%. Most names did worse timed than held — the rule mostly costs return via whipsaws/cash drag.
+- **Stable candidates** (>+5% OOS edge AND ≥50% param stability): `COIN`. These are the only ones worth a dedicated out-of-sample retest; everything else is likely noise.
+- **Fair (exposure-matched) verdict:** 6/21 names beat their exposure-matched hold and 6/21 improved Sharpe vs holding. Even adjusting for time-in-market, the timing rule does not broadly add value here.
 
 - **Next:** re-run on a later, non-overlapping window. A genuine per-ticker edge persists; an overfit one evaporates. All results here are still in-sample at the universe-selection level (we chose these tickers), so treat survivors as hypotheses, not conclusions.

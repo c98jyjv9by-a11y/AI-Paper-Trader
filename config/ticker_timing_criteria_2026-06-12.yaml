@@ -1,0 +1,27 @@
+# Per-ticker single-name timing criteria — DATA-DERIVED via walk-forward calibration.
+# Generated: 2026-06-12  (IN-SAMPLE at universe-selection level — retest OOS).
+# Rule: long when close > SMA(fast) and close > SMA(slow); exit when close < SMA(fast)
+#       or price falls `trailing` below its peak since entry (trailing: null disables).
+# candidate: true  =>  beat exposure-matched hold AND param_stability >= 0.50.
+ticker_timing_criteria:
+  META: {fast: 10, slow: 100, trailing: null, candidate: false, param_stability: 0.47, timed_return: 0.6391, hold_return: 0.2599}
+  COIN: {fast: 10, slow: 50, trailing: null, candidate: false, param_stability: 0.5, timed_return: -0.4786, hold_return: -0.5399}
+  AMZN: {fast: 20, slow: 50, trailing: null, candidate: true, param_stability: 0.67, timed_return: 0.2279, hold_return: 0.1802}
+  GS: {fast: 10, slow: 100, trailing: null, candidate: true, param_stability: 0.6, timed_return: 0.6485, hold_return: 0.73}
+  BAC: {fast: 10, slow: 50, trailing: null, candidate: false, param_stability: 0.53, timed_return: -0.1339, hold_return: 0.0831}
+  NFLX: {fast: 20, slow: 50, trailing: null, candidate: false, param_stability: 0.4, timed_return: -0.1968, hold_return: 0.0885}
+  TSM: {fast: 20, slow: 50, trailing: null, candidate: true, param_stability: 0.67, timed_return: 0.9493, hold_return: 1.2521}
+  MU: {fast: 20, slow: 100, trailing: null, candidate: false, param_stability: 0.87, timed_return: 0.1701, hold_return: 0.4758}
+  JPM: {fast: 10, slow: 50, trailing: null, candidate: false, param_stability: 0.33, timed_return: -0.1046, hold_return: 0.423}
+  ASML: {fast: 20, slow: 100, trailing: null, candidate: true, param_stability: 0.53, timed_return: 1.4742, hold_return: 2.1481}
+  COST: {fast: 20, slow: 50, trailing: null, candidate: false, param_stability: 0.87, timed_return: 0.2285, hold_return: 0.9257}
+  CRWD: {fast: 20, slow: 100, trailing: null, candidate: false, param_stability: 0.42, timed_return: -0.1264, hold_return: 0.59}
+  GOOGL: {fast: 20, slow: 50, trailing: null, candidate: false, param_stability: 0.67, timed_return: -0.0919, hold_return: 0.833}
+  ORCL: {fast: 20, slow: 50, trailing: null, candidate: false, param_stability: 0.53, timed_return: -0.1272, hold_return: 0.9312}
+  MSFT: {fast: 20, slow: 100, trailing: null, candidate: false, param_stability: 0.33, timed_return: 0.2034, hold_return: 1.3686}
+  AMD: {fast: 10, slow: 100, trailing: null, candidate: false, param_stability: 0.4, timed_return: 0.7689, hold_return: 2.2559}
+  AAPL: {fast: 20, slow: 50, trailing: null, candidate: false, param_stability: 0.73, timed_return: 1.0777, hold_return: 2.5888}
+  AVGO: {fast: 10, slow: 100, trailing: null, candidate: false, param_stability: 0.33, timed_return: 0.0017, hold_return: 1.6581}
+  PANW: {fast: 20, slow: 50, trailing: null, candidate: false, param_stability: 0.4, timed_return: -0.1099, hold_return: 1.7104}
+  TSLA: {fast: 20, slow: 100, trailing: 0.15, candidate: false, param_stability: 0.27, timed_return: 7.5694, hold_return: 10.0395}
+  NVDA: {fast: 20, slow: 100, trailing: null, candidate: false, param_stability: 0.4, timed_return: 2.6685, hold_return: 6.6178}
