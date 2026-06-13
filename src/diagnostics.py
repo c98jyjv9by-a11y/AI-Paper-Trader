@@ -255,6 +255,18 @@ def _attribution_interpretation(attr: Dict[str, Any]) -> str:
 # ─── 3. P&L attribution ───────────────────────────────────────────────────────
 
 
+def group_to_tickers(groups: Dict[str, Any]) -> Dict[str, List[str]]:
+    """Normalise ticker_groups: accepts either {group: [tickers]} (flat) or
+    {group: {tickers: [...], ...}} (nested with per-group settings)."""
+    out: Dict[str, List[str]] = {}
+    for name, spec in (groups or {}).items():
+        if isinstance(spec, dict) and "tickers" in spec:
+            out[name] = list(spec["tickers"])
+        elif isinstance(spec, (list, tuple)):
+            out[name] = list(spec)
+    return out
+
+
 def pnl_attribution(
     trades_df: pd.DataFrame,
     positions: pd.DataFrame,
@@ -278,7 +290,7 @@ def pnl_attribution(
     ranked = sorted(pnl_by_ticker.items(), key=lambda kv: kv[1], reverse=True)
 
     # By configured group (only groups that actually traded show up).
-    groups: Dict[str, List[str]] = config.get("ticker_groups", {}) or {}
+    groups = group_to_tickers(config.get("ticker_groups", {}) or {})
     pnl_by_group: Dict[str, float] = {}
     ticker_to_group = {t: g for g, members in groups.items() for t in members}
     grouped_total = 0.0
@@ -297,6 +309,81 @@ def pnl_attribution(
         "ungrouped_pnl": ungrouped if groups else None,
         "has_groups": bool(groups),
     }
+
+
+def ticker_level_diagnostics(
+    trades_df: pd.DataFrame,
+    positions: pd.DataFrame,
+    price_data: pd.DataFrame,
+) -> List[Dict[str, Any]]:
+    """
+    Per-ticker behaviour from closed trades, used to justify group assumptions.
+
+    MFE = max favorable excursion (highest/entry - 1); MAE = max adverse excursion
+    (lowest/entry - 1); giveback = MFE - realized exit gain (peak gain handed back).
+    Also exit-reason counts and stop-loss → re-entry-within-5-trading-days per ticker.
+    """
+    if trades_df.empty:
+        return []
+
+    sells = trades_df[trades_df["action"] == "SELL"].copy()
+    buys = trades_df[trades_df["action"] == "BUY"]
+    bar_dates = [ts.date() for ts in price_data["Close"].index]
+    date_to_pos = {d: i for i, d in enumerate(bar_dates)}
+
+    rows: List[Dict[str, Any]] = []
+    for ticker in sorted(set(trades_df["ticker"])):
+        t_sells = sells[sells["ticker"] == ticker]
+        n = len(t_sells)
+        if n == 0:
+            continue
+        pnls = t_sells["realized_pnl"].astype(float)
+        entry = t_sells["entry_price"].astype(float)
+        sell_px = t_sells["price"].astype(float)
+        high = t_sells.get("highest_price", entry).astype(float)
+        low = t_sells.get("lowest_price", entry).astype(float)
+
+        trade_ret = (sell_px / entry - 1.0)
+        mfe = (high / entry - 1.0)
+        mae = (low / entry - 1.0)
+        giveback = mfe - trade_ret
+        wins = pnls[pnls > 0]
+        losses = pnls[pnls <= 0]
+        gross_loss = abs(float(losses.sum()))
+
+        reasons = t_sells["reason"].astype(str)
+        # stop → re-entry within 5 trading days
+        reentry = 0
+        for _, sr in t_sells[reasons.str.contains("stop_loss")].iterrows():
+            sp = date_to_pos.get(date.fromisoformat(str(sr["date"])))
+            if sp is None:
+                continue
+            for _, br in buys[buys["ticker"] == ticker].iterrows():
+                bp = date_to_pos.get(date.fromisoformat(str(br["date"])))
+                if bp is not None and 0 < (bp - sp) <= 5:
+                    reentry += 1
+                    break
+
+        rows.append({
+            "ticker": ticker,
+            "trades": n,
+            "total_pnl": float(pnls.sum()),
+            "avg_return_per_trade": float(trade_ret.mean()),
+            "win_rate": float((pnls > 0).mean()),
+            "profit_factor": (float(wins.sum()) / gross_loss) if gross_loss > 0 else None,
+            "avg_holding_days": float(t_sells["holding_days"].astype(float).mean()),
+            "avg_mfe": float(mfe.mean()),
+            "median_mfe": float(mfe.median()),
+            "avg_mae": float(mae.mean()),
+            "median_mae": float(mae.median()),
+            "avg_giveback": float(giveback.mean()),
+            "exits_stop_loss": int(reasons.str.contains("stop_loss").sum()),
+            "exits_take_profit": int(reasons.str.contains("take_profit").sum()),
+            "exits_trailing_stop": int(reasons.str.contains("trailing_stop").sum()),
+            "exits_max_holding": int(reasons.str.contains("max_holding_period").sum()),
+            "stop_then_reentry_5d": reentry,
+        })
+    return rows
 
 
 # ─── 4. Turnover and re-entry diagnostics ─────────────────────────────────────

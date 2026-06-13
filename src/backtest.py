@@ -58,7 +58,46 @@ from signals import calculate_signals, rank_candidates
 log = logging.getLogger(__name__)
 
 _BENCH_TICKERS = ["SPY", "QQQ"]
-_POS_COLS = ["ticker", "shares", "entry_price", "entry_date", "current_price", "highest_price"]
+_POS_COLS = ["ticker", "shares", "entry_price", "entry_date", "current_price",
+             "highest_price", "lowest_price"]
+
+# Per-ticker fields a ticker_groups entry may override (anything else falls back
+# to the global portfolio/risk defaults).
+_GROUP_OVERRIDE_FIELDS = ["stop_loss", "take_profit", "trailing_stop",
+                          "max_holding_days", "max_position_pct"]
+
+
+def _build_ticker_overrides(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """
+    Map ticker -> {field: value} for every override field its group explicitly sets.
+
+    Supports both the flat ticker_groups form ({group: [tickers]}, used only for
+    P&L attribution → no overrides) and the nested form
+    ({group: {tickers: [...], stop_loss: ..., ...}}). Only fields actually present
+    in a group are recorded, so a missing field falls back to the global default
+    while an explicit null (e.g. take_profit: null) is preserved.
+    """
+    overrides: Dict[str, Dict[str, Any]] = {}
+    groups = config.get("ticker_groups") or {}
+    for spec in groups.values():
+        if not isinstance(spec, dict) or "tickers" not in spec:
+            continue  # flat list form → attribution only, no risk overrides
+        fields = {k: spec[k] for k in _GROUP_OVERRIDE_FIELDS if k in spec}
+        for ticker in spec["tickers"]:
+            overrides.setdefault(ticker, {}).update(fields)
+    return overrides
+
+
+def _build_ticker_weights(config: Dict[str, Any]) -> Dict[str, Dict[str, float]]:
+    """Map ticker -> its group's `signal_weights`, for groups that define them.
+    Tickers not covered fall back to the global signals.weights at ranking time."""
+    weights: Dict[str, Dict[str, float]] = {}
+    groups = config.get("ticker_groups") or {}
+    for spec in groups.values():
+        if isinstance(spec, dict) and "tickers" in spec and "signal_weights" in spec:
+            for ticker in spec["tickers"]:
+                weights[ticker] = spec["signal_weights"]
+    return weights
 
 # Signals look back at most 21 bars (20-day return + 20-day avg volume). Feeding
 # calculate_signals only this tail — instead of the full growing history — keeps
@@ -132,6 +171,7 @@ def _evaluate_backtest_exits(
     max_holding_days: int,
     slippage: float,
     trailing_stop: Optional[float] = None,
+    ticker_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Tuple[List[Dict[str, Any]], pd.DataFrame]:
     """
     Scan open positions for exit conditions.
@@ -142,9 +182,11 @@ def _evaluate_backtest_exits(
 
     take_profit=None disables fixed take-profit; trailing_stop (when set) exits
     when price falls trailing_stop below the position's running peak (highest_price).
-    The exit record also carries entry_price and highest_price so downstream
-    diagnostics can detect winners that gave back gains.
+    ticker_overrides supplies per-ticker stop_loss/take_profit/trailing_stop/
+    max_holding_days that replace the globals for that ticker only. The exit record
+    carries entry_price, highest_price (MFE) and lowest_price (MAE) for diagnostics.
     """
+    overrides = ticker_overrides or {}
     exit_trades: List[Dict[str, Any]] = []
     keep: List[bool] = []
 
@@ -155,15 +197,22 @@ def _evaluate_backtest_exits(
         ticker = str(row["ticker"])
         shares = int(row["shares"])
         highest_price = float(row.get("highest_price", current_price))
+        lowest_price = float(row.get("lowest_price", current_price))
+
+        ov = overrides.get(ticker, {})
+        t_stop = ov.get("stop_loss", stop_loss)
+        t_tp = ov.get("take_profit", take_profit)
+        t_trail = ov.get("trailing_stop", trailing_stop)
+        t_hold = ov.get("max_holding_days", max_holding_days)
 
         triggered = []
-        if stop_loss_triggered(entry_price, current_price, stop_loss):
+        if stop_loss_triggered(entry_price, current_price, t_stop):
             triggered.append("stop_loss")
-        if take_profit_triggered(entry_price, current_price, take_profit):
+        if take_profit_triggered(entry_price, current_price, t_tp):
             triggered.append("take_profit")
-        if trailing_stop_triggered(highest_price, current_price, trailing_stop):
+        if trailing_stop_triggered(highest_price, current_price, t_trail):
             triggered.append("trailing_stop")
-        if holding_period_exceeded(entry_date, today, max_holding_days):
+        if holding_period_exceeded(entry_date, today, t_hold):
             triggered.append("max_holding_period")
 
         if triggered:
@@ -184,6 +233,7 @@ def _evaluate_backtest_exits(
                     "holding_days": hold_days,
                     "entry_price": entry_price,
                     "highest_price": highest_price,
+                    "lowest_price": lowest_price,
                 }
             )
             keep.append(False)
@@ -224,6 +274,8 @@ def _queue_entries(
     # ticker's composite_score (in [0,1]) between min_position_pct and max_pct.
     sizing_mode = config["portfolio"].get("sizing_mode", "equal")
     min_pct = config["portfolio"].get("min_position_pct", max_pct)
+    # Per-ticker max_position_pct overrides (from ticker_groups), if any.
+    overrides = _build_ticker_overrides(config)
 
     held = set(open_positions["ticker"].tolist()) if not open_positions.empty else set()
     orders: List[Dict[str, Any]] = []
@@ -240,11 +292,12 @@ def _queue_entries(
             break
 
         price = float(row["price"])
+        ticker_max_pct = overrides.get(ticker, {}).get("max_position_pct", max_pct)
         if sizing_mode == "score_weighted":
             score = float(row.get("composite_score") or 0.0)
-            pct = min_pct + (max_pct - min_pct) * max(0.0, min(1.0, score))
+            pct = min_pct + (ticker_max_pct - min_pct) * max(0.0, min(1.0, score))
         else:
-            pct = max_pct
+            pct = ticker_max_pct
         shares = position_size_shares(portfolio_value, price, pct)
         if shares == 0:
             continue
@@ -460,6 +513,9 @@ def run_backtest(
     regime_ma = config.get("entry_filters", {}).get("qqq_above_ma")     # int N or None
     cooldown_days = config.get("risk", {}).get("stop_cooldown_days")    # int N or None
 
+    ticker_overrides = _build_ticker_overrides(config)   # per-ticker exit/sizing
+    ticker_weights = _build_ticker_weights(config) or None  # per-group signal weights
+
     close = price_data["Close"]
     all_timestamps = close.index.tolist()
     qqq_arr = close["QQQ"].to_numpy() if "QQQ" in close.columns else None
@@ -532,6 +588,7 @@ def run_backtest(
                     "entry_date": bar_date,
                     "current_price": fill_price,
                     "highest_price": fill_price,
+                    "lowest_price": fill_price,
                 }
             )
         if filled:
@@ -540,15 +597,16 @@ def run_backtest(
             )
         pending_orders = []
 
-        # ── 2. Update open position prices + running peak (for trailing stop) ─
+        # ── 2. Update prices + running peak (MFE/trailing) and trough (MAE) ───
         positions = update_current_prices(positions, today_prices)
         if not positions.empty:
             positions["highest_price"] = positions[["highest_price", "current_price"]].max(axis=1)
+            positions["lowest_price"] = positions[["lowest_price", "current_price"]].min(axis=1)
 
         # ── 3. Evaluate exits against today's close ───────────────────────────
         exit_trades, positions = _evaluate_backtest_exits(
             positions, bar_date, stop_loss, take_profit, max_holding, slippage,
-            trailing_stop=trailing_stop,
+            trailing_stop=trailing_stop, ticker_overrides=ticker_overrides,
         )
         for e in exit_trades:
             cash += e["trade_value"]
@@ -572,7 +630,8 @@ def run_backtest(
             data_slice = price_data.iloc[max(0, bar_idx + 1 - _SIGNAL_WINDOW): bar_idx + 1]
             signals = calculate_signals(data_slice, tickers)
             if not signals.empty:
-                ranked = rank_candidates(signals, top_n=top_n, weights=weights)
+                ranked = rank_candidates(signals, top_n=top_n, weights=weights,
+                                         ticker_weights=ticker_weights)
                 if min_score is not None and not ranked.empty:
                     ranked = ranked[ranked["composite_score"] >= min_score].reset_index(drop=True)
                 # Cooldown gate: drop names stopped out within the last cooldown_days bars.
@@ -593,7 +652,8 @@ def run_backtest(
                 )
                 if signal_sink is not None:
                     # Score the whole cross-section (not just top-N) for diagnostics.
-                    scored_all = rank_candidates(signals, top_n=len(signals), weights=weights)
+                    scored_all = rank_candidates(signals, top_n=len(signals), weights=weights,
+                                                 ticker_weights=ticker_weights)
                     for _, srow in scored_all.iterrows():
                         signal_sink.append(
                             {

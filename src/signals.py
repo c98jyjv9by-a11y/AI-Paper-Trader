@@ -85,7 +85,12 @@ def calculate_signals(data: pd.DataFrame, tickers: List[str]) -> pd.DataFrame:
     return df
 
 
-def rank_candidates(signals: pd.DataFrame, top_n: int = 10, weights: dict = None) -> pd.DataFrame:
+def rank_candidates(
+    signals: pd.DataFrame,
+    top_n: int = 10,
+    weights: dict = None,
+    ticker_weights: dict = None,
+) -> pd.DataFrame:
     """
     Score every ticker by a composite momentum rank and return the top-N.
 
@@ -93,22 +98,57 @@ def rank_candidates(signals: pd.DataFrame, top_n: int = 10, weights: dict = None
     then multiplied by its weight. The composite score is the weighted sum.
     Tickers with any missing signal value are excluded before ranking.
 
-    weights: optional dict overriding _WEIGHTS (used by sensitivity analysis).
+    weights: default weight dict (overrides _WEIGHTS) applied to every ticker.
+    ticker_weights: optional {ticker: weight_dict} giving per-ticker (e.g. per
+        behaviour-group) signal weights. A ticker not listed uses `weights`.
+        Percentile ranks are still cross-sectional (one 0–1 rank per signal across
+        the whole universe), so composites stay comparable across groups; only the
+        weighting of which signals matter differs by ticker.
+
     Returns a sorted DataFrame (best first) with at most top_n rows.
     """
-    effective_weights = weights if weights is not None else _WEIGHTS
-    required = list(effective_weights.keys())
-    df = signals.dropna(subset=required).copy()
+    default_weights = weights if weights is not None else _WEIGHTS
 
-    if df.empty:
-        log.warning("No tickers survived the signal filter — ranked list is empty")
-        return df
+    # Fast path: one weight set for all tickers.
+    if not ticker_weights:
+        required = list(default_weights.keys())
+        df = signals.dropna(subset=required).copy()
+        if df.empty:
+            log.warning("No tickers survived the signal filter — ranked list is empty")
+            return df
+        for col, weight in default_weights.items():
+            df[f"rank_{col}"] = df[col].rank(pct=True) * weight
+        rank_cols = [f"rank_{c}" for c in default_weights]
+        df["composite_score"] = df[rank_cols].sum(axis=1).round(4)
+    else:
+        # Per-ticker weights: rank each referenced signal cross-sectionally once,
+        # then weight each row's ranks by its own group's weights.
+        all_cols = set(default_weights)
+        for w in ticker_weights.values():
+            all_cols |= set(w)
+        all_cols = [c for c in all_cols if c in signals.columns]
+        df = signals.copy()
+        ranks = {c: df[c].rank(pct=True) for c in all_cols}
 
-    for col, weight in effective_weights.items():
-        df[f"rank_{col}"] = df[col].rank(pct=True) * weight
-
-    rank_cols = [f"rank_{c}" for c in effective_weights]
-    df["composite_score"] = df[rank_cols].sum(axis=1).round(4)
+        scores = []
+        for idx, row in df.iterrows():
+            w = ticker_weights.get(row["ticker"], default_weights)
+            total = 0.0
+            valid = True
+            for col, weight in w.items():
+                if col not in ranks:
+                    continue
+                rv = ranks[col].loc[idx]
+                if pd.isna(rv):
+                    valid = False
+                    break
+                total += rv * weight
+            scores.append(round(total, 4) if valid else np.nan)
+        df["composite_score"] = scores
+        df = df.dropna(subset=["composite_score"])
+        if df.empty:
+            log.warning("No tickers survived the signal filter — ranked list is empty")
+            return df
 
     ranked = (
         df.sort_values("composite_score", ascending=False)
