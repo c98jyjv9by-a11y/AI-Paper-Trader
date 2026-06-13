@@ -29,8 +29,16 @@ from backtest import (
     generate_backtest_report,
     load_config,
     run_backtest,
+    _execute_sensitivity_tasks,
+    _robustness_commentary,
+    _sweep_with_baseline,
+    _ALT_WEIGHT_PROFILES,
+    _DEFAULT_WEIGHTS,
+    _pct as _b_pct,
+    _pf as _b_pf,
 )
 from diagnostics import compute_diagnostics, diagnostics_csv, render_diagnostics_md
+from risk import resolve_max_position_pct
 from logger import setup_logging
 
 log = logging.getLogger(__name__)
@@ -80,6 +88,184 @@ def build_config(base_config: Dict[str, Any], scenario: Dict[str, Any]) -> Dict[
     return cfg
 
 
+# ─── Sensitivity (scenario-aware: run-wide + per-ticker exit params) ──────────
+
+
+def _scenario_sensitivity_tasks(cfg: Dict[str, Any]):
+    """
+    Build one-way sensitivity variants for a scenario config:
+      * Run-wide params (affect the whole backtest): exposure, trades/day, min score,
+        slippage, the re-entry recovery gate, and the signal-weight profile.
+      * Ticker-level exit params: each variant overwrites that field for EVERY
+        ticker_groups name at once — a uniform stand-in that shows how sensitive the
+        run is to the per-ticker exit choices collectively.
+    Returns (tasks, ordered_groups, baseline_marks). tasks = (param, value_str, cfg).
+    """
+    tasks = []
+    groups = []                      # ordered (param_key, label) for rendering
+    baseline_marks: Dict[str, str] = {}
+    r, p = cfg["risk"], cfg["portfolio"]
+    s = cfg.get("signals", {}) or {}
+
+    def add_runwide(param, label, points, baseline, fmt, setter):
+        groups.append((param, label))
+        baseline_marks[param] = fmt(baseline)
+        for v in _sweep_with_baseline(points, baseline):
+            c = copy.deepcopy(cfg)
+            setter(c, v)
+            tasks.append((param, fmt(v), c))
+
+    def _set(path):
+        def _s(c, v):
+            d = c
+            for k in path[:-1]:
+                d = d.setdefault(k, {})
+            d[path[-1]] = v
+        return _s
+
+    add_runwide("max_total_exposure", "Max Total Exposure", [0.5, 0.7, 0.9, 1.0],
+                p.get("max_total_exposure"), lambda v: f"{v:.0%}", _set(["portfolio", "max_total_exposure"]))
+
+    # Max position size: sweep the resolved baseline (auto = exposure / n) by multiples.
+    mpp_base = round(resolve_max_position_pct(cfg), 6)
+    add_runwide("max_position_pct", "Max Position Size",
+                [round(mpp_base * m, 6) for m in (0.5, 1.5, 2.0, 3.0)], mpp_base,
+                lambda v: f"{v:.2%}", _set(["portfolio", "max_position_pct"]))
+    add_runwide("max_new_trades_per_day", "Max New Trades / Day", [1, 2, 3, 5],
+                p.get("max_new_trades_per_day"), lambda v: str(int(v)), _set(["portfolio", "max_new_trades_per_day"]))
+    add_runwide("min_composite_score", "Min Composite Score", [None, 0.60, 0.70],
+                s.get("min_composite_score"), lambda v: "none" if v is None else f"{v:.2f}",
+                _set(["signals", "min_composite_score"]))
+    add_runwide("slippage", "Slippage", [0.0005, 0.001, 0.002, 0.005],
+                r.get("slippage"), lambda v: f"{v * 100:.2f}%", _set(["risk", "slippage"]))
+    add_runwide("reentry_recover_pct", "Re-entry Recovery Gate", [None, 0.0, 0.05, 0.10],
+                r.get("reentry_recover_pct"), lambda v: "off" if v is None else f"{v:.0%}",
+                _set(["risk", "reentry_recover_pct"]))
+
+    # Signal-weight profile (run-wide): the scenario's own weights vs fixed alternatives.
+    config_weights = s.get("weights") or _DEFAULT_WEIGHTS
+    groups.append(("signal_weights", "Signal Weight Profile"))
+    baseline_marks["signal_weights"] = "baseline"
+    for name, wts in {"baseline": config_weights, **_ALT_WEIGHT_PROFILES}.items():
+        c = copy.deepcopy(cfg)
+        c.setdefault("signals", {})["weights"] = wts
+        tasks.append(("signal_weights", name, c))
+
+    # Ticker-level exit params: overwrite the field in every nested ticker_groups spec.
+    nested = {g: spec for g, spec in (cfg.get("ticker_groups") or {}).items()
+              if isinstance(spec, dict) and "tickers" in spec}
+    if nested:
+        def add_ticker(param, label, points, fmt, field):
+            groups.append((param, label))
+            baseline_marks[param] = "as-configured"
+            for v in points:
+                c = copy.deepcopy(cfg)
+                for spec in c["ticker_groups"].values():
+                    if isinstance(spec, dict) and "tickers" in spec:
+                        spec[field] = v
+                tasks.append((param, fmt(v), c))
+
+        add_ticker("tk_stop_loss", "Ticker Stop-Loss (all names)", [0.05, 0.075, 0.10, 0.15],
+                   lambda v: f"{v:.1%}", "stop_loss")
+        add_ticker("tk_take_profit", "Ticker Take-Profit (all names)", [None, 0.15, 0.20, 0.30],
+                   lambda v: "off" if v is None else f"{v:.0%}", "take_profit")
+        add_ticker("tk_trailing_stop", "Ticker Trailing-Stop (all names)", [None, 0.10, 0.15],
+                   lambda v: "off" if v is None else f"{v:.0%}", "trailing_stop")
+        add_ticker("tk_max_holding_days", "Ticker Max-Holding (all names)", [15, 30, 60],
+                   lambda v: f"{int(v)}d", "max_holding_days")
+
+    return tasks, groups, baseline_marks, bool(nested)
+
+
+def _scenario_sensitivity_section(results, metrics, groups, baseline_marks) -> str:
+    """Render the scenario ## Sensitivity Analysis block (run-wide + ticker-level)."""
+    from collections import defaultdict
+
+    if not results:
+        return "## Sensitivity Analysis\n\n_Sensitivity analysis produced no results._\n"
+
+    grouped: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for r in results:
+        grouped[r["parameter"]].append(r)
+    b = metrics
+
+    col_header = "| Value | Return | vs SPY | vs EqWt | Max DD | Trades | Win Rate | PF |"
+    col_div = "|-------|--------|--------|--------|--------|--------|----------|-----|"
+
+    def _row(r, base):
+        mark = " ◀ baseline" if base else ""
+        pf = _b_pf(r["profit_factor"]) if r.get("profit_factor") is not None else "—"
+        return (f"| {r['value']}{mark} | {_b_pct(r.get('total_return'), '—')} "
+                f"| {_b_pct(r.get('excess_vs_spy'), '—')} | {_b_pct(r.get('excess_vs_equal_weight'), '—')} "
+                f"| {_b_pct(r.get('max_drawdown'), '—')} | {r.get('total_trades', '—')} "
+                f"| {_b_pct(r.get('win_rate'), '—')} | {pf} |")
+
+    base_row = {"value": "as-configured", "total_return": b.get("total_return"),
+                "excess_vs_spy": b.get("excess_vs_spy"),
+                "excess_vs_equal_weight": b.get("excess_vs_equal_weight"),
+                "max_drawdown": b.get("max_drawdown"), "total_trades": b.get("n_trades"),
+                "win_rate": b.get("win_rate"), "profit_factor": b.get("profit_factor")}
+
+    lines = [
+        "## Sensitivity Analysis", "",
+        "> One parameter is varied at a time; everything else stays at the scenario's configured "
+        "values. **Run-wide** params apply to the whole backtest. **Ticker** params overwrite that "
+        "exit field for *every* `ticker_groups` name at once — a uniform stand-in for the per-ticker "
+        "mix, with the real heterogeneous config shown as the `as-configured` baseline row.",
+        "> In-sample only — do not pick parameters off these tables; see Robustness Notes.", "",
+        f"**Baseline (as configured):** {_b_pct(b.get('total_return'))} return  |  "
+        f"{_b_pct(b.get('max_drawdown'))} max drawdown  |  {_b_pct(b.get('win_rate'))} win rate  |  "
+        f"{_b_pf(b.get('profit_factor'))} profit factor", "",
+    ]
+
+    runwide = [(k, l) for k, l in groups if not k.startswith("tk_")]
+    tickerg = [(k, l) for k, l in groups if k.startswith("tk_")]
+
+    if runwide:
+        lines += ["### Run-wide parameters", ""]
+    for k, label in runwide:
+        rows = grouped.get(k, [])
+        if not rows:
+            continue
+        bm = baseline_marks.get(k)
+        lines += [f"#### {label}  (baseline: {bm})", "", col_header, col_div]
+        for r in rows:
+            lines.append(_row(r, r["value"] == bm))
+        lines.append("")
+
+    if tickerg:
+        lines += ["### Ticker-level exit parameters (applied uniformly to all names)", ""]
+    for k, label in tickerg:
+        rows = grouped.get(k, [])
+        if not rows:
+            continue
+        lines += [f"#### {label}", "", col_header, col_div, _row(base_row, True)]
+        for r in rows:
+            lines.append(_row(r, False))
+        lines.append("")
+
+    sortable = sorted([r for r in results if r.get("total_return") is not None],
+                      key=lambda r: r["total_return"], reverse=True)
+    rh = "| Rank | Parameter | Value | Return | vs EqWt | Max DD | PF |"
+    rd = "|------|-----------|-------|--------|--------|--------|-----|"
+
+    def _rr(i, r):
+        pf = _b_pf(r["profit_factor"]) if r.get("profit_factor") is not None else "—"
+        return (f"| {i} | {r['parameter']} | {r['value']} | {_b_pct(r.get('total_return'), '—')} "
+                f"| {_b_pct(r.get('excess_vs_equal_weight'), '—')} | {_b_pct(r.get('max_drawdown'), '—')} | {pf} |")
+
+    lines += ["### Best 5 Variants by Total Return", "", rh, rd]
+    for i, r in enumerate(sortable[:5], 1):
+        lines.append(_rr(i, r))
+    lines.append("")
+    worst = list(reversed(sortable[-5:])) if len(sortable) >= 5 else list(reversed(sortable))
+    lines += ["### Worst 5 Variants by Total Return", "", rh, rd]
+    for i, r in enumerate(worst, 1):
+        lines.append(_rr(i, r))
+    lines += ["", "### Robustness Notes", "", _robustness_commentary(results, b.get("total_return", 0.0)), ""]
+    return "\n".join(lines)
+
+
 # ─── Runner ───────────────────────────────────────────────────────────────────
 
 
@@ -87,7 +273,8 @@ def _pct(v: Optional[float], d: str = "—") -> str:
     return d if v is None else f"{v * 100:+.2f}%"
 
 
-def run_scenario(name: str, start_date: date, end_date: date, charts: bool = True) -> Dict[str, str]:
+def run_scenario(name: str, start_date: date, end_date: date, charts: bool = True,
+                 sensitivity: bool = True) -> Dict[str, str]:
     setup_logging()
     run_date = date.today()
     root = Path(__file__).parent.parent
@@ -111,6 +298,15 @@ def run_scenario(name: str, start_date: date, end_date: date, charts: bool = Tru
               f"**Universe ({len(cfg['tickers'])}):** {', '.join(cfg['tickers'])}\n\n---\n\n")
     report = header + body
 
+    # Sensitivity analysis: run-wide params + per-ticker exit params (one-way sweep).
+    sens_results = None
+    if sensitivity:
+        tasks, sgroups, baseline_marks, has_ticker = _scenario_sensitivity_tasks(cfg)
+        log.info("Running scenario sensitivity: %d variants (run-wide + %s ticker-level)…",
+                 len(tasks), "with" if has_ticker else "no")
+        sens_results = _execute_sensitivity_tasks(tasks, price_data, start_date, end_date)
+        report += "\n\n" + _scenario_sensitivity_section(sens_results, metrics, sgroups, baseline_marks)
+
     reports_dir, backtests_dir = root / "reports", root / "backtests"
     reports_dir.mkdir(parents=True, exist_ok=True)
     backtests_dir.mkdir(parents=True, exist_ok=True)
@@ -121,6 +317,9 @@ def run_scenario(name: str, start_date: date, end_date: date, charts: bool = Tru
     trades.to_csv(trades_csv, index=False)
     equity.to_csv(backtests_dir / f"scenario_{tag}_equity.csv", index=False)
     diagnostics_csv(diag).to_csv(backtests_dir / f"scenario_{tag}_diagnostics.csv", index=False)
+    if sens_results:
+        import pandas as pd
+        pd.DataFrame(sens_results).to_csv(backtests_dir / f"scenario_{tag}_sensitivity.csv", index=False)
 
     # Per-ticker annotated charts (buy/sell + reasons vs hold), reusing the fetched panel.
     chart_dir = None
@@ -163,6 +362,7 @@ def main() -> None:
     p.add_argument("--end", metavar="YYYY-MM-DD")
     p.add_argument("--list", action="store_true", help="list available scenarios and exit")
     p.add_argument("--no-charts", action="store_true", help="skip per-ticker annotated charts")
+    p.add_argument("--no-sensitivity", action="store_true", help="skip the sensitivity analysis section")
     args = p.parse_args()
 
     if args.list or not args.name:
@@ -180,7 +380,8 @@ def main() -> None:
     if end_date <= start_date:
         print("Error: --end must be after --start")
         sys.exit(1)
-    run_scenario(args.name, start_date, end_date, charts=not args.no_charts)
+    run_scenario(args.name, start_date, end_date, charts=not args.no_charts,
+                 sensitivity=not args.no_sensitivity)
 
 
 if __name__ == "__main__":

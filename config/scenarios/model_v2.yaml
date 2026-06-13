@@ -1,0 +1,66 @@
+# ─── Scenario: model_v2 ─────────────────────────────────────────────────────
+# Full 21-name universe with a single ALL-TICKER exit override (see `risk:` below).
+#
+# How overrides layer (engine resolution order, per ticker, per exit field):
+#   1. a matching `ticker_groups` entry that sets the field   (per-ticker override)
+#   2. else the scenario `risk:` value                        (ALL-TICKER override)
+#   3. else the base config/strategy.yaml default
+# So `risk:` is the "applies to every ticker" layer; add `ticker_groups` entries
+# only when you want to override specific names on top of it.
+
+name: model_v2
+description: >
+  Full 21-name universe with one uniform exit rule applied to every ticker
+  (stop 15%, no take-profit, no trailing stop, 60-day max hold) plus the
+  trough-based anti-falling-knife re-entry gate. Composite ranking drives entries.
+
+tickers:
+  - CRWD
+  - ORCL
+  - COIN
+  - NFLX
+  - PANW
+  - GOOGL
+  - BAC
+  - MSFT
+  - AVGO
+  - AMZN
+  - COST
+  - ASML
+  - AAPL
+  - JPM
+  - TSM
+  - GS
+  - META
+  - TSLA
+  - MU
+  - AMD
+  - NVDA
+
+portfolio:
+  max_position_pct: auto          # = max_total_exposure / 21 ≈ 4.3% each
+  max_total_exposure: 0.90
+  max_new_trades_per_day: 5
+
+signals:
+  min_composite_score: null       # ranker still orders the full universe each day
+
+# ─── ALL-TICKER overrides ─────────────────────────────────────────────────────
+# Every field here applies to ALL tickers unless a ticker_groups entry overrides it.
+risk:
+  stop_loss: 0.15                 # 15% stop, anchored to entry, for every name
+  take_profit: null               # no fixed profit cap — let winners run
+  trailing_stop: null             # no trailing stop
+  max_holding_days: 60            # exit after 60 trading days
+  # Anti-falling-knife re-entry gate (trough-based): after a STOP-LOSS exit, track
+  # the name's lowest price since that stop and block re-entry until it bounces
+  # >=5% above that trough. Only fires after stops; it merely UNBLOCKS re-entry.
+  reentry_recover_pct: 0.05
+
+# Per-ticker overrides layer ON TOP of the all-ticker `risk:` block above.
+# Leave commented to apply the uniform rule to everyone. Example for one name:
+#   msft:
+#     tickers: [MSFT]
+#     stop_loss: 0.075
+#     trailing_stop: 0.10
+# ticker_groups:

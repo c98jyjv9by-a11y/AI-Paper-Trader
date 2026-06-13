@@ -43,18 +43,18 @@ ticker_groups:
   msft:
     tickers: [MSFT]
     stop_loss: 0.075
-    take_profit: null             # let winners run under the trailing stop
-    trailing_stop: 0.10
-    max_holding_days: 30
+    take_profit: 0.15            # let winners run under the trailing stop
+    trailing_stop: null
+    max_holding_days: 250
   oracle:
     tickers: [ORCL]
     stop_loss: 0.10
-    take_profit: 0.15
+    take_profit: 0.20
     trailing_stop: null
-    max_holding_days: 60
+    max_holding_days: 250
   crowdstrike:
     tickers: [CRWD]
     stop_loss: 0.10
-    take_profit: 0.15
-    trailing_stop: 0.10
-    max_holding_days: 30
+    take_profit: 0.20
+    trailing_stop: null
+    max_holding_days: 250

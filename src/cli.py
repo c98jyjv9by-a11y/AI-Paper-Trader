@@ -129,7 +129,8 @@ def _cmd_scenario(args: argparse.Namespace) -> None:
         print("Error: --start and --end are required (or use --list)")
         sys.exit(1)
     s, e = _dates(args)
-    scenarios.run_scenario(args.name, s, e, charts=not args.no_charts)
+    scenarios.run_scenario(args.name, s, e, charts=not args.no_charts,
+                           sensitivity=not args.no_sensitivity)
 
 
 def _cmd_adaptive(args: argparse.Namespace) -> None:
@@ -220,6 +221,7 @@ def build_parser() -> argparse.ArgumentParser:
     scn.add_argument("--end", metavar="YYYY-MM-DD")
     scn.add_argument("--list", action="store_true", help="list available scenarios and exit")
     scn.add_argument("--no-charts", action="store_true", help="skip the auto per-ticker charts")
+    scn.add_argument("--no-sensitivity", action="store_true", help="skip the sensitivity analysis section")
     scn.set_defaults(func=_cmd_scenario)
 
     ad = sub.add_parser("adaptive",
