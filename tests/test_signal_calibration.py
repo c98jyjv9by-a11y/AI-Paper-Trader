@@ -113,3 +113,40 @@ class TestWalkForwardAndUniverse:
         data = _panel(["X"], {"X": 100 * 1.003 ** np.arange(n)}, n)
         d0 = data["Close"].index[0].date(); d1 = data["Close"].index[-1].date()
         assert sc.calibrate_universe(data, ["X"], d0, d1, slippage=0.0) == []
+
+
+class TestCriteriaExport:
+    def _fake_results(self):
+        return [
+            {"ticker": "NVDA", "outperformance": 0.12, "param_stability": 0.75,
+             "beats_exposure_matched": True, "timed_return": 0.20, "hold_return": 0.08,
+             "modal_params": {"fast": 20, "slow": 50, "trailing": 0.15}},
+            {"ticker": "CHOP", "outperformance": -0.05, "param_stability": 0.4,
+             "beats_exposure_matched": False, "timed_return": -0.02, "hold_return": 0.03,
+             "modal_params": {"fast": 10, "slow": 50, "trailing": None}},
+        ]
+
+    def test_export_then_load_roundtrips(self, tmp_path):
+        out = tmp_path / "crit.yaml"
+        sc.export_criteria(self._fake_results(), out, date(2026, 6, 12))
+        crit = sc.load_criteria(out)
+        assert crit["NVDA"] == (20, 50, 0.15)
+        assert crit["CHOP"] == (10, 50, None)   # trailing: null → None
+
+    def test_export_flags_candidates(self, tmp_path):
+        out = tmp_path / "crit.yaml"
+        sc.export_criteria(self._fake_results(), out, date(2026, 6, 12))
+        text = out.read_text()
+        # NVDA beat exp-matched + stable → candidate true; CHOP → false
+        assert "NVDA: {fast: 20, slow: 50, trailing: 0.15, candidate: true" in text
+        assert "candidate: false" in text
+
+    def test_seed_config_loads_and_covers_universe(self):
+        root = Path(__file__).parent.parent
+        crit = sc.load_criteria(root / "config" / "ticker_timing_criteria.yaml")
+        universe = set(__import__("yaml").safe_load(
+            (root / "config" / "universe.yaml").read_text())["tickers"])
+        assert universe.issubset(set(crit))          # every universe ticker has seed criteria
+        for fast, slow, trailing in crit.values():
+            assert fast < slow                       # fast MA shorter than slow
+            assert trailing is None or 0 < trailing < 1

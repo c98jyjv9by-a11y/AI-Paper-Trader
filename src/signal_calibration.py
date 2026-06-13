@@ -39,6 +39,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+import yaml
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -440,6 +441,44 @@ def results_csv(results: List[Dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def export_criteria(results: List[Dict[str, Any]], out_path: Path, run_date: date) -> str:
+    """
+    Write the per-ticker calibrated timing rule (modal fast/slow/trailing) to a YAML
+    criteria config. `candidate: true` means the ticker beat its exposure-matched hold
+    AND had stable parameters across folds — the only ones worth an OOS retest.
+    """
+    lines = [
+        "# Per-ticker single-name timing criteria — DATA-DERIVED via walk-forward calibration.",
+        f"# Generated: {run_date.isoformat()}  (IN-SAMPLE at universe-selection level — retest OOS).",
+        "# Rule: long when close > SMA(fast) and close > SMA(slow); exit when close < SMA(fast)",
+        "#       or price falls `trailing` below its peak since entry (trailing: null disables).",
+        "# candidate: true  =>  beat exposure-matched hold AND param_stability >= 0.50.",
+        "ticker_timing_criteria:",
+    ]
+    for r in sorted(results, key=lambda x: (x.get("outperformance") or -9), reverse=True):
+        mp = r.get("modal_params", {})
+        trailing = "null" if mp.get("trailing") is None else f"{mp['trailing']}"
+        candidate = bool(r.get("beats_exposure_matched") and (r.get("param_stability") or 0) >= 0.5)
+        lines.append(
+            f"  {r['ticker']}: {{fast: {mp.get('fast')}, slow: {mp.get('slow')}, trailing: {trailing}, "
+            f"candidate: {str(candidate).lower()}, param_stability: {round(r.get('param_stability') or 0, 2)}, "
+            f"timed_return: {round(r.get('timed_return') or 0, 4)}, "
+            f"hold_return: {round(r.get('hold_return') or 0, 4)}}}"
+        )
+    out_path.write_text("\n".join(lines) + "\n")
+    return str(out_path)
+
+
+def load_criteria(path: Path) -> Dict[str, Tuple[int, int, Optional[float]]]:
+    """Read a ticker_timing_criteria YAML into {ticker: (fast, slow, trailing)}."""
+    data = yaml.safe_load(Path(path).read_text()) or {}
+    crit = data.get("ticker_timing_criteria", {}) or {}
+    out: Dict[str, Tuple[int, int, Optional[float]]] = {}
+    for ticker, spec in crit.items():
+        out[ticker] = (int(spec["fast"]), int(spec["slow"]), spec.get("trailing"))
+    return out
+
+
 def save_outputs(report: str, csv_df: pd.DataFrame, reports_dir: Path,
                  backtests_dir: Path, run_date: date) -> Dict[str, str]:
     reports_dir.mkdir(parents=True, exist_ok=True)
@@ -476,15 +515,21 @@ def run(start_date: date, end_date: date) -> Dict[str, str]:
     report = render_report(results, run_date, start_date, end_date)
     csv_df = results_csv(results)
     paths = save_outputs(report, csv_df, root / "reports", root / "backtests", run_date)
+    # Data-derived per-ticker criteria config (dated; never overwrites the seed).
+    criteria_path = root / "config" / f"ticker_timing_criteria_{run_date.isoformat()}.yaml"
+    paths["criteria"] = export_criteria(results, criteria_path, run_date)
 
     print()
     valid = [r for r in results if r.get("outperformance") is not None]
     n_beat = sum(1 for r in valid if r["outperformance"] > 0)
+    n_cand = sum(1 for r in valid if r.get("beats_exposure_matched") and (r.get("param_stability") or 0) >= 0.5)
     print(f"  Tickers calibrated : {len(valid)}")
     print(f"  Beat buy-and-hold  : {n_beat}/{len(valid)} (out-of-sample)")
+    print(f"  Candidate criteria : {n_cand}/{len(valid)} (beat exp-matched + stable params)")
     print()
-    print(f"  Report : {paths['report']}")
-    print(f"  CSV    : {paths['csv']}")
+    print(f"  Report   : {paths['report']}")
+    print(f"  CSV      : {paths['csv']}")
+    print(f"  Criteria : {paths['criteria']}")
     print("  NOTE: walk-forward OOS, but universe selection is in-sample — retest on a fresh period.")
     print()
     return paths

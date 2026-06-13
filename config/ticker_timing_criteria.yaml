@@ -1,0 +1,51 @@
+# Per-ticker single-name TIMING criteria — INITIAL SEED.
+#
+# These are STARTING hypotheses assigned by broad behaviour bucket — NOT fitted to
+# data. They are the input to validation, not a conclusion. Refine them with:
+#     python run.py calibrate --start <YYYY-MM-DD> --end <YYYY-MM-DD>
+# which writes a dated, data-derived config/ticker_timing_criteria_<date>.yaml
+# (this seed file is never overwritten).
+#
+# Rule semantics (single-name, in/out of one ticker):
+#   * Long when close > SMA(fast) AND close > SMA(slow).
+#   * Exit when close < SMA(fast), OR price falls `trailing` below its peak since
+#     entry (trailing: null disables the trailing stop).
+#
+# Bucket rationale (broad, not optimised):
+#   semiconductors / crypto-beta : high beta, big trends → wider trailing (let winners run).
+#   mega_cap_growth              : steadier trend       → slightly tighter trailing.
+#   software_cybersecurity       : gappy / event-driven → exit on MA break, no trailing.
+
+ticker_timing_criteria:
+  # ── semiconductors (20/50, trailing 15%) ──
+  NVDA: {fast: 20, slow: 50, trailing: 0.15, bucket: semiconductors}
+  AVGO: {fast: 20, slow: 50, trailing: 0.15, bucket: semiconductors}
+  AMD:  {fast: 20, slow: 50, trailing: 0.15, bucket: semiconductors}
+  MU:   {fast: 20, slow: 50, trailing: 0.15, bucket: semiconductors}
+  TSM:  {fast: 20, slow: 50, trailing: 0.15, bucket: semiconductors}
+  ASML: {fast: 20, slow: 50, trailing: 0.15, bucket: semiconductors}
+  ARM:  {fast: 20, slow: 50, trailing: 0.15, bucket: semiconductors}
+
+  # ── mega-cap growth (20/50, trailing 10%) ──
+  MSFT:  {fast: 20, slow: 50, trailing: 0.10, bucket: mega_cap_growth}
+  AAPL:  {fast: 20, slow: 50, trailing: 0.10, bucket: mega_cap_growth}
+  AMZN:  {fast: 20, slow: 50, trailing: 0.10, bucket: mega_cap_growth}
+  GOOGL: {fast: 20, slow: 50, trailing: 0.10, bucket: mega_cap_growth}
+  META:  {fast: 20, slow: 50, trailing: 0.10, bucket: mega_cap_growth}
+  TSLA:  {fast: 20, slow: 50, trailing: 0.10, bucket: mega_cap_growth}
+  NFLX:  {fast: 20, slow: 50, trailing: 0.10, bucket: mega_cap_growth}
+  COST:  {fast: 20, slow: 50, trailing: 0.10, bucket: mega_cap_growth}
+
+  # ── software / cybersecurity (10/50, no trailing — exit on MA break) ──
+  ORCL: {fast: 10, slow: 50, trailing: null, bucket: software_cybersecurity}
+  CRWD: {fast: 10, slow: 50, trailing: null, bucket: software_cybersecurity}
+  PANW: {fast: 10, slow: 50, trailing: null, bucket: software_cybersecurity}
+  CRM:  {fast: 10, slow: 50, trailing: null, bucket: software_cybersecurity}
+  NOW:  {fast: 10, slow: 50, trailing: null, bucket: software_cybersecurity}
+  ADBE: {fast: 10, slow: 50, trailing: null, bucket: software_cybersecurity}
+
+  # ── financial / crypto beta (20/50, trailing 15%) ──
+  JPM:  {fast: 20, slow: 50, trailing: 0.15, bucket: financial_crypto_beta}
+  BAC:  {fast: 20, slow: 50, trailing: 0.15, bucket: financial_crypto_beta}
+  GS:   {fast: 20, slow: 50, trailing: 0.15, bucket: financial_crypto_beta}
+  COIN: {fast: 20, slow: 50, trailing: 0.15, bucket: financial_crypto_beta}
