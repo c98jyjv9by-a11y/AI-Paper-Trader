@@ -17,6 +17,7 @@ python run.py ticker-experiments --start … --end …           # grouped ticke
 python run.py calibrate          --start … --end …           # per-ticker timing vs buy-and-hold (walk-forward)
 python run.py evaluate           --start … --end … [--criteria FILE]  # score a fixed criteria file (no re-fitting)
 python run.py active --train-start … --train-end … --test-start … --test-end …  # ticker active-vs-BH grid + portfolio, OOS
+python run.py screen --train-start … --train-end … --test-start … --test-end …  # factor screen: rank candidate signals by OOS rank-IC
 ```
 
 Per-ticker timing criteria live in `config/ticker_timing_criteria.yaml` (seed). `calibrate` writes a
