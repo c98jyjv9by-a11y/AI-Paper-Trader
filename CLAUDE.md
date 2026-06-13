@@ -19,7 +19,7 @@ python run.py evaluate           --start … --end … [--criteria FILE]  # scor
 python run.py active --train-start … --train-end … --test-start … --test-end …  # ticker active-vs-BH grid + portfolio, OOS
 python run.py screen --train-start … --train-end … --test-start … --test-end …  # factor screen: rank candidate signals by OOS rank-IC
 python run.py suite  --train-start … --train-end … --test-start … --test-end …  # run the whole stack once -> one consolidated summary report
-python run.py scenario davids_model --start … --end …                            # run a named scenario (config/scenarios/<name>.yaml)
+python run.py scenario davids_model --start … --end …                            # run a named scenario (config/scenarios/<name>.yaml); incl. sensitivity (run-wide + per-ticker exit params); --no-sensitivity / --no-charts to skip
 python run.py adaptive --start … --end … [--rebalance-days N --lookback-days N --top-n N]  # per-ticker weekly rotating-signal backtest (auto-writes per-ticker charts; --no-charts to skip)
 ```
 

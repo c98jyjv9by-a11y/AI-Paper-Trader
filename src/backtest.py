@@ -954,11 +954,11 @@ _ALT_WEIGHT_PROFILES: Dict[str, Dict[str, float]] = {
 # merged into its sweep at runtime (see _sweep_with_baseline), so changing a value
 # in strategy.yaml automatically adds it to the table and flags it as the baseline.
 _SENSITIVITY_TEST_POINTS: Dict[str, List[Optional[float]]] = {
-    "stop_loss": [0.03, 0.05, 0.075, 0.10],
-    "take_profit": [0.08, 0.10, 0.15],
+    "stop_loss": [0.03, 0.05, 0.075, 0.10, 0.15, 0.20],
+    "take_profit": [0.08, 0.10, 0.15, 0.30, 0.50],
     "max_holding_days": [5, 15, 30, 60],
-    "max_new_trades_per_day": [1, 2, 3, 5],
-    "min_composite_score": [None, 0.60, 0.70, 0.80],
+    "max_new_trades_per_day": [1, 3, 5, 8, 10],
+    "min_composite_score": [None, 0.20, 0.70, 0.80],
 }
 
 
@@ -1058,25 +1058,21 @@ def _build_sensitivity_tasks(baseline_config: Dict[str, Any]) -> List[Tuple[str,
     return tasks
 
 
-def _run_sensitivity_variants(
-    baseline_config: Dict[str, Any],
+def _execute_sensitivity_tasks(
+    tasks: List[Tuple[str, str, Dict[str, Any]]],
     price_data: pd.DataFrame,
     start_date: date,
     end_date: date,
 ) -> List[Dict[str, Any]]:
     """
-    One-way sensitivity analysis: vary one parameter at a time, all others held at
-    the live config baseline.
-
-    Each numeric sweep merges a fixed set of test points with the current baseline
-    value from config/strategy.yaml, so the report stays correct as you edit
-    baselines. Variants are independent full backtests, so they run across a process
-    pool (set BACKTEST_SERIAL=1 to force single-process). deepcopy keeps
-    baseline_config unmutated. Returns summary metric dicts only — no per-run trade
-    logs or equity curves are retained. Result order matches task order regardless
-    of execution mode, so the report is deterministic.
+    Run a prebuilt list of (parameter, display_value, config) variant tasks and return
+    their summary-metric dicts. Variants are independent full backtests, so they run
+    across a process pool (set BACKTEST_SERIAL=1 to force single-process). Result order
+    matches task order regardless of execution mode, so the report is deterministic.
+    Shared by the default one-way sweep and scenario-specific sweeps.
     """
-    tasks = _build_sensitivity_tasks(baseline_config)
+    if not tasks:
+        return []
 
     force_serial = os.environ.get("BACKTEST_SERIAL") == "1"
     max_workers = min(len(tasks), os.cpu_count() or 1, 8)
@@ -1089,19 +1085,35 @@ def _run_sensitivity_variants(
                 initargs=(price_data, start_date, end_date),
             ) as executor:
                 results = [r for r in executor.map(_run_variant, tasks) if r is not None]
-            log.info(
-                "Sensitivity analysis: %d/%d variants across %d workers",
-                len(results), len(tasks), max_workers,
-            )
+            log.info("Sensitivity analysis: %d/%d variants across %d workers",
+                     len(results), len(tasks), max_workers)
             return results
         except Exception as exc:  # pragma: no cover - environment-dependent
             log.warning("Parallel sensitivity unavailable (%s) — running serially", exc)
 
-    # Serial fallback (also the path when BACKTEST_SERIAL=1 or a single CPU).
     _sensitivity_pool_init(price_data, start_date, end_date)
     results = [r for r in (_run_variant(t) for t in tasks) if r is not None]
     log.info("Sensitivity analysis: %d/%d variants (serial)", len(results), len(tasks))
     return results
+
+
+def _run_sensitivity_variants(
+    baseline_config: Dict[str, Any],
+    price_data: pd.DataFrame,
+    start_date: date,
+    end_date: date,
+) -> List[Dict[str, Any]]:
+    """
+    One-way sensitivity analysis: vary one parameter at a time, all others held at
+    the live config baseline.
+
+    Each numeric sweep merges a fixed set of test points with the current baseline
+    value from config/strategy.yaml, so the report stays correct as you edit
+    baselines. deepcopy keeps baseline_config unmutated. Returns summary metric dicts
+    only — no per-run trade logs or equity curves are retained.
+    """
+    return _execute_sensitivity_tasks(
+        _build_sensitivity_tasks(baseline_config), price_data, start_date, end_date)
 
 
 def _robustness_commentary(
@@ -1302,6 +1314,11 @@ def _pf(v: Optional[float]) -> str:
     return "N/A (no losses)" if v is None or pd.isna(v) else f"{v:.2f}"
 
 
+def _pct_or_none(v: Optional[float]) -> str:
+    """Format a fraction as a percent, or 'none' when the rule is disabled (None)."""
+    return "none" if v is None or pd.isna(v) else f"{v * 100:.1f}%"
+
+
 def _bench_end_balance(m: Dict[str, Any], return_key: str) -> Optional[float]:
     """What the starting portfolio would be worth fully invested in a benchmark."""
     sv = m.get("starting_value")
@@ -1410,8 +1427,9 @@ def generate_backtest_report(
         f"| Max Position Size | {max_pos_label} |",
         f"| Max Total Exposure | {p.get('max_total_exposure', 0) * 100:.0f}% |",
         f"| Max New Trades / Day | {p.get('max_new_trades_per_day')} |",
-        f"| Stop Loss | {r.get('stop_loss', 0) * 100:.0f}% |",
-        f"| Take Profit | {r.get('take_profit', 0) * 100:.0f}% |",
+        f"| Stop Loss | {_pct_or_none(r.get('stop_loss'))} |",
+        f"| Take Profit | {_pct_or_none(r.get('take_profit'))} |",
+        f"| Trailing Stop | {_pct_or_none(r.get('trailing_stop'))} |",
         f"| Max Holding Period | {r.get('max_holding_days')} trading days |",
         f"| Slippage | {r.get('slippage', 0) * 100:.2f}% per fill |",
         "",

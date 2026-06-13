@@ -14,10 +14,10 @@ signals:
   top_candidates: 10             # keep unchanged; still review enough names before filters
   min_composite_score: 0.70      # modest quality filter; 0.80 helped more but may be too restrictive
   weights:                       # more volume confirmation; best signal-weight profile
-    return_1d: 0.10
-    return_5d: 0.25
-    return_20d: 0.30
-    vol_ratio: 0.35
+    return_1d: 0.05
+    return_5d: 0.35
+    return_20d: 0.40
+    vol_ratio: 0.20
 
 data:
   period: "90d"                  # keep unchanged for now

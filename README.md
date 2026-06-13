@@ -21,7 +21,7 @@ Everything runs through one front door — `python run.py <command>`:
 | `run.py active --train-start … --train-end … --test-start … --test-end …` | Per-ticker active-vs-buy-and-hold over a fixed rule grid, build a portfolio of eligible tickers, validate out-of-sample |
 | `run.py screen --train-start … --train-end … --test-start … --test-end …` | Factor discovery — rank candidate signals by out-of-sample predictive power (rank-IC); no trading |
 | `run.py suite --train-start … --train-end … --test-start … --test-end …` | **Runs the whole stack once → one consolidated summary report** with the salient takeaway from every stage + an auto verdict |
-| `run.py scenario <name> --start … --end … [--no-charts]` | Run a **named scenario** (trimmed universe + per-ticker rules from `config/scenarios/<name>.yaml`), e.g. `davids_model`. Auto-writes per-ticker annotated charts (buy/sell reasons vs hold). `--list` shows available |
+| `run.py scenario <name> --start … --end … [--no-charts] [--no-sensitivity]` | Run a **named scenario** (custom universe + all-ticker / per-ticker rules from `config/scenarios/<name>.yaml`), e.g. `davids_model`, `model_v2`. Report includes a **sensitivity analysis** (run-wide params: exposure, position size, trades/day, min-score, slippage, re-entry gate, weights; plus ticker-level exit params swept uniformly). Auto-writes per-ticker annotated charts (buy/sell reasons vs hold). `--list` shows available |
 | `run.py adaptive --start … --end … [--rebalance-days N --lookback-days N --top-n N] [--no-charts]` | **Adaptive rotating-signal backtest** — weekly, each ticker trades its recently-best signal or sits in cash; reports a signal-rotation log and **auto-writes per-ticker annotated price charts** (buy/sell reasons vs buy-and-hold). High-turnover, overfit-prone — validate OOS. |
 
 All share the same signal engine, risk rules, slippage, sizing, and exposure limits from `config/strategy.yaml`. No API keys required. Each command is also runnable directly (e.g. `python src/backtest.py …`); `run.py` just centralises them. Run `python run.py -h` for the full list.
@@ -121,9 +121,10 @@ Optional, default-off knobs: `entry_filters.qqq_above_ma` (regime filter), `risk
 ai-paper-trader/
 ├── run.py                     # unified entry point → src/cli.py
 ├── config/
-│   ├── universe.yaml          # 25-ticker universe (large-caps + semis)
+│   ├── universe.yaml          # 21-ticker universe (large-caps + semis)
 │   ├── strategy.yaml          # all risk/signal params, ticker_groups, entry filters
-│   └── ticker_timing_criteria.yaml   # seed per-ticker timing rules (see calibrate/evaluate)
+│   ├── ticker_timing_criteria.yaml   # seed per-ticker timing rules (see calibrate/evaluate)
+│   └── scenarios/             # named scenarios (e.g. davids_model.yaml, model_v2.yaml)
 ├── data/                      # LIVE paper state — only the daily agent writes here
 │   ├── trade_log.csv          # append-only audit log
 │   ├── positions.csv          # open paper positions
@@ -144,8 +145,13 @@ ai-paper-trader/
 │   ├── experiments.py         # strategy-variant profiles vs benchmarks
 │   ├── ticker_experiments.py  # grouped ticker assumptions vs capital-matched buy-and-hold
 │   ├── signal_calibration.py  # per-ticker single-name timing (walk-forward) + evaluate
-│   └── active_experiment.py   # ticker active-vs-BH grid + eligible-ticker portfolio (OOS)
-├── tests/                     # 177 tests, no network calls (one file per module)
+│   ├── active_experiment.py   # ticker active-vs-BH grid + eligible-ticker portfolio (OOS)
+│   ├── signal_screen.py       # factor rank-IC discovery (no trading)
+│   ├── research_suite.py      # runs the whole stack → one consolidated summary report
+│   ├── scenarios.py           # named-scenario loader/overlay + scenario backtest + sensitivity
+│   ├── scenario_charts.py     # per-ticker annotated price charts (buy/sell vs hold)
+│   └── adaptive_backtest.py   # weekly per-ticker rotating-signal backtest
+├── tests/                     # 225 tests, no network calls (one file per module)
 ├── requirements.txt
 ├── .env.example
 └── CLAUDE.md
@@ -259,11 +265,13 @@ signals:
 
 Changes take effect on the next run of any command.
 
+**Named scenarios** — `config/scenarios/<name>.yaml` overlays the base config (custom `tickers`, plus `portfolio`/`signals`/`risk`/`ticker_groups` overrides). Exit fields resolve per ticker in this order: a matching `ticker_groups` entry → the scenario `risk:` block (the **all-ticker** override layer) → the base `strategy.yaml` default. So `risk:` is where you set a rule for *every* name at once; add `ticker_groups` only to override specific names on top. Run with `python run.py scenario <name> --start … --end …`.
+
 ---
 
 ## Tests
 
-177 tests, no network calls (all use synthetic data):
+225 tests, no network calls (all use synthetic data):
 
 ```bash
 pytest tests/ -v

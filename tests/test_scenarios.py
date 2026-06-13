@@ -50,6 +50,70 @@ class TestMerge:
         assert base["portfolio"]["max_total_exposure"] == 0.75
 
 
+class TestSensitivityTasks:
+    """The scenario sensitivity task builder (pure — no backtests run here)."""
+
+    def _cfg(self):
+        return {
+            "tickers": ["A", "B"],
+            "portfolio": {"starting_value": 100000.0, "max_position_pct": "auto",
+                          "max_total_exposure": 0.90, "max_new_trades_per_day": 3},
+            "risk": {"stop_loss": 0.075, "take_profit": None, "max_holding_days": 30,
+                     "slippage": 0.001, "reentry_recover_pct": 0.05},
+            "signals": {"min_composite_score": None, "weights": {"return_5d": 1.0}},
+            "ticker_groups": {
+                "a": {"tickers": ["A"], "stop_loss": 0.075, "take_profit": None,
+                      "trailing_stop": 0.10, "max_holding_days": 30},
+                "b": {"tickers": ["B"], "stop_loss": 0.10, "take_profit": 0.20,
+                      "trailing_stop": None, "max_holding_days": 60},
+            },
+        }
+
+    def test_runwide_and_ticker_groups_present(self):
+        tasks, groups, marks, has_ticker = sc._scenario_sensitivity_tasks(self._cfg())
+        keys = {g[0] for g in groups}
+        assert {"max_total_exposure", "max_position_pct", "max_new_trades_per_day",
+                "min_composite_score", "slippage", "reentry_recover_pct", "signal_weights"}.issubset(keys)
+        assert {"tk_stop_loss", "tk_take_profit", "tk_trailing_stop", "tk_max_holding_days"}.issubset(keys)
+        assert has_ticker is True
+        assert len(tasks) > 20
+
+    def test_baseline_included_in_runwide_sweep(self):
+        tasks, groups, marks, _ = sc._scenario_sensitivity_tasks(self._cfg())
+        # baseline exposure (90%) must appear among the swept values for that param
+        exp_vals = [v for (param, v, _c) in tasks if param == "max_total_exposure"]
+        assert marks["max_total_exposure"] == "90%"
+        assert "90%" in exp_vals
+
+    def test_ticker_variant_overwrites_every_group(self):
+        tasks, _g, _m, _h = sc._scenario_sensitivity_tasks(self._cfg())
+        # a tk_stop_loss=15% variant sets BOTH groups' stop_loss to 0.15
+        variant = next(c for (param, v, c) in tasks if param == "tk_stop_loss" and v == "15.0%")
+        stops = {spec["stop_loss"] for spec in variant["ticker_groups"].values()}
+        assert stops == {0.15}
+
+    def test_max_position_size_swept_by_multiples(self):
+        # baseline resolves to max_total_exposure / n = 0.90 / 2 = 0.45; sweep = ×0.5..×3.0
+        tasks, _g, marks, _h = sc._scenario_sensitivity_tasks(self._cfg())
+        vals = sorted(round(c["portfolio"]["max_position_pct"], 6)
+                      for (param, _v, c) in tasks if param == "max_position_pct")
+        assert vals == [0.225, 0.45, 0.675, 0.90, 1.35]      # 0.5,1.0,1.5,2.0,3.0 × 0.45
+        assert marks["max_position_pct"] == "45.00%"
+
+    def test_no_ticker_groups_means_no_ticker_sweeps(self):
+        cfg = self._cfg()
+        cfg["ticker_groups"] = {}
+        tasks, groups, _m, has_ticker = sc._scenario_sensitivity_tasks(cfg)
+        assert has_ticker is False
+        assert not any(g[0].startswith("tk_") for g in groups)
+
+    def test_source_cfg_not_mutated(self):
+        cfg = self._cfg()
+        sc._scenario_sensitivity_tasks(cfg)
+        assert cfg["portfolio"]["max_total_exposure"] == 0.90       # untouched
+        assert cfg["ticker_groups"]["a"]["stop_loss"] == 0.075
+
+
 class TestLoading:
     def test_davids_model_loads_and_is_valid(self):
         assert "davids_model" in sc.list_scenarios()
@@ -66,14 +130,20 @@ class TestLoading:
             sc.load_scenario("does_not_exist")
 
     def test_built_config_applies_per_ticker_overrides(self):
-        # build_config + the backtest override resolver should yield per-ticker exits
+        # build_config + the backtest override resolver should yield per-ticker exits.
+        # Assert the resolution MECHANISM against whatever the YAML declares (the values
+        # are user-tunable), not hardcoded numbers.
         from backtest import _build_ticker_overrides
         base = {"tickers": ["MSFT", "ORCL", "CRWD"], "portfolio": {}, "risk": {}, "signals": {}}
-        cfg = sc.build_config(base, sc.load_scenario("davids_model"))
+        scen = sc.load_scenario("davids_model")
+        cfg = sc.build_config(base, scen)
         ov = _build_ticker_overrides(cfg)
-        # Per-ticker resolution mechanism (stable design choices, not the tunable TP values):
         assert set(ov) == {"MSFT", "ORCL", "CRWD"}
-        assert ov["MSFT"]["trailing_stop"] == 0.10            # MSFT/CRWD use a trailing stop
-        assert ov["CRWD"]["trailing_stop"] == 0.10
-        assert ov["ORCL"]["trailing_stop"] is None            # ORCL deliberately has none
-        assert all("stop_loss" in ov[t] for t in ("MSFT", "ORCL", "CRWD"))
+        # Each ticker resolves to exactly the exit fields its own group declares.
+        for spec in scen["ticker_groups"].values():
+            for tk in spec["tickers"]:
+                assert "stop_loss" in ov[tk]                  # stop is always set per name
+                if "trailing_stop" in spec:
+                    assert ov[tk]["trailing_stop"] == spec["trailing_stop"]
+                if "take_profit" in spec:
+                    assert ov[tk]["take_profit"] == spec["take_profit"]

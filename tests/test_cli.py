@@ -40,7 +40,8 @@ def captured(monkeypatch):
     monkeypatch.setattr(research_suite, "run",
                         lambda ts, te, vs, ve: calls.update(cmd="suite", ts=ts, te=te, vs=vs, ve=ve))
     monkeypatch.setattr(scenarios, "run_scenario",
-                        lambda name, s, e, charts=True: calls.update(cmd="scenario", name=name, s=s, e=e, charts=charts))
+                        lambda name, s, e, charts=True, sensitivity=True: calls.update(
+                            cmd="scenario", name=name, s=s, e=e, charts=charts, sensitivity=sensitivity))
     monkeypatch.setattr(adaptive_backtest, "run",
                         lambda s, e, rb=None, lb=None, tn=None, charts=True: calls.update(
                             cmd="adaptive", s=s, e=e, rb=rb, lb=lb, tn=tn, charts=charts))
@@ -129,6 +130,13 @@ def test_scenario_dispatch(captured):
     assert captured["cmd"] == "scenario"
     assert captured["name"] == "davids_model"
     assert captured["s"] == date(2024, 1, 1) and captured["e"] == date(2025, 12, 31)
+    assert captured["sensitivity"] is True            # sensitivity on by default
+
+
+def test_scenario_no_sensitivity_flag(captured):
+    cli.main(["scenario", "davids_model", "--start", "2024-01-01", "--end", "2025-12-31",
+              "--no-sensitivity"])
+    assert captured["sensitivity"] is False
 
 
 def test_scenario_list_does_not_run(captured):
