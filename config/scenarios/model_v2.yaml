@@ -36,26 +36,40 @@ tickers:
   - MU
   - AMD
   - NVDA
+  # ── Dispersion / diversification adds (uncorrelated sectors + momentum leaders) ──
+  - LLY                            # healthcare megatrend — near-zero tech correlation
+  - VST                            # AI-power utility — momentum, new sector (listed 2021)
+  - AXON                           # defense/public-safety tech — persistent uptrend
+  - GE                             # industrials turnaround — low tech beta
+  - PLTR                           # high-octane momentum (high vol, fat right tail)
+  - OXY                            # energy diversifier — anti-correlated to tech
+  # ── Adversarial / anti-survivorship laggards (test ranker discrimination) ──
+  - INTC                           # semis loser vs NVDA/AMD — down ~60%, dividend cut
+  - BA                             # industrials loser vs GE — door-plug + strike decline
+  - PFE                            # healthcare loser vs LLY — post-COVID downtrend
+  - PYPL                           # broken-growth fintech — long laggard off 2021 peak
+  - SEDG                           # solar collapse (~-95%) — falling-knife stress test
+  - PLUG                           # green-hydrogen collapse (~-95%) — extreme left tail
 
 portfolio:
-  max_position_pct: auto          # = max_total_exposure / 21 ≈ 4.3% each
+  max_position_pct: 0.085         # manual per-name cap (33-name universe)
   max_total_exposure: 0.90
-  max_new_trades_per_day: 5
+  max_new_trades_per_day: 3
 
 signals:
-  min_composite_score: null       # ranker still orders the full universe each day
+  min_composite_score: 0.70      # ranker still orders the full universe each day
 
 # ─── ALL-TICKER overrides ─────────────────────────────────────────────────────
 # Every field here applies to ALL tickers unless a ticker_groups entry overrides it.
 risk:
   stop_loss: 0.15                 # 15% stop, anchored to entry, for every name
-  take_profit: null               # no fixed profit cap — let winners run
+  take_profit: null              # no fixed profit cap — let winners run
   trailing_stop: null             # no trailing stop
-  max_holding_days: 60            # exit after 60 trading days
+  max_holding_days: 90            # exit after 60 trading days
   # Anti-falling-knife re-entry gate (trough-based): after a STOP-LOSS exit, track
   # the name's lowest price since that stop and block re-entry until it bounces
   # >=5% above that trough. Only fires after stops; it merely UNBLOCKS re-entry.
-  reentry_recover_pct: 0.05
+  reentry_recover_pct: 0.10
 
 # Per-ticker overrides layer ON TOP of the all-ticker `risk:` block above.
 # Leave commented to apply the uniform rule to everyone. Example for one name:

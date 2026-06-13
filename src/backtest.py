@@ -957,7 +957,7 @@ _SENSITIVITY_TEST_POINTS: Dict[str, List[Optional[float]]] = {
     "stop_loss": [0.03, 0.05, 0.075, 0.10, 0.15, 0.20],
     "take_profit": [0.08, 0.10, 0.15, 0.30, 0.50],
     "max_holding_days": [5, 15, 30, 60],
-    "max_new_trades_per_day": [1, 3, 5, 10],
+    "max_new_trades_per_day": [1, 3, 5, 8, 10],
     "min_composite_score": [None, 0.20, 0.70, 0.80],
 }
 
