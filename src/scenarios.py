@@ -87,7 +87,7 @@ def _pct(v: Optional[float], d: str = "—") -> str:
     return d if v is None else f"{v * 100:+.2f}%"
 
 
-def run_scenario(name: str, start_date: date, end_date: date) -> Dict[str, str]:
+def run_scenario(name: str, start_date: date, end_date: date, charts: bool = True) -> Dict[str, str]:
     setup_logging()
     run_date = date.today()
     root = Path(__file__).parent.parent
@@ -117,9 +117,22 @@ def run_scenario(name: str, start_date: date, end_date: date) -> Dict[str, str]:
     tag = f"{name}_{run_date.isoformat()}"
     md = reports_dir / f"scenario_{tag}.md"
     md.write_text(report)
-    trades.to_csv(backtests_dir / f"scenario_{tag}_trades.csv", index=False)
+    trades_csv = backtests_dir / f"scenario_{tag}_trades.csv"
+    trades.to_csv(trades_csv, index=False)
     equity.to_csv(backtests_dir / f"scenario_{tag}_equity.csv", index=False)
     diagnostics_csv(diag).to_csv(backtests_dir / f"scenario_{tag}_diagnostics.csv", index=False)
+
+    # Per-ticker annotated charts (buy/sell + reasons vs hold), reusing the fetched panel.
+    chart_dir = None
+    if charts and not trades.empty:
+        try:
+            import scenario_charts
+            chart_dir = reports_dir / f"charts_{tag}"
+            n = len(scenario_charts.make_charts(trades_csv, chart_dir, name, close=price_data["Close"]))
+            log.info("Wrote %d per-ticker charts to %s", n, chart_dir)
+        except Exception as exc:                       # charts are a nicety; never fail the run
+            log.warning("Chart generation skipped: %s", exc)
+            chart_dir = None
 
     print()
     print(f"  Scenario     : {scenario.get('name', name)}  ({len(cfg['tickers'])} tickers)")
@@ -131,8 +144,13 @@ def run_scenario(name: str, start_date: date, end_date: date) -> Dict[str, str]:
     print(f"  Beat EW-Hold : {'YES' if (metrics.get('total_return') or -9) > (metrics.get('equal_weight_return') or 9) else 'no'}")
     print()
     print(f"  Report : {md}")
+    if chart_dir is not None:
+        print(f"  Charts : {chart_dir}  (per-ticker price + buy/sell reasons vs hold)")
     print()
-    return {"report": str(md)}
+    out = {"report": str(md)}
+    if chart_dir is not None:
+        out["charts"] = str(chart_dir)
+    return out
 
 
 # ─── CLI ──────────────────────────────────────────────────────────────────────
@@ -144,6 +162,7 @@ def main() -> None:
     p.add_argument("--start", metavar="YYYY-MM-DD")
     p.add_argument("--end", metavar="YYYY-MM-DD")
     p.add_argument("--list", action="store_true", help="list available scenarios and exit")
+    p.add_argument("--no-charts", action="store_true", help="skip per-ticker annotated charts")
     args = p.parse_args()
 
     if args.list or not args.name:
@@ -161,7 +180,7 @@ def main() -> None:
     if end_date <= start_date:
         print("Error: --end must be after --start")
         sys.exit(1)
-    run_scenario(args.name, start_date, end_date)
+    run_scenario(args.name, start_date, end_date, charts=not args.no_charts)
 
 
 if __name__ == "__main__":

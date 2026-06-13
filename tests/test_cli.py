@@ -40,7 +40,7 @@ def captured(monkeypatch):
     monkeypatch.setattr(research_suite, "run",
                         lambda ts, te, vs, ve: calls.update(cmd="suite", ts=ts, te=te, vs=vs, ve=ve))
     monkeypatch.setattr(scenarios, "run_scenario",
-                        lambda name, s, e: calls.update(cmd="scenario", name=name, s=s, e=e))
+                        lambda name, s, e, charts=True: calls.update(cmd="scenario", name=name, s=s, e=e, charts=charts))
     monkeypatch.setattr(adaptive_backtest, "run",
                         lambda s, e, rb=None, lb=None, tn=None, charts=True: calls.update(
                             cmd="adaptive", s=s, e=e, rb=rb, lb=lb, tn=tn, charts=charts))

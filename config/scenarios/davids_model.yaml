@@ -31,23 +31,35 @@ portfolio:
 signals:
   min_composite_score: null       # 3-name universe — no quality filter to apply
 
+# Strength gate: only enter a name within 10% of its 52-week high — avoids buying
+# falling knives / rebuying right after a stop-out into a continuing decline. In the
+# 2021–2026 A/B this halved max drawdown (−37%→−16%) and was best on return/DD.
+entry_filters:
+  near_52w_high: 0.90
+
 # Per-ticker exit/sizing rules (one group per ticker → true per-ticker overrides).
 ticker_groups:
   msft:
     tickers: [MSFT]
     stop_loss: 0.075
-    take_profit: 0.25             # let winners run under the trailing stop
+    take_profit: null             # let winners run under the trailing stop
     trailing_stop: 0.10
     max_holding_days: 30
   oracle:
     tickers: [ORCL]
     stop_loss: 0.10
-    take_profit: 0.25
-    trailing_stop: 0.075
+    take_profit: 0.15
+    trailing_stop: null
     max_holding_days: 60
   crowdstrike:
     tickers: [CRWD]
     stop_loss: 0.10
-    take_profit: 0.25
+    take_profit: 0.15
+    trailing_stop: 0.10
+    max_holding_days: 30
+  tesla:
+    tickers: [ TSLA ]
+    stop_loss: 0.10
+    take_profit: 0.15
     trailing_stop: 0.10
     max_holding_days: 30
