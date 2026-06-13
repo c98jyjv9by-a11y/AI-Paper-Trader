@@ -150,3 +150,40 @@ class TestCriteriaExport:
         for fast, slow, trailing in crit.values():
             assert fast < slow                       # fast MA shorter than slow
             assert trailing is None or 0 < trailing < 1
+
+
+class TestEvaluateCriteria:
+    def test_evaluate_applies_fixed_rule(self):
+        n = 400
+        dates = pd.date_range("2021-01-01", periods=n, freq="B")
+        closes = {
+            "UP": 100 * 1.004 ** np.arange(n),                    # steady uptrend
+            "DN": 100 * 0.997 ** np.arange(n),                    # steady downtrend
+        }
+        cl = pd.DataFrame(closes, index=dates)
+        vol = pd.DataFrame({t: np.full(n, 1e6) for t in closes}, index=dates)
+        cl.columns = pd.MultiIndex.from_product([["Close"], cl.columns])
+        vol.columns = pd.MultiIndex.from_product([["Volume"], vol.columns])
+        data = pd.concat([cl, vol], axis=1)
+        criteria = {"UP": (20, 50, 0.15), "DN": (20, 50, 0.15)}
+        d0, d1 = dates[0].date(), dates[-1].date()
+        res = sc.evaluate_criteria(data, criteria, d0, d1, slippage=0.001)
+        by = {r["ticker"]: r for r in res}
+        assert by["UP"]["timed_return"] > 0                       # trend rule rides the uptrend
+        assert by["DN"]["avg_frac_long"] < 0.2                    # rule stays out of the downtrend
+        # modal_params echo the fixed criteria (no re-fitting)
+        assert by["UP"]["modal_params"] == {"fast": 20, "slow": 50, "trailing": 0.15}
+
+    def test_render_evaluation_sections(self):
+        n = 400
+        dates = pd.date_range("2021-01-01", periods=n, freq="B")
+        cl = pd.DataFrame({"UP": 100 * 1.004 ** np.arange(n)}, index=dates)
+        vol = pd.DataFrame({"UP": np.full(n, 1e6)}, index=dates)
+        cl.columns = pd.MultiIndex.from_product([["Close"], cl.columns])
+        vol.columns = pd.MultiIndex.from_product([["Volume"], vol.columns])
+        data = pd.concat([cl, vol], axis=1)
+        d0, d1 = dates[0].date(), dates[-1].date()
+        res = sc.evaluate_criteria(data, {"UP": (20, 50, 0.15)}, d0, d1, 0.001)
+        md = sc.render_evaluation(res, "seed.yaml", date(2026, 6, 12), d0, d1)
+        assert "Criteria Evaluation" in md and "no parameter search" in md.lower()
+        assert "Beats Exp-Matched" in md

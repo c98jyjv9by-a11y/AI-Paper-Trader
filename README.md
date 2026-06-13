@@ -17,6 +17,7 @@ Everything runs through one front door — `python run.py <command>`:
 | `run.py experiments --start … --end …` | Strategy experiment profiles (signal/exit variants) vs benchmarks |
 | `run.py ticker-experiments --start … --end …` | Grouped ticker-aware assumptions vs the capital-matched buy-and-hold test |
 | `run.py calibrate --start … --end …` | Per-ticker single-name timing vs buy-and-hold, walk-forward (out-of-sample) |
+| `run.py evaluate --start … --end … [--criteria FILE]` | Apply a fixed per-ticker criteria file and score timed vs buy-and-hold (no re-fitting) |
 
 All share the same signal engine, risk rules, slippage, sizing, and exposure limits from `config/strategy.yaml`. No API keys required. Each command is also runnable directly (e.g. `python src/backtest.py …`); `run.py` just centralises them. Run `python run.py -h` for the full list.
 

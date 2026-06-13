@@ -25,6 +25,8 @@ def captured(monkeypatch):
     monkeypatch.setattr(experiments, "run", lambda s, e, o=None: calls.update(cmd="experiments", s=s, e=e, o=o))
     monkeypatch.setattr(ticker_experiments, "run", lambda s, e: calls.update(cmd="ticker", s=s, e=e))
     monkeypatch.setattr(signal_calibration, "run", lambda s, e: calls.update(cmd="calibrate", s=s, e=e))
+    monkeypatch.setattr(signal_calibration, "run_evaluate",
+                        lambda s, e, c: calls.update(cmd="evaluate", s=s, e=e, crit=c))
     monkeypatch.setattr(agent, "main", lambda: calls.update(cmd="agent"))
     return calls
 
@@ -56,6 +58,18 @@ def test_calibrate_dispatch(captured):
     assert captured["cmd"] == "calibrate"
 
 
+def test_evaluate_dispatch_default_criteria(captured):
+    cli.main(["evaluate", "--start", "2024-01-01", "--end", "2024-12-31"])
+    assert captured["cmd"] == "evaluate"
+    assert captured["crit"].name == "ticker_timing_criteria.yaml"   # default seed
+
+
+def test_evaluate_dispatch_explicit_criteria(captured):
+    cli.main(["evaluate", "--start", "2024-01-01", "--end", "2024-12-31",
+              "--criteria", "/tmp/my_crit.yaml"])
+    assert captured["crit"] == Path("/tmp/my_crit.yaml")
+
+
 def test_agent_dispatch(captured):
     cli.main(["agent"])
     assert captured["cmd"] == "agent"
@@ -83,4 +97,5 @@ def test_all_subcommands_registered():
     for action in parser._actions:
         if hasattr(action, "choices") and action.choices:
             choices.update(action.choices.keys())
-    assert {"backtest", "experiments", "ticker-experiments", "calibrate", "agent"}.issubset(choices)
+    assert {"backtest", "experiments", "ticker-experiments", "calibrate",
+            "evaluate", "agent"}.issubset(choices)

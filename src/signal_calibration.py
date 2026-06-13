@@ -286,6 +286,68 @@ def calibrate_universe(price_data: pd.DataFrame, tickers: List[str],
     return results
 
 
+# ─── Evaluate fixed criteria (no re-fitting) ──────────────────────────────────
+
+
+def evaluate_criteria(price_data: pd.DataFrame, criteria: Dict[str, Tuple[int, int, Optional[float]]],
+                      start_date: date, end_date: date, slippage: float) -> List[Dict[str, Any]]:
+    """
+    Apply a FIXED per-ticker rule (fast, slow, trailing) over [start, end] and score
+    each ticker timed-vs-buy-and-hold. No parameter search — this evaluates criteria
+    exactly as given (e.g. the seed, or a calibrated set on a held-out window).
+    """
+    close_panel = price_data["Close"]
+    all_ts = close_panel.index
+    in_window = [(i, ts) for i, ts in enumerate(all_ts) if start_date <= ts.date() <= end_date]
+    if not in_window:
+        return []
+    win_first, win_last = in_window[0][0], in_window[-1][0]
+
+    results: List[Dict[str, Any]] = []
+    for ticker, (fast, slow, trailing) in criteria.items():
+        if ticker not in close_panel.columns:
+            continue
+        series = close_panel[ticker]
+        close = series.to_numpy()
+        sma = {w: series.rolling(w).mean().to_numpy() for w in {fast, slow}}
+        valid = np.where(~np.isnan(close[: win_last + 1]))[0]
+        if valid.size == 0:
+            continue
+        a = max(win_first, int(valid[0]), slow)   # warm up the slow MA before deciding
+        b = win_last
+        if b - a < 5:
+            continue
+
+        res = _simulate(close, a, b, sma, fast, slow, trailing, slippage)
+        timed_total, timed_daily, frac = res["total_return"], res["daily_returns"], res["frac_long"]
+        n_oos = len(timed_daily) + 1
+        hold_total = _hold_return(close, a, b)
+        hc = close[a: b + 1]
+        hold_daily = hc[1:] / hc[:-1] - 1.0 if len(hc) > 1 else np.array([])
+        timed_dd, hold_dd = _max_drawdown(timed_daily), _max_drawdown(hold_daily)
+        exp = (frac * hold_total) if hold_total is not None and not np.isnan(hold_total) else None
+
+        results.append({
+            "ticker": ticker,
+            "timed_return": timed_total,
+            "hold_return": hold_total,
+            "outperformance": (timed_total - hold_total) if not np.isnan(hold_total) else None,
+            "oos_trades": res["n_trades"],
+            "avg_frac_long": frac,
+            "timed_sharpe": _sharpe(timed_daily),
+            "hold_sharpe": _sharpe(hold_daily),
+            "timed_max_drawdown": timed_dd,
+            "hold_max_drawdown": hold_dd,
+            "timed_calmar": _calmar(timed_total, n_oos, timed_dd),
+            "hold_calmar": _calmar(hold_total, n_oos, hold_dd) if hold_total is not None else None,
+            "exposure_matched_return": exp,
+            "beats_exposure_matched": (exp is not None and timed_total > exp),
+            "modal_params": {"fast": fast, "slow": slow, "trailing": trailing},
+            "param_stability": None, "test_win_rate": None, "n_folds": None,
+        })
+    return results
+
+
 # ─── Reporting ────────────────────────────────────────────────────────────────
 
 
@@ -412,6 +474,60 @@ def render_report(results: List[Dict[str, Any]], run_date: date,
     return "\n".join(lines)
 
 
+def render_evaluation(results: List[Dict[str, Any]], criteria_label: str,
+                      run_date: date, start_date: date, end_date: date) -> str:
+    valid = [r for r in results if r.get("outperformance") is not None]
+    n = len(valid)
+    n_beat = sum(1 for r in valid if r["outperformance"] > 0)
+    n_expm = sum(1 for r in valid if r.get("beats_exposure_matched"))
+    median_out = float(np.median([r["outperformance"] for r in valid])) if valid else None
+
+    lines: List[str] = [
+        "# Per-Ticker Criteria Evaluation — Timing vs Buy-and-Hold",
+        f"**Criteria:** `{criteria_label}`  |  **Period:** {start_date} → {end_date}  "
+        f"|  **Generated:** {run_date.isoformat()}",
+        "",
+        "> Applies a **fixed** per-ticker rule as given — **no parameter search**. Use a period "
+        "**disjoint** from where the criteria were calibrated for a true out-of-sample read; over "
+        "the calibration period this is in-sample.",
+        "",
+        "---",
+        "",
+        "## Summary",
+        "",
+        f"- **{n_beat} / {n}** tickers beat buy-and-hold (total return).",
+        f"- **{n_expm} / {n}** beat their exposure-matched hold (the fair test).",
+        f"- Median outperformance: **{_pct(median_out)}**.",
+        "",
+        "## Per-Ticker (fixed criteria)",
+        "",
+        "| Ticker | Rule (fast/slow/trail) | Timed Ret | Hold Ret | Outperf | Beats Exp-Matched | Timed Sharpe | Hold Sharpe | Timed MaxDD | Hold MaxDD | % In-Mkt | Trades |",
+        "|--------|------------------------|-----------|----------|---------|-------------------|--------------|-------------|-------------|------------|----------|--------|",
+    ]
+    for r in sorted(valid, key=lambda x: (x["outperformance"] or -9), reverse=True):
+        mp = r["modal_params"]
+        trail = "none" if mp["trailing"] is None else f"{mp['trailing']:.0%}"
+        lines.append(
+            f"| {r['ticker']} | {mp['fast']}/{mp['slow']}/{trail} | {_pct(r['timed_return'])} "
+            f"| {_pct(r['hold_return'])} | {_pct(r['outperformance'])} "
+            f"| {'✅' if r.get('beats_exposure_matched') else '❌'} | {_num(r.get('timed_sharpe'))} "
+            f"| {_num(r.get('hold_sharpe'))} | {_pct(r.get('timed_max_drawdown'))} "
+            f"| {_pct(r.get('hold_max_drawdown'))} | {_pct(r['avg_frac_long'])} | {r['oos_trades']} |"
+        )
+    lines += [
+        "",
+        "## Interpretation",
+        "",
+        f"- {n_beat}/{n} beat hold and {n_expm}/{n} cleared the exposure-matched bar. "
+        + ("If this window is disjoint from calibration, the survivors are the criteria worth keeping."
+           if n else "No tickers had enough data to evaluate."),
+        "- Compare this against the **seed** criteria over the same window to see whether calibration "
+        "actually improved on the broad-bucket defaults.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def results_csv(results: List[Dict[str, Any]]) -> pd.DataFrame:
     rows = []
     for r in results:
@@ -533,6 +649,48 @@ def run(start_date: date, end_date: date) -> Dict[str, str]:
     print("  NOTE: walk-forward OOS, but universe selection is in-sample — retest on a fresh period.")
     print()
     return paths
+
+
+def run_evaluate(start_date: date, end_date: date, criteria_path: Path) -> Dict[str, str]:
+    """Apply a fixed criteria file over [start, end] and score timed vs buy-and-hold."""
+    setup_logging()
+    run_date = date.today()
+    root = Path(__file__).parent.parent
+    config = load_config(root / "config")
+    slippage = config["risk"].get("slippage", 0.001)
+
+    criteria = load_criteria(criteria_path)
+    if not criteria:
+        print(f"Error: no ticker_timing_criteria found in {criteria_path}")
+        sys.exit(1)
+
+    log.info("=== Criteria Evaluation (fixed rules) ===")
+    price_data = fetch_backtest_data(list(criteria), start_date, end_date)
+    results = evaluate_criteria(price_data, criteria, start_date, end_date, slippage)
+    report = render_evaluation(results, criteria_path.name, run_date, start_date, end_date)
+    csv_df = results_csv(results)
+
+    (root / "reports").mkdir(parents=True, exist_ok=True)
+    (root / "backtests").mkdir(parents=True, exist_ok=True)
+    tag = run_date.isoformat()
+    md = root / "reports" / f"criteria_evaluation_{tag}.md"
+    md.write_text(report)
+    csv = root / "backtests" / f"criteria_evaluation_{tag}.csv"
+    csv_df.to_csv(csv, index=False)
+
+    valid = [r for r in results if r.get("outperformance") is not None]
+    n_beat = sum(1 for r in valid if r["outperformance"] > 0)
+    n_expm = sum(1 for r in valid if r.get("beats_exposure_matched"))
+    print()
+    print(f"  Criteria : {criteria_path}")
+    print(f"  Evaluated: {len(valid)} tickers")
+    print(f"  Beat hold: {n_beat}/{len(valid)}  |  beat exposure-matched: {n_expm}/{len(valid)}")
+    print()
+    print(f"  Report : {md}")
+    print(f"  CSV    : {csv}")
+    print("  NOTE: out-of-sample only if this window is disjoint from where the criteria were calibrated.")
+    print()
+    return {"report": str(md), "csv": str(csv)}
 
 
 def main() -> None:

@@ -15,7 +15,12 @@ python run.py backtest           --start … --end …           # backtest + di
 python run.py experiments        --start … --end …           # strategy experiment profiles
 python run.py ticker-experiments --start … --end …           # grouped ticker overrides vs capital-matched BH
 python run.py calibrate          --start … --end …           # per-ticker timing vs buy-and-hold (walk-forward)
+python run.py evaluate           --start … --end … [--criteria FILE]  # score a fixed criteria file (no re-fitting)
 ```
+
+Per-ticker timing criteria live in `config/ticker_timing_criteria.yaml` (seed). `calibrate` writes a
+dated, data-derived `config/ticker_timing_criteria_<date>.yaml`; `evaluate` applies any such file
+over a chosen (ideally held-out) window.
 
 Dispatch lives in `src/cli.py`; each module also exposes `run(start, end[, output])` and is still
 runnable directly (e.g. `python src/backtest.py …`).

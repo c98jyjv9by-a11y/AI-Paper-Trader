@@ -10,6 +10,7 @@ Commands:
     experiments         Strategy experiment profiles (signal/exit variants)
     ticker-experiments  Grouped ticker-override experiments + capital-matched BH test
     calibrate           Per-ticker single-name timing vs buy-and-hold (walk-forward)
+    evaluate            Apply a fixed ticker criteria file, score timed vs buy-and-hold
     agent               Run the LIVE daily paper-trading agent (mutates data/)
 
 Each command also remains runnable on its own (e.g. `python src/backtest.py ...`);
@@ -64,6 +65,14 @@ def _cmd_calibrate(args: argparse.Namespace) -> None:
     signal_calibration.run(s, e)
 
 
+def _cmd_evaluate(args: argparse.Namespace) -> None:
+    import signal_calibration
+    s, e = _dates(args)
+    root = Path(__file__).parent.parent
+    criteria = Path(args.criteria) if args.criteria else root / "config" / "ticker_timing_criteria.yaml"
+    signal_calibration.run_evaluate(s, e, criteria)
+
+
 def _cmd_agent(args: argparse.Namespace) -> None:
     import main as agent
     agent.main()
@@ -103,6 +112,13 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Per-ticker single-name timing vs buy-and-hold (walk-forward)")
     _add_dates(c)
     c.set_defaults(func=_cmd_calibrate)
+
+    ev = sub.add_parser("evaluate",
+                        help="Apply a fixed ticker criteria file and score timed vs buy-and-hold (no re-fitting)")
+    _add_dates(ev)
+    ev.add_argument("--criteria", default=None, metavar="FILE",
+                    help="criteria YAML (default: config/ticker_timing_criteria.yaml)")
+    ev.set_defaults(func=_cmd_evaluate)
 
     a = sub.add_parser("agent", help="Run the LIVE daily paper-trading agent (mutates data/)")
     a.set_defaults(func=_cmd_agent)
