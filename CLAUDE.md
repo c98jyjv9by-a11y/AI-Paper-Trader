@@ -4,11 +4,21 @@ Local Python paper-trading research agent. Recommends trades on U.S. equities an
 
 ## Running
 
+All runners share one entry point — `python run.py <command>` (see `python run.py -h`):
+
 ```bash
 cd ai-paper-trader
 pip install -r requirements.txt
-python src/main.py
+
+python run.py agent                                          # live daily agent
+python run.py backtest           --start … --end …           # backtest + diagnostics + sensitivity
+python run.py experiments        --start … --end …           # strategy experiment profiles
+python run.py ticker-experiments --start … --end …           # grouped ticker overrides vs capital-matched BH
+python run.py calibrate          --start … --end …           # per-ticker timing vs buy-and-hold (walk-forward)
 ```
+
+Dispatch lives in `src/cli.py`; each module also exposes `run(start, end[, output])` and is still
+runnable directly (e.g. `python src/backtest.py …`).
 
 ## Testing
 

@@ -8,14 +8,17 @@ A local Python CLI tool for running a simple, auditable paper-trading strategy o
 
 ## What it does
 
-Two commands, two modes:
+Everything runs through one front door — `python run.py <command>`:
 
 | Command | What it does |
 |---------|-------------|
-| `python src/main.py` | Daily paper-trading agent — fetches live prices, ranks signals, recommends up to 3 trades, updates positions, writes a report |
-| `python src/backtest.py --start YYYY-MM-DD --end YYYY-MM-DD` | Walk-forward backtest — replays the same strategy over a historical date range, outputs an equity curve, trade log, and performance report |
+| `run.py agent` | Daily paper-trading agent — fetches live prices, ranks signals, recommends trades, updates positions, writes a report |
+| `run.py backtest --start … --end …` | Walk-forward backtest + diagnostics + sensitivity analysis over a historical range |
+| `run.py experiments --start … --end …` | Strategy experiment profiles (signal/exit variants) vs benchmarks |
+| `run.py ticker-experiments --start … --end …` | Grouped ticker-aware assumptions vs the capital-matched buy-and-hold test |
+| `run.py calibrate --start … --end …` | Per-ticker single-name timing vs buy-and-hold, walk-forward (out-of-sample) |
 
-Both use the same signal engine, risk rules, slippage assumptions, position sizing, and exposure limits defined in `config/strategy.yaml`. No API keys required.
+All share the same signal engine, risk rules, slippage, sizing, and exposure limits from `config/strategy.yaml`. No API keys required. Each command is also runnable directly (e.g. `python src/backtest.py …`); `run.py` just centralises them. Run `python run.py -h` for the full list.
 
 ---
 
@@ -31,13 +34,16 @@ pip install -r requirements.txt
 **Run the daily agent:**
 
 ```bash
-python src/main.py
+python run.py agent
 ```
 
-**Run a backtest:**
+**Run a backtest (and the other analyses):**
 
 ```bash
-python src/backtest.py --start 2024-01-01 --end 2024-12-31
+python run.py backtest           --start 2024-01-01 --end 2024-12-31
+python run.py experiments        --start 2024-01-01 --end 2024-12-31
+python run.py ticker-experiments --start 2024-01-01 --end 2024-12-31
+python run.py calibrate          --start 2024-01-01 --end 2024-12-31
 ```
 
 **Run the tests:**

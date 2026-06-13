@@ -534,23 +534,13 @@ def _parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def main() -> None:
-    args = _parse_args()
+def run(start_date: date, end_date: date, output: Optional[Path] = None) -> Dict[str, str]:
+    """Run the strategy-experiment profiles and write outputs."""
     setup_logging()
-    try:
-        start_date = date.fromisoformat(args.start)
-        end_date = date.fromisoformat(args.end)
-    except ValueError as exc:
-        print(f"Error: {exc}")
-        sys.exit(1)
-    if end_date <= start_date:
-        print("Error: --end must be after --start")
-        sys.exit(1)
-
     run_date = date.today()
     root = Path(__file__).parent.parent
     config = load_config(root / "config")
-    output_dir = Path(args.output) if args.output else root / "backtests"
+    output_dir = output if output else root / "backtests"
 
     log.info("=== AI Paper Trader Experiments ===")
     price_data = fetch_backtest_data(config["tickers"], start_date, end_date)
@@ -570,6 +560,21 @@ def main() -> None:
     print()
     print("  NOTE: in-sample only — validate out-of-sample before acting.")
     print()
+    return paths
+
+
+def main() -> None:
+    args = _parse_args()
+    try:
+        start_date = date.fromisoformat(args.start)
+        end_date = date.fromisoformat(args.end)
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        sys.exit(1)
+    if end_date <= start_date:
+        print("Error: --end must be after --start")
+        sys.exit(1)
+    run(start_date, end_date, Path(args.output) if args.output else None)
 
 
 if __name__ == "__main__":
