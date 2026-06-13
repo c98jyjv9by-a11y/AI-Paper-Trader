@@ -19,7 +19,12 @@ python run.py evaluate           --start … --end … [--criteria FILE]  # scor
 python run.py active --train-start … --train-end … --test-start … --test-end …  # ticker active-vs-BH grid + portfolio, OOS
 python run.py screen --train-start … --train-end … --test-start … --test-end …  # factor screen: rank candidate signals by OOS rank-IC
 python run.py suite  --train-start … --train-end … --test-start … --test-end …  # run the whole stack once -> one consolidated summary report
+python run.py scenario davids_model --start … --end …                            # run a named scenario (config/scenarios/<name>.yaml)
 ```
+
+Named scenarios live in `config/scenarios/<name>.yaml` (trimmed universe + per-ticker `ticker_groups`
+overrides on the base config); `src/scenarios.py` loads + overlays them and runs a scenario-tagged
+backtest. `davids_model` = the OOS-robust trimmed universe (MSFT/ORCL/CRWD) with per-ticker exits.
 
 Per-ticker timing criteria live in `config/ticker_timing_criteria.yaml` (seed). `calibrate` writes a
 dated, data-derived `config/ticker_timing_criteria_<date>.yaml`; `evaluate` applies any such file

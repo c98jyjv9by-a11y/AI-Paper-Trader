@@ -14,6 +14,7 @@ Commands:
     active              Ticker-level active-vs-BH grid + eligible-ticker portfolio (train/test OOS)
     screen              Factor screen — rank candidate signals by out-of-sample predictive power
     suite               Run the whole stack once → ONE consolidated summary report
+    scenario            Run a named scenario (trimmed universe + per-ticker rules)
     agent               Run the LIVE daily paper-trading agent (mutates data/)
 
 Each command also remains runnable on its own (e.g. `python src/backtest.py ...`);
@@ -118,6 +119,18 @@ def _cmd_suite(args: argparse.Namespace) -> None:
     research_suite.run(ts, te, vs, ve)
 
 
+def _cmd_scenario(args: argparse.Namespace) -> None:
+    import scenarios
+    if args.list or not args.name:
+        print("Available scenarios:", ", ".join(scenarios.list_scenarios()) or "none")
+        return
+    if not (args.start and args.end):
+        print("Error: --start and --end are required (or use --list)")
+        sys.exit(1)
+    s, e = _dates(args)
+    scenarios.run_scenario(args.name, s, e)
+
+
 def _cmd_agent(args: argparse.Namespace) -> None:
     import main as agent
     agent.main()
@@ -191,6 +204,14 @@ def build_parser() -> argparse.ArgumentParser:
     su.add_argument("--test-start", required=True, metavar="YYYY-MM-DD")
     su.add_argument("--test-end", required=True, metavar="YYYY-MM-DD")
     su.set_defaults(func=_cmd_suite)
+
+    scn = sub.add_parser("scenario",
+                         help="Run a named scenario (trimmed universe + per-ticker rules), e.g. davids_model")
+    scn.add_argument("name", nargs="?", help="scenario name (see config/scenarios/; omit with --list)")
+    scn.add_argument("--start", metavar="YYYY-MM-DD")
+    scn.add_argument("--end", metavar="YYYY-MM-DD")
+    scn.add_argument("--list", action="store_true", help="list available scenarios and exit")
+    scn.set_defaults(func=_cmd_scenario)
 
     a = sub.add_parser("agent", help="Run the LIVE daily paper-trading agent (mutates data/)")
     a.set_defaults(func=_cmd_agent)

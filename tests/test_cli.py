@@ -18,6 +18,7 @@ import signal_calibration
 import active_experiment
 import signal_screen
 import research_suite
+import scenarios
 import main as agent
 
 
@@ -37,6 +38,8 @@ def captured(monkeypatch):
                         lambda ts, te, vs, ve: calls.update(cmd="screen", ts=ts, te=te, vs=vs, ve=ve))
     monkeypatch.setattr(research_suite, "run",
                         lambda ts, te, vs, ve: calls.update(cmd="suite", ts=ts, te=te, vs=vs, ve=ve))
+    monkeypatch.setattr(scenarios, "run_scenario",
+                        lambda name, s, e: calls.update(cmd="scenario", name=name, s=s, e=e))
     monkeypatch.setattr(agent, "main", lambda: calls.update(cmd="agent"))
     return calls
 
@@ -117,6 +120,18 @@ def test_suite_dispatch(captured):
     assert captured["ts"] == date(2021, 1, 1) and captured["ve"] == date(2025, 12, 31)
 
 
+def test_scenario_dispatch(captured):
+    cli.main(["scenario", "davids_model", "--start", "2024-01-01", "--end", "2025-12-31"])
+    assert captured["cmd"] == "scenario"
+    assert captured["name"] == "davids_model"
+    assert captured["s"] == date(2024, 1, 1) and captured["e"] == date(2025, 12, 31)
+
+
+def test_scenario_list_does_not_run(captured):
+    cli.main(["scenario", "--list"])
+    assert "cmd" not in captured            # --list just prints; no scenario executed
+
+
 def test_agent_dispatch(captured):
     cli.main(["agent"])
     assert captured["cmd"] == "agent"
@@ -145,4 +160,4 @@ def test_all_subcommands_registered():
         if hasattr(action, "choices") and action.choices:
             choices.update(action.choices.keys())
     assert {"backtest", "experiments", "ticker-experiments", "calibrate",
-            "evaluate", "active", "screen", "suite", "agent"}.issubset(choices)
+            "evaluate", "active", "screen", "suite", "scenario", "agent"}.issubset(choices)

@@ -1,0 +1,53 @@
+# ─── Scenario: David's Model ──────────────────────────────────────────────────
+# A named, self-contained override bundle on top of config/strategy.yaml +
+# universe.yaml. Run with:  python run.py scenario davids_model --start … --end …
+#
+# Rationale: across every out-of-sample test (calibrate held-out eval, both active
+# train/test splits, seed eval), only MSFT, ORCL, and CRWD showed repeatable
+# robustness — and where anything worked it was a trend filter acting as a
+# de-risking overlay, not the composite ranker. So this scenario trims the universe
+# to those three and gives each its OOS-best EXIT rule (per-ticker via ticker_groups).
+#
+# NOTE: entries are still driven by the composite ranker (per-ticker ENTRY filters
+# like price>50d-MA are not wired into the engine yet — that's the deferred agent
+# bridge). This scenario therefore tests "trade only these names, with tuned exits."
+
+name: davids_model
+description: >
+  Trimmed to the only OOS-robust tickers (MSFT, ORCL, CRWD), each with its
+  out-of-sample-best exit rule. Composite ranking drives entries; per-ticker
+  entry filters not yet wired. In-sample-selected — validate before trusting.
+
+tickers:
+  - MSFT
+  - ORCL
+  - CRWD
+
+portfolio:
+  max_position_pct: auto          # = max_total_exposure ÷ 3 ≈ 30% each
+  max_total_exposure: 0.90        # let 3 names actually deploy capital
+  max_new_trades_per_day: 3
+
+signals:
+  min_composite_score: null       # 3-name universe — no quality filter to apply
+
+# Per-ticker exit/sizing rules (one group per ticker → true per-ticker overrides).
+ticker_groups:
+  msft:
+    tickers: [MSFT]
+    stop_loss: 0.075
+    take_profit: null             # let winners run under the trailing stop
+    trailing_stop: 0.10
+    max_holding_days: 30
+  oracle:
+    tickers: [ORCL]
+    stop_loss: 0.10
+    take_profit: 0.15
+    trailing_stop: null
+    max_holding_days: 60
+  crowdstrike:
+    tickers: [CRWD]
+    stop_loss: 0.10
+    take_profit: 0.15
+    trailing_stop: 0.10
+    max_holding_days: 30
