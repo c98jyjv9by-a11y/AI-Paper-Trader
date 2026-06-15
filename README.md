@@ -21,7 +21,8 @@ Everything runs through one front door — `python run.py <command>`:
 | `run.py active --train-start … --train-end … --test-start … --test-end …` | Per-ticker active-vs-buy-and-hold over a fixed rule grid, build a portfolio of eligible tickers, validate out-of-sample |
 | `run.py screen --train-start … --train-end … --test-start … --test-end …` | Factor discovery — rank candidate signals by out-of-sample predictive power (rank-IC); no trading |
 | `run.py suite --train-start … --train-end … --test-start … --test-end …` | **Runs the whole stack once → one consolidated summary report** with the salient takeaway from every stage + an auto verdict |
-| `run.py scenario <name> --start … --end … [--no-charts] [--no-sensitivity]` | Run a **named scenario** (custom universe + all-ticker / per-ticker rules from `config/scenarios/<name>.yaml`), e.g. `davids_model`, `model_v2`. Report includes a **sensitivity analysis** (run-wide params: exposure, position size, trades/day, min-score, slippage, re-entry gate, weights; plus ticker-level exit params swept uniformly). Auto-writes per-ticker annotated charts (buy/sell reasons vs hold). `--list` shows available |
+| `run.py scenario <name> --start … --end … [--no-charts] [--no-sensitivity] [--no-status]` | Run a **named scenario** (custom universe + all-ticker / per-ticker rules from `config/scenarios/<name>.yaml`), e.g. `davids_model`, `model_v2`. Report includes a **sensitivity analysis** (run-wide params: exposure, position size, trades/day, min-score, slippage, re-entry gate, weights; plus ticker-level exit params swept uniformly). Auto-writes per-ticker annotated charts and a **status & rank report** (top/bottom ranks + signal strength). `--list` shows available |
+| `run.py rank <name> [--start … --end …] [--top N]` | **Status & rank report** for a scenario — ranks the universe by composite score as of the last close, marks to latest price, and reports top/bottom N, **signal strength** (top-vs-bottom spread), the held book, and performance vs SPY/QQQ. Writes a dated Markdown report + CSV. Defaults: YTD window, top/bottom 10 |
 | `run.py adaptive --start … --end … [--rebalance-days N --lookback-days N --top-n N] [--no-charts]` | **Adaptive rotating-signal backtest** — weekly, each ticker trades its recently-best signal or sits in cash; reports a signal-rotation log and **auto-writes per-ticker annotated price charts** (buy/sell reasons vs buy-and-hold). High-turnover, overfit-prone — validate OOS. |
 
 All share the same signal engine, risk rules, slippage, sizing, and exposure limits from `config/strategy.yaml`. No API keys required. Each command is also runnable directly (e.g. `python src/backtest.py …`); `run.py` just centralises them. Run `python run.py -h` for the full list.
@@ -70,6 +71,22 @@ python run.py calibrate          --start 2024-01-01 --end 2024-12-31
 python run.py evaluate           --start 2025-01-01 --end 2026-06-12   # apply a fixed criteria file
 python run.py active --train-start 2021-06-12 --train-end 2024-06-12 \
                      --test-start  2024-06-12 --test-end  2026-06-12   # active-vs-BH, OOS
+```
+
+**Run a named scenario (model) and produce its full report + analytics:**
+
+```bash
+python run.py scenario --list                                          # list available models
+python run.py scenario model_v2 --start 2023-01-01 --end 2026-06-13    # one command → all of:
+#   reports/scenario_model_v2_<date>.md            performance + diagnostics + sensitivity analysis
+#   reports/status_model_v2_<date>.md              status & rank report (top/bottom ranks + signal strength)
+#   reports/charts_model_v2_<date>/*.png           per-ticker annotated charts (buys/sells vs hold)
+#   backtests/scenario_model_v2_<date>_trades.csv         every simulated trade
+#   backtests/scenario_model_v2_<date>_equity.csv         daily equity vs SPY/QQQ/Equal-Wt
+#   backtests/scenario_model_v2_<date>_sensitivity.csv    one-way parameter sweeps
+#   backtests/scenario_model_v2_<date>_diagnostics.csv    predictiveness / attribution / capture
+
+python run.py scenario model_v2 --start 2023-01-01 --end 2026-06-13 --no-sensitivity --no-charts  # faster, report only
 ```
 
 **Run the tests:**
@@ -150,8 +167,9 @@ ai-paper-trader/
 │   ├── research_suite.py      # runs the whole stack → one consolidated summary report
 │   ├── scenarios.py           # named-scenario loader/overlay + scenario backtest + sensitivity
 │   ├── scenario_charts.py     # per-ticker annotated price charts (buy/sell vs hold)
+│   ├── rank_report.py         # scenario status & rank report (signal strength, held book vs SPY/QQQ)
 │   └── adaptive_backtest.py   # weekly per-ticker rotating-signal backtest
-├── tests/                     # 225 tests, no network calls (one file per module)
+├── tests/                     # 228 tests, no network calls (one file per module)
 ├── requirements.txt
 ├── .env.example
 └── CLAUDE.md
@@ -271,7 +289,7 @@ Changes take effect on the next run of any command.
 
 ## Tests
 
-225 tests, no network calls (all use synthetic data):
+228 tests, no network calls (all use synthetic data):
 
 ```bash
 pytest tests/ -v

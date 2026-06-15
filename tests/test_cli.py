@@ -19,6 +19,7 @@ import active_experiment
 import signal_screen
 import research_suite
 import scenarios
+import rank_report
 import adaptive_backtest
 import main as agent
 
@@ -40,8 +41,11 @@ def captured(monkeypatch):
     monkeypatch.setattr(research_suite, "run",
                         lambda ts, te, vs, ve: calls.update(cmd="suite", ts=ts, te=te, vs=vs, ve=ve))
     monkeypatch.setattr(scenarios, "run_scenario",
-                        lambda name, s, e, charts=True, sensitivity=True: calls.update(
-                            cmd="scenario", name=name, s=s, e=e, charts=charts, sensitivity=sensitivity))
+                        lambda name, s, e, charts=True, sensitivity=True, status=True: calls.update(
+                            cmd="scenario", name=name, s=s, e=e, charts=charts,
+                            sensitivity=sensitivity, status=status))
+    monkeypatch.setattr(rank_report, "run",
+                        lambda scenario, s, e, top=10: calls.update(cmd="rank", name=scenario, s=s, e=e, top=top))
     monkeypatch.setattr(adaptive_backtest, "run",
                         lambda s, e, rb=None, lb=None, tn=None, charts=True: calls.update(
                             cmd="adaptive", s=s, e=e, rb=rb, lb=lb, tn=tn, charts=charts))
@@ -139,9 +143,31 @@ def test_scenario_no_sensitivity_flag(captured):
     assert captured["sensitivity"] is False
 
 
+def test_scenario_status_default_and_flag(captured):
+    cli.main(["scenario", "davids_model", "--start", "2024-01-01", "--end", "2025-12-31"])
+    assert captured["status"] is True                 # status report on by default
+    cli.main(["scenario", "davids_model", "--start", "2024-01-01", "--end", "2025-12-31",
+              "--no-status"])
+    assert captured["status"] is False
+
+
 def test_scenario_list_does_not_run(captured):
     cli.main(["scenario", "--list"])
     assert "cmd" not in captured            # --list just prints; no scenario executed
+
+
+def test_rank_dispatch(captured):
+    cli.main(["rank", "model_v2", "--start", "2026-01-01", "--end", "2026-06-15", "--top", "15"])
+    assert captured["cmd"] == "rank"
+    assert captured["name"] == "model_v2"
+    assert captured["s"] == date(2026, 1, 1) and captured["e"] == date(2026, 6, 15)
+    assert captured["top"] == 15
+
+
+def test_rank_default_dates(captured):
+    cli.main(["rank", "davids_model"])           # no dates → defaults (today / Jan 1 of year)
+    assert captured["cmd"] == "rank" and captured["name"] == "davids_model"
+    assert captured["e"] >= captured["s"]
 
 
 def test_adaptive_dispatch(captured):
@@ -185,4 +211,4 @@ def test_all_subcommands_registered():
         if hasattr(action, "choices") and action.choices:
             choices.update(action.choices.keys())
     assert {"backtest", "experiments", "ticker-experiments", "calibrate", "evaluate",
-            "active", "screen", "suite", "scenario", "adaptive", "agent"}.issubset(choices)
+            "active", "screen", "suite", "scenario", "rank", "adaptive", "agent"}.issubset(choices)
