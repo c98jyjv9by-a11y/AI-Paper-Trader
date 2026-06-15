@@ -20,9 +20,22 @@ from typing import Dict, List, Tuple
 
 import matplotlib
 matplotlib.use("Agg")
+import matplotlib.colors as mcolors
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import pandas as pd
+
+# Composite-score bar color by band: prominent green (strong) → existing blue → prominent red (weak).
+def _score_color(s: float):
+    if s > 0.90:
+        return mcolors.to_rgba("#1a9850", 0.65)   # prominent green
+    if s >= 0.80:
+        return mcolors.to_rgba("#66bd63", 0.45)   # lighter green
+    if s >= 0.40:
+        return mcolors.to_rgba("#4575b4", 0.22)   # existing (neutral)
+    if s >= 0.20:
+        return mcolors.to_rgba("#fc8d59", 0.50)   # lightish red
+    return mcolors.to_rgba("#d73027", 0.70)       # prominent red
 
 _REASON_LABEL = {
     "take_profit": ("take-profit", "#1a9850"),
@@ -134,10 +147,11 @@ def make_charts(trades_csv: Path, out_dir: Path, scenario: str, since=None,
                 ax2 = ax.twinx()
                 diffs = ss.index.to_series().diff().dt.days.dropna()
                 width = max(1.0, float(diffs.median()) * 0.85) if not diffs.empty else 5.0
-                ax2.bar(ss.index, ss.values, width=width, color="#4575b4", alpha=0.22, zorder=0)
+                bar_colors = [_score_color(v) for v in ss.values]
+                ax2.bar(ss.index, ss.values, width=width, color=bar_colors, zorder=0)
                 ax2.set_ylim(0, 2.2)                       # score 1.0 → ~45% of chart height
                 ax2.set_yticks([0, 0.5, 1.0])
-                ax2.set_ylabel("composite score (0–1)", color="#4575b4", fontsize=8)
+                ax2.set_ylabel("composite score (0–1)  ·  green=strong, red=weak", color="#555", fontsize=8)
                 ax2.tick_params(axis="y", labelcolor="#4575b4", labelsize=7)
                 if min_score:
                     ax2.axhline(min_score, color="#4575b4", lw=0.7, ls=":", alpha=0.7)
