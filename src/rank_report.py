@@ -35,6 +35,39 @@ def _pct(v: Optional[float], d: str = "—") -> str:
     return d if v is None or (isinstance(v, float) and pd.isna(v)) else f"{v * 100:+.2f}%"
 
 
+# Intraday checkpoints (ET). "9am" → the 09:30 regular-session open (9am is pre-market);
+# the day's close is handled separately (the official ~16:00 close = the daily close).
+_CHECKPOINTS = [("09:30", "9:30 (open)"), ("11:00", "11:00"), ("13:00", "13:00")]
+
+
+def intraday_returns(tickers, day, prior_close: Dict[str, float]) -> Optional[Dict[str, Dict[str, float]]]:
+    """Return {ticker: {checkpoint: ret_vs_prior_close}} for the given day, using 30-min bars
+    (bar Open at each timestamp). None if no intraday data covers `day`."""
+    import yfinance as yf
+    raw = yf.download(list(tickers), period="5d", interval="30m", progress=False, auto_adjust=True)
+    if raw.empty:
+        return None
+    op = raw["Open"]
+    out: Dict[str, Dict[str, float]] = {}
+    any_hit = False
+    for t in tickers:
+        rec: Dict[str, Optional[float]] = {}
+        if t in getattr(op, "columns", []):
+            s = op[t]
+            day_idx = [ts for ts in s.index if ts.date() == day]
+            for hhmm, _ in _CHECKPOINTS:
+                m = [ts for ts in day_idx if ts.strftime("%H:%M") == hhmm]
+                pc = prior_close.get(t)
+                if m and pc:
+                    px = float(s.loc[m[0]])
+                    rec[hhmm] = (px / pc - 1) if px == px else None
+                    any_hit = any_hit or rec[hhmm] is not None
+                else:
+                    rec[hhmm] = None
+        out[t] = rec
+    return out if any_hit else None
+
+
 def _win_ret(series: pd.Series, anchor: pd.Timestamp) -> Optional[float]:
     s = series[series.index <= anchor]
     if s.empty:
@@ -68,10 +101,14 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
         a, b = close.loc[rank_close, t], close.loc[mark, t]
         return (b / a - 1) if (a == a and b == b and a > 0) else None
 
-    # ranking as of the last completed close
+    # (A) ranking as of the last completed close (sets up the session that just happened)
     sl = pdata.loc[:rank_close].iloc[-_SIGNAL_WINDOW:]
     rf = rank_candidates(calculate_signals(sl, uni), top_n=len(uni),
                          weights=weights, ticker_weights=tw).reset_index(drop=True)
+    # (B) ranking on the latest/current prices (the standing that sets up the NEXT session)
+    sl_cur = pdata.loc[:mark].iloc[-_SIGNAL_WINDOW:]
+    rf_cur = rank_candidates(calculate_signals(sl_cur, uni), top_n=len(uni),
+                             weights=weights, ticker_weights=tw).reset_index(drop=True)
 
     # current held book + portfolio stats (reuse the scenario run's results if given)
     if eq is None or positions is None:
@@ -91,6 +128,31 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
             "mark_px": float(close.loc[mark, t]) if t in close.columns else None,
             "return": ret(t), "held": t in held,
         })
+    # current-price ranking rows (no forward return — this is the standing right now)
+    rows_cur = []
+    for i, r in rf_cur.iterrows():
+        t = r["ticker"]
+        rows_cur.append({
+            "rank": i + 1, "ticker": t, "score": float(r["composite_score"]),
+            "clears_gate": (min_score is None or r["composite_score"] >= min_score),
+            "price": float(close.loc[mark, t]) if t in close.columns else None,
+            "held": t in held,
+        })
+    # rank movement vs the prior-close ranking (for context)
+    prior_rank = {x["ticker"]: x["rank"] for x in rows}
+    for x in rows_cur:
+        x["rank_chg"] = (prior_rank.get(x["ticker"]) - x["rank"]) if x["ticker"] in prior_rank else None
+
+    # intraday return progression (vs prior close) for the top/bottom-N prior-close names
+    intraday = None
+    try:
+        need = [x["ticker"] for x in rows[:top_n]] + [x["ticker"] for x in rows[-top_n:]]
+        pc_map = {x["ticker"]: x["rank_close_px"] for x in rows}
+        intraday = intraday_returns(need, mark.date(), pc_map)
+    except Exception as exc:                              # intraday is a nicety; never fail the report
+        log.warning("Intraday checkpoints skipped: %s", exc)
+        intraday = None
+
     n = len(rows)
     rets = [x["return"] for x in rows if x["return"] is not None]
     held_rets = [ret(t) for t in held if ret(t) is not None]
@@ -125,6 +187,8 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
         "univ_avg": (sum(rets) / len(rets)) if rets else None,
         "top_avg": top_avg, "bot_avg": bot_avg, "signal_strength": signal_strength,
         "advancers": advancers, "n_gate": n_gate,
+        "rows_cur": rows_cur, "n_gate_cur": sum(1 for x in rows_cur if x["clears_gate"]),
+        "intraday": intraday,
         "held_avg": (sum(held_rets) / len(held_rets)) if held_rets else None,
         "held_dw": held_dw,
         "positions": positions, "pv": pv, "cash": cash, "ret": ret, "stats": stats,
@@ -141,9 +205,10 @@ def render_md(d: Dict[str, Any]) -> str:
         f"(latest; may be provisional)  |  **Buy gate:** {d['min_score']}  |  "
         f"**Generated:** {run_date.isoformat()}",
         "",
-        "> Composite-momentum ranking of the scenario universe as of the last completed close "
-        "(the bar that sets up the next session's open), each name marked to the latest price. "
-        "`Return` = ranking-close → latest. ✓ = clears the buy gate.",
+        "> Two rankings, clearly separated: **(A) Prior-close ranking** — composite scores fixed "
+        f"at the prior close ({d['rank_close']}) and marked forward to the latest price (shows how "
+        "those picks did this session); and **(B) Current ranking** — composite scores recomputed on "
+        f"the latest prices ({d['mark']}), i.e. the standing that sets up the next session. ✓ = clears the buy gate.",
         "",
         "## Signal strength (session: ranking-close → latest)",
         "",
@@ -162,9 +227,10 @@ def render_md(d: Dict[str, Any]) -> str:
         "",
     ]
 
-    def tbl(title, rows, avg):
-        out = [f"## {title}", "",
-               f"| # | Ticker | Score | Gate | {d['rank_close']} | {d['mark']} | Return | Held |",
+    # ── (A) ranking scored on the PRIOR CLOSE, marked forward to the latest price ──
+    def tbl_prior(title, rows, avg):
+        out = [f"### {title}", "",
+               f"| # | Ticker | Score | Gate | {d['rank_close']} px | {d['mark']} px | Return | Held |",
                "|---|--------|------:|:----:|------:|------:|-------:|:----:|"]
         for r in rows:
             out.append(
@@ -175,8 +241,68 @@ def render_md(d: Dict[str, Any]) -> str:
         return out
 
     rows = d["rows"]
-    L += tbl(f"Top {tn} (highest buy scores)", rows[:tn], d["top_avg"])
-    L += tbl(f"Bottom {tn} (lowest buy scores)", rows[-tn:], d["bot_avg"])
+    L += [f"## A) Ranking at PRIOR CLOSE ({d['rank_close']}) — scores fixed at that close, "
+          f"marked to latest ({d['mark']})", "",
+          "_These are the scores that set up the most recent session; `Return` shows how each "
+          "did from the prior close to the latest price._", ""]
+    L += tbl_prior(f"Top {tn} (highest buy scores @ prior close)", rows[:tn], d["top_avg"])
+    L += tbl_prior(f"Bottom {tn} (lowest buy scores @ prior close)", rows[-tn:], d["bot_avg"])
+
+    # intraday progression (return vs prior close at each ET checkpoint; Close = official daily close)
+    intra = d.get("intraday")
+    if intra:
+        cps = _CHECKPOINTS
+        def tbl_intra(title, rows):
+            hdr = "| # | Ticker | " + " | ".join(lbl for _, lbl in cps) + " | Close | Held |"
+            sep = "|---|--------|" + "------:|" * (len(cps) + 1) + ":----:|"
+            out = [f"### {title}", "", hdr, sep]
+            sums = {hhmm: [0.0, 0] for hhmm, _ in cps}; csum = [0.0, 0]
+            for r in rows:
+                rec = intra.get(r["ticker"], {})
+                cells = []
+                for hhmm, _ in cps:
+                    v = rec.get(hhmm)
+                    cells.append(_pct(v))
+                    if v is not None:
+                        sums[hhmm][0] += v; sums[hhmm][1] += 1
+                cl = r["return"]
+                if cl is not None:
+                    csum[0] += cl; csum[1] += 1
+                out.append(f"| {r['rank']} | {r['ticker']} | " + " | ".join(cells) +
+                           f" | {_pct(cl)} | {'HELD' if r['held'] else ''} |")
+            avg_cells = [_pct(sums[h][0] / sums[h][1]) if sums[h][1] else "—" for h, _ in cps]
+            out += ["| | **AVG** | " + " | ".join(avg_cells) +
+                    f" | {_pct(csum[0] / csum[1]) if csum[1] else '—'} | |", ""]
+            return out
+
+        L += [f"## A2) Intraday return progression — {d['mark']} (vs prior close {d['rank_close']}, ET)", "",
+              "_Return from the prior close to each intraday checkpoint (30-min bars). "
+              "`9:30` = regular-session open (9am is pre-market); `Close` = the official daily close. "
+              "Watch the spread between the two AVG rows build through the session._", ""]
+        L += tbl_intra(f"Top {tn} @ prior close — intraday path", rows[:tn])
+        L += tbl_intra(f"Bottom {tn} @ prior close — intraday path", rows[-tn:])
+
+    # ── (B) ranking scored on the CURRENT/LATEST prices (sets up the NEXT session) ──
+    def tbl_cur(title, rows):
+        out = [f"### {title}", "",
+               f"| # | Ticker | Score | Gate | {d['mark']} px | Δrank vs prior | Held |",
+               "|---|--------|------:|:----:|------:|:-------------:|:----:|"]
+        for r in rows:
+            chg = r.get("rank_chg")
+            chg_s = "—" if chg is None else (f"▲{chg}" if chg > 0 else (f"▼{-chg}" if chg < 0 else "•"))
+            out.append(
+                f"| {r['rank']} | {r['ticker']} | {r['score']:.3f} | {'✓' if r['clears_gate'] else '—'} "
+                f"| {r['price']:.2f} | {chg_s} | {'HELD' if r['held'] else ''} |")
+        out.append("")
+        return out
+
+    rc = d["rows_cur"]; nc = len(rc)
+    L += [f"## B) CURRENT composite ranking (scored on latest prices {d['mark']}) — "
+          "sets up the next session", "",
+          f"_Recomputed on the current/provisional prices. {d['n_gate_cur']}/{nc} names clear the "
+          "buy gate now. `Δrank vs prior` = move vs the prior-close ranking (▲ = ranked higher now)._", ""]
+    L += tbl_cur(f"Top {tn} (highest buy scores @ current prices)", rc[:tn])
+    L += tbl_cur(f"Bottom {tn} (lowest buy scores @ current prices)", rc[-tn:])
 
     L += ["## Group returns (ranking-close → latest)", "",
           "| Group | Avg return |", "|-------|-----------:|",

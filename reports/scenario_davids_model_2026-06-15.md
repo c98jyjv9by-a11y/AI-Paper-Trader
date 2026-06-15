@@ -7,7 +7,7 @@ Trimmed to the only OOS-robust tickers (MSFT, ORCL, CRWD), each with its out-of-
 ---
 
 # AI Paper Trader — Backtest Report
-**Period:** 2026-01-01 → 2026-06-17  |  **Generated:** 2026-06-15
+**Period:** 2026-01-01 → 2026-06-18  |  **Generated:** 2026-06-15
 
 ---
 
@@ -15,23 +15,23 @@ Trimmed to the only OOS-robust tickers (MSFT, ORCL, CRWD), each with its out-of-
 
 | Metric | Strategy | SPY | QQQ | Equal-Wt Hold |
 |--------|----------|-----|-----|-----|
-| Ending Balance | $101,948.52 | $110,798.40 | $121,476.70 | $112,238.20 |
-| Total Return | +1.95% | +10.80% | +21.48% | +12.24% |
+| Ending Balance | $101,953.80 | $110,791.10 | $121,499.60 | $112,234.60 |
+| Total Return | +1.95% | +10.79% | +21.50% | +12.23% |
 | Max Drawdown | -24.03% | -8.88% | -11.72% | -25.94% |
-| Excess vs SPY | -8.85% | — | — | — |
-| Excess vs QQQ | -19.53% | — | — | — |
-| Excess vs Equal-Wt | -10.29% | — | — | — |
+| Excess vs SPY | -8.84% | — | — | — |
+| Excess vs QQQ | -19.55% | — | — | — |
+| Excess vs Equal-Wt | -10.28% | — | — | — |
 
 _Benchmarks: **SPY** and **QQQ** are buy-and-hold of those ETFs. **Equal-Wt Hold** is a synthetic equal-weight buy-and-hold of the strategy's own universe (not the unrelated EWH ETF)._
 
 | Metric | Value |
 |--------|-------|
 | Starting Value | $100,000.00 |
-| Ending Value | $101,948.52 |
-| **IRR (annualized, money-weighted)** | **+6.03%** |
+| Ending Value | $101,953.80 |
+| **IRR (annualized, money-weighted)** | **+6.04%** |
 | Total Return (on full $ portfolio) | +1.95% |
 | Total Capital Deployed (all entries) | $463,225.36 |
-| Avg Capital Deployed (snapshot) | $66,116.07 (+66.12% of portfolio) |
+| Avg Capital Deployed (snapshot) | $66,116.12 (+66.12% of portfolio) |
 | Peak Capital Deployed (snapshot) | $104,960.22 (+104.96% of portfolio) |
 | Time Invested | +93.81% of trading days |
 | Trading Days | 113 |
@@ -96,7 +96,7 @@ _**IRR** is the annualized money-weighted (internal) rate of return on the capit
 
 | Ticker | Shares | Entry Price | Final Price | Unrealized P&L | Entry Date |
 |--------|--------|------------|------------|----------------|------------|
-| CRWD | 44 | $683.48 | $692.79 | $409.52 | 2026-06-12 |
+| CRWD | 44 | $683.48 | $692.91 | $414.80 | 2026-06-12 |
 
 ## Equity Curve (first and last 5 days)
 
@@ -111,7 +111,7 @@ _**IRR** is the annualized money-weighted (internal) rate of return on the capit
 | 2026-06-10 | $101,539.00 | +0.00% | +1.54% | +6.48% | +13.28% | +10.22% |
 | 2026-06-11 | $101,539.00 | +0.00% | +1.54% | +8.29% | +17.11% | +10.00% |
 | 2026-06-12 | $101,508.96 | -0.03% | +1.51% | +8.87% | +17.80% | +9.39% |
-| 2026-06-15 | $101,948.52 | +0.43% | +1.95% | +10.80% | +21.48% | +12.24% |
+| 2026-06-15 | $101,953.80 | +0.44% | +1.95% | +10.79% | +21.50% | +12.23% |
 
 
 ## Signal Predictiveness
@@ -148,7 +148,7 @@ The raw signal (buy top names, hold fixed, no stops) is **positive across holdin
 
 | Ticker | P&L |
 |--------|-----|
-| CRWD | $4,198.33 |
+| CRWD | $4,203.61 |
 | ORCL | $1,406.53 |
 | MSFT | $-3,656.33 |
 
@@ -158,13 +158,13 @@ The raw signal (buy top names, hold fixed, no stops) is **positive across holdin
 |--------|-----|
 | MSFT | $-3,656.33 |
 | ORCL | $1,406.53 |
-| CRWD | $4,198.33 |
+| CRWD | $4,203.61 |
 
 **P&L by asset group:**
 
 | Group | P&L |
 |-------|-----|
-| crowdstrike | $4,198.33 |
+| crowdstrike | $4,203.61 |
 | oracle | $1,406.53 |
 | msft | $-3,656.33 |
 
@@ -173,7 +173,7 @@ The raw signal (buy top names, hold fixed, no stops) is **positive across holdin
 | Metric | Value |
 |--------|-------|
 | Total trades | 31 |
-| Trades / month | 5.65 |
+| Trades / month | 5.62 |
 | Avg holding period | 18.48 trading days |
 | Stop-loss → re-entry ≤5d | 4 |
 
