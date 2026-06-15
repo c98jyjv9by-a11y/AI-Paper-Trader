@@ -15,7 +15,7 @@ Trimmed to the only OOS-robust tickers (MSFT, ORCL, CRWD), each with its out-of-
 
 | Metric | Strategy | SPY | QQQ | Equal-Wt Hold |
 |--------|----------|-----|-----|-----|
-| Ending Balance | $193,111.59 | $164,096.60 | $187,080.00 | $193,651.40 |
+| Ending Balance | $193,111.54 | $164,096.60 | $187,080.10 | $193,651.40 |
 | Total Return | +93.11% | +64.10% | +87.08% | +93.65% |
 | Max Drawdown | -33.08% | -18.76% | -22.77% | -41.83% |
 | Excess vs SPY | +29.01% | — | — | — |
@@ -29,10 +29,10 @@ _Benchmarks: **SPY** and **QQQ** are buy-and-hold of those ETFs. **Equal-Wt Hold
 | Metric | Value |
 |--------|-------|
 | Starting Value | $100,000.00 |
-| Ending Value | $193,111.59 |
+| Ending Value | $193,111.54 |
 | **IRR (annualized, money-weighted)** | **+44.49%** |
 | Total Return (on full $ portfolio) | +93.11% |
-| Total Capital Deployed (all entries) | $2,259,464.08 |
+| Total Capital Deployed (all entries) | $2,259,464.11 |
 | Avg Capital Deployed (snapshot) | $116,246.84 (+116.25% of portfolio) |
 | Peak Capital Deployed (snapshot) | $200,086.77 (+200.09% of portfolio) |
 | Time Invested | +98.70% of trading days |
@@ -105,15 +105,15 @@ _**IRR** is the annualized money-weighted (internal) rate of return on the capit
 | Date | Portfolio Value | Daily Ret | Cumulative Ret | SPY Ret | QQQ Ret | EqWt Ret |
 |------|----------------|----------|----------------|---------|---------|---------|
 | 2024-01-02 | $100,000.00 | — | +0.00% | +0.00% | +0.00% | +0.00% |
-| 2024-01-03 | $99,911.14 | -0.09% | -0.09% | -0.82% | -1.06% | -0.88% |
+| 2024-01-03 | $99,911.13 | -0.09% | -0.09% | -0.82% | -1.06% | -0.88% |
 | 2024-01-04 | $99,890.67 | -0.02% | -0.11% | -1.14% | -1.57% | -0.90% |
 | 2024-01-05 | $100,134.69 | +0.24% | +0.13% | -1.00% | -1.45% | -0.63% |
-| 2024-01-08 | $102,920.56 | +2.78% | +2.92% | +0.41% | +0.59% | +2.48% |
-| 2026-06-09 | $192,329.13 | -0.64% | +92.33% | +60.23% | +77.98% | +91.85% |
-| 2026-06-10 | $192,329.13 | +0.00% | +92.33% | +57.71% | +74.43% | +90.17% |
-| 2026-06-11 | $192,329.13 | +0.00% | +92.33% | +60.39% | +80.32% | +89.79% |
-| 2026-06-12 | $192,272.46 | -0.03% | +92.27% | +61.25% | +81.38% | +88.66% |
-| 2026-06-15 | $193,111.59 | +0.44% | +93.11% | +64.10% | +87.08% | +93.65% |
+| 2024-01-08 | $102,920.55 | +2.78% | +2.92% | +0.41% | +0.59% | +2.48% |
+| 2026-06-09 | $192,329.08 | -0.64% | +92.33% | +60.23% | +77.99% | +91.85% |
+| 2026-06-10 | $192,329.08 | +0.00% | +92.33% | +57.71% | +74.43% | +90.17% |
+| 2026-06-11 | $192,329.08 | +0.00% | +92.33% | +60.39% | +80.32% | +89.79% |
+| 2026-06-12 | $192,272.41 | -0.03% | +92.27% | +61.25% | +81.38% | +88.66% |
+| 2026-06-15 | $193,111.54 | +0.44% | +93.11% | +64.10% | +87.08% | +93.65% |
 
 
 ## Signal Predictiveness
@@ -151,7 +151,7 @@ The raw signal (buy top names, hold fixed, no stops) is **positive across holdin
 | Ticker | P&L |
 |--------|-----|
 | CRWD | $60,364.55 |
-| ORCL | $31,126.31 |
+| ORCL | $31,126.26 |
 | MSFT | $1,620.72 |
 
 **Worst 5 contributors:**
@@ -159,7 +159,7 @@ The raw signal (buy top names, hold fixed, no stops) is **positive across holdin
 | Ticker | P&L |
 |--------|-----|
 | MSFT | $1,620.72 |
-| ORCL | $31,126.31 |
+| ORCL | $31,126.26 |
 | CRWD | $60,364.55 |
 
 **P&L by asset group:**
@@ -167,8 +167,9 @@ The raw signal (buy top names, hold fixed, no stops) is **positive across holdin
 | Group | P&L |
 |-------|-----|
 | crowdstrike | $60,364.55 |
-| oracle | $31,126.31 |
+| oracle | $31,126.26 |
 | msft | $1,620.72 |
+| _(ungrouped)_ | $-0.00 |
 
 ## Turnover and Re-entry Diagnostics
 

@@ -364,6 +364,9 @@ def run_scenario(name: str, start_date: date, end_date: date, charts: bool = Tru
         print(f"  Status : {status_md}  (rank + signal-strength snapshot)")
     if chart_dir is not None:
         print(f"  Charts : {chart_dir}  (per-ticker price + buy/sell reasons vs hold)")
+        packet = chart_dir / f"{name}_charts_packet.pdf"
+        if packet.exists():
+            print(f"  Packet : {packet}  (all charts in one PDF)")
     print()
     out = {"report": str(md)}
     if status_md is not None:

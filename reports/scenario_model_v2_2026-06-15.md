@@ -15,7 +15,7 @@ Full 21-name universe with one uniform exit rule applied to every ticker (stop 1
 
 | Metric | Strategy | SPY | QQQ | Equal-Wt Hold |
 |--------|----------|-----|-----|-----|
-| Ending Balance | $1,288,420.25 | $336,403.20 | $502,564.00 | $898,492.70 |
+| Ending Balance | $1,288,420.28 | $336,403.20 | $502,564.00 | $898,492.70 |
 | Total Return | +1188.42% | +236.40% | +402.56% | +798.49% |
 | Max Drawdown | -41.18% | -33.72% | -35.12% | -51.45% |
 | Excess vs SPY | +952.02% | — | — | — |
@@ -30,10 +30,10 @@ _Benchmarks: **SPY** and **QQQ** are buy-and-hold of those ETFs. **Equal-Wt Hold
 | Metric | Value |
 |--------|-------|
 | Starting Value | $100,000.00 |
-| Ending Value | $1,288,420.25 |
+| Ending Value | $1,288,420.28 |
 | **IRR (annualized, money-weighted)** | **+43.95%** |
 | Total Return (on full $ portfolio) | +1188.42% |
-| Total Capital Deployed (all entries) | $8,911,648.16 |
+| Total Capital Deployed (all entries) | $8,911,648.06 |
 | Avg Capital Deployed (snapshot) | $323,730.59 (+323.73% of portfolio) |
 | Peak Capital Deployed (snapshot) | $1,280,868.06 (+1280.87% of portfolio) |
 | Time Invested | +99.95% of trading days |
@@ -120,11 +120,11 @@ _**IRR** is the annualized money-weighted (internal) rate of return on the capit
 | 2019-01-04 | $100,655.64 | +0.67% | +0.66% | +0.88% | +0.87% | +0.65% |
 | 2019-01-07 | $102,209.90 | +1.54% | +2.21% | +1.68% | +2.07% | +3.14% |
 | 2019-01-08 | $102,379.87 | +0.17% | +2.38% | +2.63% | +3.00% | +4.06% |
-| 2026-06-09 | $1,150,481.13 | -3.53% | +1050.48% | +228.48% | +378.13% | +753.39% |
-| 2026-06-10 | $1,109,707.52 | -3.54% | +1009.71% | +223.30% | +368.58% | +720.62% |
-| 2026-06-11 | $1,185,867.92 | +6.86% | +1085.87% | +228.80% | +384.41% | +763.00% |
-| 2026-06-12 | $1,224,505.69 | +3.26% | +1124.51% | +230.57% | +387.26% | +768.25% |
-| 2026-06-15 | $1,288,420.25 | +5.22% | +1188.42% | +236.40% | +402.56% | +798.49% |
+| 2026-06-09 | $1,150,481.16 | -3.53% | +1050.48% | +228.48% | +378.13% | +753.39% |
+| 2026-06-10 | $1,109,707.55 | -3.54% | +1009.71% | +223.30% | +368.58% | +720.62% |
+| 2026-06-11 | $1,185,867.95 | +6.86% | +1085.87% | +228.80% | +384.41% | +763.00% |
+| 2026-06-12 | $1,224,505.72 | +3.26% | +1124.51% | +230.57% | +387.26% | +768.25% |
+| 2026-06-15 | $1,288,420.28 | +5.22% | +1188.42% | +236.40% | +402.56% | +798.49% |
 
 
 ## Signal Predictiveness
@@ -194,10 +194,10 @@ The raw signal (buy top names, hold fixed, no stops) is **positive across holdin
 | Group | P&L |
 |-------|-----|
 | semiconductors | $384,243.01 |
-| mega_cap_growth | $55,450.86 |
+| mega_cap_growth | $55,450.77 |
 | software_cybersecurity | $33,556.24 |
-| financial_crypto_beta | $32,413.27 |
-| _(ungrouped)_ | $682,757.02 |
+| financial_crypto_beta | $32,413.19 |
+| _(ungrouped)_ | $682,757.20 |
 
 ## Turnover and Re-entry Diagnostics
 

@@ -50,6 +50,40 @@ def _short_reason(reason: str) -> str:
     return "+".join(parts)
 
 
+def _write_cover_page(pdf, scenario: str, trades: "pd.DataFrame", n_tickers: int,
+                      has_scores: bool, min_score) -> None:
+    """First page of the packet: title, window, and a legend for markers + score-color bands."""
+    import matplotlib.patches as mpatches
+    fig = plt.figure(figsize=(13, 6)); fig.subplots_adjust(left=0.08, right=0.92, top=0.9, bottom=0.1)
+    ax = fig.add_axes([0, 0, 1, 1]); ax.axis("off")
+    d0, d1 = trades["date"].min().date(), trades["date"].max().date()
+    ax.text(0.06, 0.88, f"{scenario} — chart packet", fontsize=22, weight="bold")
+    ax.text(0.06, 0.81, f"{n_tickers} tickers   ·   trades {d0} → {d1}   ·   one chart per page",
+            fontsize=12, color="#444")
+    ax.text(0.06, 0.70, "Markers", fontsize=13, weight="bold")
+    ax.scatter(0.075, 0.645, marker="^", s=120, color="#1a9850", edgecolor="white")
+    ax.text(0.11, 0.638, "BUY", fontsize=11)
+    ax.scatter(0.075, 0.595, marker="v", s=120, color="#d73027", edgecolor="white")
+    ax.text(0.11, 0.588, "SELL (exit reason annotated: take-profit / stop-loss / trailing-stop / max-hold)", fontsize=11)
+    ax.text(0.06, 0.515, "Shading", fontsize=13, weight="bold")
+    ax.text(0.075, 0.47, "green band = period the position was held", fontsize=11)
+    if has_scores:
+        ax.text(0.06, 0.39, "Composite-score bars (lower axis, 0–1)", fontsize=13, weight="bold")
+        bands = [("> 0.90  strong", "#1a9850", 0.65), ("0.80–0.90", "#66bd63", 0.45),
+                 ("0.40–0.80  neutral", "#4575b4", 0.22), ("0.20–0.40", "#fc8d59", 0.50),
+                 ("< 0.20  weak", "#d73027", 0.70)]
+        for i, (lbl, c, a) in enumerate(bands):
+            y = 0.33 - i * 0.05
+            ax.add_patch(mpatches.Rectangle((0.075, y), 0.03, 0.03, color=c, alpha=a,
+                                            transform=ax.transAxes))
+            ax.text(0.115, y + 0.004, lbl, fontsize=11)
+        if min_score:
+            ax.text(0.46, 0.33, f"dotted line on charts = buy gate ({min_score})", fontsize=11, color="#444")
+    ax.text(0.06, 0.04, "Each page: price (black) with held-period shading, buy/sell markers, "
+            "and the active-vs-buy&hold verdict in the title.", fontsize=9, color="#666")
+    pdf.savefig(fig); plt.close(fig)
+
+
 def _score_panel(price_data: "pd.DataFrame", config: Dict) -> "pd.DataFrame":
     """Composite score per (date, ticker) over the full panel — one pass, reused for every
     chart. Computed at a weekly cadence on long windows to stay fast and keep bars legible."""
@@ -120,6 +154,12 @@ def make_charts(trades_csv: Path, out_dir: Path, scenario: str, since=None,
     out_dir.mkdir(parents=True, exist_ok=True)
     summary: Dict[str, Dict] = {}
     since_ts = pd.Timestamp(since) if since else None
+
+    # Combined multi-page PDF "packet" — every per-ticker chart in one file, cover page first.
+    from matplotlib.backends.backend_pdf import PdfPages
+    packet_path = out_dir / f"{scenario}_charts_packet.pdf"
+    pdf = PdfPages(packet_path)
+    _write_cover_page(pdf, scenario, trades, len(tickers), bool(not score_df.empty), min_score)
 
     for tk in tickers:
         if tk not in close.columns:
@@ -194,10 +234,16 @@ def make_charts(trades_csv: Path, out_dir: Path, scenario: str, since=None,
         ax.legend(loc="upper left", fontsize=8)
         fig.tight_layout()
         path = out_dir / f"{tk}.png"
-        fig.savefig(path, dpi=130); plt.close(fig)
+        fig.savefig(path, dpi=130)
+        pdf.savefig(fig)                                  # add this chart as a page in the packet
+        plt.close(fig)
 
         summary[tk] = {"active_return": active_ret, "hold_return": hold_ret,
                        "excess": active_ret - hold_ret, "round_trips": n_rt, "png": str(path)}
+
+    pdf.close()
+    if not summary:                                       # no charts → drop the cover-only packet
+        packet_path.unlink(missing_ok=True)
     return summary
 
 
@@ -239,6 +285,9 @@ def main() -> None:
     print()
     print(f"  Trades : {trades_csv.name}")
     print(f"  Charts : {out_dir}")
+    packet = out_dir / f"{args.scenario}_charts_packet.pdf"
+    if packet.exists():
+        print(f"  Packet : {packet}  (all charts in one PDF)")
     print()
     print(f"  {'Ticker':<8}{'Active':>10}{'Hold':>10}{'Excess':>10}{'RoundTrips':>12}")
     for tk, s in summary.items():
