@@ -327,7 +327,8 @@ def run_scenario(name: str, start_date: date, end_date: date, charts: bool = Tru
         try:
             import scenario_charts
             chart_dir = reports_dir / f"charts_{tag}"
-            n = len(scenario_charts.make_charts(trades_csv, chart_dir, name, close=price_data["Close"]))
+            n = len(scenario_charts.make_charts(trades_csv, chart_dir, name, close=price_data["Close"],
+                                                price_data=price_data, config=cfg))
             log.info("Wrote %d per-ticker charts to %s", n, chart_dir)
         except Exception as exc:                       # charts are a nicety; never fail the run
             log.warning("Chart generation skipped: %s", exc)

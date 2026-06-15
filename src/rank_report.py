@@ -35,9 +35,13 @@ def _pct(v: Optional[float], d: str = "—") -> str:
     return d if v is None or (isinstance(v, float) and pd.isna(v)) else f"{v * 100:+.2f}%"
 
 
-# Intraday checkpoints (ET). "9am" → the 09:30 regular-session open (9am is pre-market);
-# the day's close is handled separately (the official ~16:00 close = the daily close).
-_CHECKPOINTS = [("09:30", "9:30 (open)"), ("11:00", "11:00"), ("13:00", "13:00")]
+# Intraday checkpoints every 2 hours from open to close, labeled in Chicago Central Time.
+# Keys are the underlying 30-min bar timestamps in market tz (America/New_York = CT+1);
+# the official close (CT 15:00 / ET 16:00) is handled separately via the daily close.
+#   ET 09:30 → CT 08:30 (open) · ET 11:30 → CT 10:30 · ET 13:30 → CT 12:30 · ET 15:30 → CT 14:30
+_CHECKPOINTS = [("09:30", "8:30 CT (open)"), ("11:30", "10:30 CT"),
+                ("13:30", "12:30 CT"), ("15:30", "14:30 CT")]
+_CLOSE_LABEL = "Close (15:00 CT)"
 
 
 def intraday_returns(tickers, day, prior_close: Dict[str, float]) -> Optional[Dict[str, Dict[str, float]]]:
@@ -146,9 +150,10 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
     # intraday return progression (vs prior close) for the top/bottom-N prior-close names
     intraday = None
     try:
-        need = [x["ticker"] for x in rows[:top_n]] + [x["ticker"] for x in rows[-top_n:]]
+        need = ([x["ticker"] for x in rows[:top_n]] + [x["ticker"] for x in rows[-top_n:]]
+                + sorted(held))                          # include held positions too
         pc_map = {x["ticker"]: x["rank_close_px"] for x in rows}
-        intraday = intraday_returns(need, mark.date(), pc_map)
+        intraday = intraday_returns(sorted(set(need)), mark.date(), pc_map)
     except Exception as exc:                              # intraday is a nicety; never fail the report
         log.warning("Intraday checkpoints skipped: %s", exc)
         intraday = None
@@ -248,39 +253,46 @@ def render_md(d: Dict[str, Any]) -> str:
     L += tbl_prior(f"Top {tn} (highest buy scores @ prior close)", rows[:tn], d["top_avg"])
     L += tbl_prior(f"Bottom {tn} (lowest buy scores @ prior close)", rows[-tn:], d["bot_avg"])
 
-    # intraday progression (return vs prior close at each ET checkpoint; Close = official daily close)
+    # intraday progression (return vs prior close at each 2h CT checkpoint; Close = daily close)
     intra = d.get("intraday")
     if intra:
         cps = _CHECKPOINTS
-        def tbl_intra(title, rows):
-            hdr = "| # | Ticker | " + " | ".join(lbl for _, lbl in cps) + " | Close | Held |"
-            sep = "|---|--------|" + "------:|" * (len(cps) + 1) + ":----:|"
+        ret = d["ret"]
+
+        def tbl_intra(title, items):
+            # items: list of (ticker, close_return). Header uses CT labels; trailing Close column.
+            hdr = "| Ticker | " + " | ".join(lbl for _, lbl in cps) + f" | {_CLOSE_LABEL} |"
+            sep = "|--------|" + "------:|" * (len(cps) + 1)
             out = [f"### {title}", "", hdr, sep]
             sums = {hhmm: [0.0, 0] for hhmm, _ in cps}; csum = [0.0, 0]
-            for r in rows:
-                rec = intra.get(r["ticker"], {})
+            for tkr, cl in items:
+                rec = intra.get(tkr, {})
                 cells = []
                 for hhmm, _ in cps:
                     v = rec.get(hhmm)
                     cells.append(_pct(v))
                     if v is not None:
                         sums[hhmm][0] += v; sums[hhmm][1] += 1
-                cl = r["return"]
                 if cl is not None:
                     csum[0] += cl; csum[1] += 1
-                out.append(f"| {r['rank']} | {r['ticker']} | " + " | ".join(cells) +
-                           f" | {_pct(cl)} | {'HELD' if r['held'] else ''} |")
+                out.append(f"| {tkr} | " + " | ".join(cells) + f" | {_pct(cl)} |")
             avg_cells = [_pct(sums[h][0] / sums[h][1]) if sums[h][1] else "—" for h, _ in cps]
-            out += ["| | **AVG** | " + " | ".join(avg_cells) +
-                    f" | {_pct(csum[0] / csum[1]) if csum[1] else '—'} | |", ""]
+            out += ["| **AVG** | " + " | ".join(avg_cells) +
+                    f" | {_pct(csum[0] / csum[1]) if csum[1] else '—'} |", ""]
             return out
 
-        L += [f"## A2) Intraday return progression — {d['mark']} (vs prior close {d['rank_close']}, ET)", "",
-              "_Return from the prior close to each intraday checkpoint (30-min bars). "
-              "`9:30` = regular-session open (9am is pre-market); `Close` = the official daily close. "
-              "Watch the spread between the two AVG rows build through the session._", ""]
-        L += tbl_intra(f"Top {tn} @ prior close — intraday path", rows[:tn])
-        L += tbl_intra(f"Bottom {tn} @ prior close — intraday path", rows[-tn:])
+        L += [f"## A2) Intraday return progression — {d['mark']} (vs prior close {d['rank_close']})", "",
+              "_Return from the prior close to each **2-hour checkpoint, Chicago Central Time** "
+              "(8:30 open → 15:00 close), using 30-min bars. `Close` is the official daily close. "
+              "Watch the spread between the top and bottom AVG rows build through the session._", ""]
+        L += tbl_intra(f"Top {tn} @ prior close — intraday path",
+                       [(r["ticker"], r["return"]) for r in rows[:tn]])
+        L += tbl_intra(f"Bottom {tn} @ prior close — intraday path",
+                       [(r["ticker"], r["return"]) for r in rows[-tn:]])
+        held_items = sorted((p["ticker"], ret(p["ticker"]))
+                            for _, p in d["positions"].iterrows())
+        if held_items:
+            L += tbl_intra("Held positions — intraday path", held_items)
 
     # ── (B) ranking scored on the CURRENT/LATEST prices (sets up the NEXT session) ──
     def tbl_cur(title, rows):

@@ -7,7 +7,7 @@ Full 21-name universe with one uniform exit rule applied to every ticker (stop 1
 ---
 
 # AI Paper Trader — Backtest Report
-**Period:** 2026-01-01 → 2026-06-18  |  **Generated:** 2026-06-15
+**Period:** 2019-01-01 → 2026-06-18  |  **Generated:** 2026-06-15
 
 ---
 
@@ -15,37 +15,40 @@ Full 21-name universe with one uniform exit rule applied to every ticker (stop 1
 
 | Metric | Strategy | SPY | QQQ | Equal-Wt Hold |
 |--------|----------|-----|-----|-----|
-| Ending Balance | $159,445.82 | $110,791.10 | $121,499.60 | $125,556.20 |
-| Total Return | +59.45% | +10.79% | +21.50% | +25.56% |
-| Max Drawdown | -15.99% | -8.88% | -11.72% | -16.42% |
-| Excess vs SPY | +48.65% | — | — | — |
-| Excess vs QQQ | +37.95% | — | — | — |
-| Excess vs Equal-Wt | +33.89% | — | — | — |
+| Ending Balance | $1,288,420.25 | $336,403.20 | $502,563.90 | $898,492.70 |
+| Total Return | +1188.42% | +236.40% | +402.56% | +798.49% |
+| Max Drawdown | -41.18% | -33.72% | -35.12% | -51.45% |
+| Excess vs SPY | +952.02% | — | — | — |
+| Excess vs QQQ | +785.86% | — | — | — |
+| Excess vs Equal-Wt | +389.93% | — | — | — |
+| 1-Year Return | +129.90% | +27.89% | +41.87% | +54.32% |
+| 2-Year Return | +182.85% | +44.00% | +60.71% | +71.11% |
+| 3-Year Return | +345.50% | +82.46% | +113.60% | +157.03% |
 
 _Benchmarks: **SPY** and **QQQ** are buy-and-hold of those ETFs. **Equal-Wt Hold** is a synthetic equal-weight buy-and-hold of the strategy's own universe (not the unrelated EWH ETF)._
 
 | Metric | Value |
 |--------|-------|
 | Starting Value | $100,000.00 |
-| Ending Value | $159,445.82 |
-| **IRR (annualized, money-weighted)** | **+215.48%** |
-| Total Return (on full $ portfolio) | +59.45% |
-| Total Capital Deployed (all entries) | $270,192.59 |
-| Avg Capital Deployed (snapshot) | $108,520.57 (+108.52% of portfolio) |
-| Peak Capital Deployed (snapshot) | $165,189.35 (+165.19% of portfolio) |
-| Time Invested | +99.12% of trading days |
-| Trading Days | 113 |
-| Total Trades | 41 (26 buys, 15 sells) |
-| Win Rate | +60.00% |
-| Average Win | $5,680.83 |
-| Average Loss | $-1,837.77 |
-| Profit Factor | 4.64 |
-| Avg Holding Period | 62.7 approx. trading days |
-| Largest Winner | $14,932.60 |
-| Largest Loser | $-3,439.91 |
+| Ending Value | $1,288,420.25 |
+| **IRR (annualized, money-weighted)** | **+43.95%** |
+| Total Return (on full $ portfolio) | +1188.42% |
+| Total Capital Deployed (all entries) | $8,911,648.17 |
+| Avg Capital Deployed (snapshot) | $323,730.59 (+323.73% of portfolio) |
+| Peak Capital Deployed (snapshot) | $1,280,868.06 (+1280.87% of portfolio) |
+| Time Invested | +99.95% of trading days |
+| Trading Days | 1873 |
+| Total Trades | 625 (318 buys, 307 sells) |
+| Win Rate | +52.12% |
+| Average Win | $8,905.33 |
+| Average Loss | $-4,449.24 |
+| Profit Factor | 2.18 |
+| Avg Holding Period | 65.6 approx. trading days |
+| Largest Winner | $92,583.13 |
+| Largest Loser | $-14,504.57 |
 | Open Positions at End | 11 |
-| Total Slippage Cost | $445.03 (+0.45% of start) |
-| Avg Slippage / Trade | $10.85 |
+| Total Slippage Cost | $17,730.77 (+17.73% of start) |
+| Avg Slippage / Trade | $28.37 |
 
 _**IRR** is the annualized money-weighted (internal) rate of return on the capital actually put into positions: it solves for the rate that discounts the dated BUY outflows, SELL inflows, and the terminal mark-to-market of open positions to zero. It ignores idle cash, so it measures how the *deployed* capital performed, and is bounded at -100%. Being annualized, short backtests can extrapolate to large figures. **Total Return** is on the full starting portfolio (cash included) and is what the SPY/QQQ/Equal-Wt comparisons above use, since those benchmarks are fully invested._
 
@@ -71,83 +74,83 @@ _**IRR** is the annualized money-weighted (internal) rate of return on the capit
 
 | Date | Action | Ticker | Shares | Price | Value | Reason | P&L | Hold Days |
 |------|--------|--------|--------|-------|-------|--------|-----|-----------|
-| 2026-05-12 | BUY | MU | 15 | $767.35 | $11,510.20 | momentum_score=0.9645 | — | — |
-| 2026-05-12 | SELL | ASML | 6 | $1,519.42 | $9,116.51 | max_holding_period | $1,681.99 | 90.0 |
-| 2026-05-12 | SELL | LRCX | 43 | $288.95 | $12,424.88 | max_holding_period | $3,527.36 | 90.0 |
-| 2026-05-13 | BUY | MDB | 39 | $303.30 | $11,828.82 | momentum_score=0.9018 | — | — |
-| 2026-05-13 | BUY | CRWD | 22 | $563.13 | $12,388.92 | momentum_score=0.8867 | — | — |
-| 2026-05-13 | SELL | ON | 138 | $115.59 | $15,952.01 | max_holding_period | $7,402.65 | 90.0 |
-| 2026-05-14 | BUY | ON | 108 | $118.49 | $12,796.75 | momentum_score=0.9145 | — | — |
-| 2026-05-14 | BUY | PANW | 55 | $238.45 | $13,114.65 | momentum_score=0.9139 | — | — |
-| 2026-05-14 | SELL | INTC | 200 | $115.81 | $23,162.82 | max_holding_period | $14,932.60 | 90.0 |
-| 2026-05-15 | BUY | CSCO | 108 | $118.33 | $12,779.45 | momentum_score=0.9277 | — | — |
-| 2026-05-15 | BUY | SEDG | 248 | $61.82 | $15,331.81 | momentum_score=0.9108 | — | — |
-| 2026-05-15 | SELL | ADI | 28 | $415.93 | $11,646.13 | max_holding_period | $3,260.96 | 90.0 |
-| 2026-05-15 | SELL | KLAC | 64 | $180.02 | $11,521.40 | max_holding_period | $2,575.49 | 90.0 |
-| 2026-05-18 | BUY | PLUG | 3280 | $3.45 | $11,327.48 | momentum_score=0.85 | — | — |
-| 2026-05-18 | SELL | AMAT | 29 | $412.64 | $11,966.66 | max_holding_period | $3,069.96 | 90.0 |
-| 2026-05-19 | BUY | ZS | 70 | $175.43 | $12,279.76 | momentum_score=0.9325 | — | — |
-| 2026-05-27 | SELL | ZS | 70 | $126.28 | $8,839.85 | stop_loss | $-3,439.91 | 5.7 |
-| 2026-05-28 | BUY | DELL | 42 | $317.37 | $13,329.41 | momentum_score=0.8946 | — | — |
-| 2026-06-09 | SELL | PLUG | 3280 | $2.91 | $9,535.29 | stop_loss | $-1,792.19 | 15.7 |
-| 2026-06-10 | BUY | KLAC | 59 | $213.78 | $12,612.88 | momentum_score=0.8952 | — | — |
+| 2026-03-25 | SELL | CSCO | 745 | $81.31 | $60,574.16 | max_holding_period | $2,739.74 | 90.0 |
+| 2026-03-25 | SELL | GOOGL | 201 | $290.47 | $58,383.57 | max_holding_period | $-415.04 | 90.0 |
+| 2026-03-26 | BUY | DELL | 347 | $175.45 | $60,882.19 | momentum_score=0.9759 | — | — |
+| 2026-03-26 | SELL | META | 91 | $546.99 | $49,776.32 | stop_loss | $-10,180.37 | 69.3 |
+| 2026-03-27 | BUY | ARM | 400 | $144.27 | $57,709.64 | momentum_score=0.9482 | — | — |
+| 2026-03-27 | SELL | NVDA | 304 | $167.16 | $50,815.94 | max_holding_period | $-3,548.62 | 90.0 |
+| 2026-03-30 | BUY | AMD | 305 | $196.24 | $59,851.98 | momentum_score=0.7898 | — | — |
+| 2026-04-23 | SELL | ABNB | 447 | $141.73 | $63,352.46 | max_holding_period | $3,399.03 | 90.0 |
+| 2026-04-24 | BUY | ON | 761 | $98.50 | $74,957.28 | momentum_score=0.9735 | — | — |
+| 2026-04-27 | SELL | LRCX | 358 | $259.21 | $92,797.36 | max_holding_period | $30,066.70 | 90.0 |
+| 2026-04-28 | BUY | INTC | 892 | $84.60 | $75,467.21 | momentum_score=0.9873 | — | — |
+| 2026-05-11 | SELL | MU | 192 | $794.53 | $152,550.66 | max_holding_period | $92,583.13 | 90.0 |
+| 2026-05-12 | BUY | QCOM | 373 | $209.75 | $78,235.11 | momentum_score=0.9729 | — | — |
+| 2026-05-12 | BUY | MU | 111 | $767.35 | $85,175.47 | momentum_score=0.9645 | — | — |
+| 2026-05-19 | SELL | SEDG | 1784 | $54.48 | $97,184.29 | max_holding_period | $35,914.06 | 90.0 |
+| 2026-05-20 | BUY | CRWD | 141 | $650.76 | $91,757.17 | momentum_score=0.9175 | — | — |
+| 2026-06-05 | SELL | TXN | 301 | $284.77 | $85,717.24 | max_holding_period | $21,100.13 | 90.0 |
+| 2026-06-08 | BUY | MRVL | 374 | $289.14 | $108,137.95 | momentum_score=0.9458 | — | — |
+| 2026-06-10 | SELL | ADI | 202 | $392.28 | $79,240.01 | max_holding_period | $14,825.08 | 90.0 |
+| 2026-06-11 | BUY | KLAC | 441 | $241.41 | $106,459.69 | momentum_score=0.8843 | — | — |
 
 ## Open Positions at End of Period
 
 | Ticker | Shares | Entry Price | Final Price | Unrealized P&L | Entry Date |
 |--------|--------|------------|------------|----------------|------------|
-| OXY | 150 | $57.04 | $54.46 | $-387.57 | 2026-03-16 |
-| QCOM | 53 | $209.75 | $220.81 | $586.41 | 2026-05-12 |
-| MU | 15 | $767.35 | $1,087.99 | $4,809.65 | 2026-05-12 |
-| MDB | 39 | $303.30 | $354.18 | $1,984.20 | 2026-05-13 |
-| CRWD | 22 | $563.13 | $692.91 | $2,855.10 | 2026-05-13 |
-| ON | 108 | $118.49 | $125.90 | $800.45 | 2026-05-14 |
-| PANW | 55 | $238.45 | $284.54 | $2,535.05 | 2026-05-14 |
-| CSCO | 108 | $118.33 | $120.17 | $198.91 | 2026-05-15 |
-| SEDG | 248 | $61.82 | $60.19 | $-404.69 | 2026-05-15 |
-| DELL | 42 | $317.37 | $409.07 | $3,851.53 | 2026-05-28 |
-| KLAC | 59 | $213.78 | $256.42 | $2,515.90 | 2026-06-10 |
+| OXY | 1243 | $51.99 | $54.46 | $3,064.87 | 2026-02-23 |
+| DELL | 347 | $175.45 | $409.07 | $81,065.10 | 2026-03-26 |
+| ARM | 400 | $144.27 | $412.55 | $107,310.36 | 2026-03-27 |
+| AMD | 305 | $196.24 | $547.26 | $107,062.32 | 2026-03-30 |
+| ON | 761 | $98.50 | $125.90 | $20,852.62 | 2026-04-24 |
+| INTC | 892 | $84.60 | $127.86 | $38,583.91 | 2026-04-28 |
+| QCOM | 373 | $209.75 | $220.81 | $4,127.02 | 2026-05-12 |
+| MU | 111 | $767.35 | $1,087.99 | $35,591.42 | 2026-05-12 |
+| CRWD | 141 | $650.76 | $692.91 | $5,943.14 | 2026-05-20 |
+| MRVL | 374 | $289.14 | $308.88 | $7,383.17 | 2026-06-08 |
+| KLAC | 441 | $241.41 | $256.42 | $6,621.53 | 2026-06-11 |
 
 ## Equity Curve (first and last 5 days)
 
 | Date | Portfolio Value | Daily Ret | Cumulative Ret | SPY Ret | QQQ Ret | EqWt Ret |
 |------|----------------|----------|----------------|---------|---------|---------|
-| 2026-01-02 | $100,000.00 | — | +0.00% | +0.00% | +0.00% | +0.00% |
-| 2026-01-05 | $99,983.56 | -0.02% | -0.02% | +0.67% | +0.79% | +1.66% |
-| 2026-01-06 | $100,914.16 | +0.93% | +0.91% | +1.26% | +1.68% | +3.20% |
-| 2026-01-07 | $100,321.38 | -0.59% | +0.32% | +0.94% | +1.78% | +2.89% |
-| 2026-01-08 | $99,482.07 | -0.84% | -0.52% | +0.93% | +1.20% | +1.38% |
-| 2026-06-09 | $148,508.91 | -3.99% | +48.51% | +8.18% | +15.59% | +19.20% |
-| 2026-06-10 | $145,509.82 | -2.02% | +45.51% | +6.48% | +13.28% | +15.99% |
-| 2026-06-11 | $154,004.15 | +5.84% | +54.00% | +8.29% | +17.11% | +20.62% |
-| 2026-06-12 | $155,333.43 | +0.86% | +55.33% | +8.87% | +17.80% | +21.55% |
-| 2026-06-15 | $159,445.82 | +2.65% | +59.45% | +10.79% | +21.50% | +25.56% |
+| 2019-01-02 | $100,000.00 | — | +0.00% | +0.00% | +0.00% | +0.00% |
+| 2019-01-03 | $99,983.39 | -0.02% | -0.02% | -2.39% | -3.27% | -3.81% |
+| 2019-01-04 | $100,655.64 | +0.67% | +0.66% | +0.88% | +0.87% | +0.65% |
+| 2019-01-07 | $102,209.92 | +1.54% | +2.21% | +1.68% | +2.07% | +3.14% |
+| 2019-01-08 | $102,379.87 | +0.17% | +2.38% | +2.63% | +3.00% | +4.06% |
+| 2026-06-09 | $1,150,481.13 | -3.53% | +1050.48% | +228.48% | +378.13% | +753.39% |
+| 2026-06-10 | $1,109,707.52 | -3.54% | +1009.71% | +223.30% | +368.58% | +720.62% |
+| 2026-06-11 | $1,185,867.92 | +6.86% | +1085.87% | +228.80% | +384.41% | +763.00% |
+| 2026-06-12 | $1,224,505.69 | +3.26% | +1124.51% | +230.57% | +387.26% | +768.25% |
+| 2026-06-15 | $1,288,420.25 | +5.22% | +1188.42% | +236.40% | +402.56% | +798.49% |
 
 
 ## Signal Predictiveness
 
-_Cross-section of 9,296 (date, ticker) signal observations. Correlations are Pearson vs forward returns._
+_Cross-section of 147,801 (date, ticker) signal observations. Correlations are Pearson vs forward returns._
 
 | Signal | vs fwd 5d | vs fwd 10d | vs fwd 20d |
 |--------|-----------|------------|------------|
-| return_1d | 0.01 | 0.00 | 0.04 |
-| return_5d | -0.01 | 0.06 | 0.10 |
-| return_20d | 0.06 | 0.12 | 0.17 |
-| vol_ratio | 0.00 | -0.02 | 0.02 |
-| vol_adj_mom_20d | 0.07 | 0.12 | 0.15 |
-| composite_score | 0.04 | 0.08 | 0.11 |
+| return_1d | -0.02 | -0.01 | -0.00 |
+| return_5d | -0.04 | -0.01 | -0.00 |
+| return_20d | -0.01 | -0.00 | -0.00 |
+| vol_ratio | 0.00 | -0.00 | 0.00 |
+| vol_adj_mom_20d | -0.00 | -0.00 | 0.00 |
+| composite_score | -0.01 | -0.00 | 0.00 |
 
 **Forward returns by composite-score quintile** (5 = highest-ranked):
 
 | Quintile | N | Avg fwd 5d | Win 5d | Avg fwd 10d | Win 10d | Avg fwd 20d | Win 20d |
 |----------|---|-----------|--------|-------------|---------|-------------|---------|
-| Q1 | 1904 | +0.51% | +49.24% | +0.81% | +48.26% | +2.31% | +51.42% |
-| Q2 | 1792 | +0.57% | +51.33% | +0.85% | +50.67% | +1.61% | +50.13% |
-| Q3 | 1904 | +0.02% | +47.44% | +0.69% | +47.29% | +1.75% | +46.43% |
-| Q4 | 1792 | +0.47% | +48.90% | +1.82% | +49.70% | +4.21% | +51.95% |
-| Q5 | 1904 | +1.67% | +53.87% | +3.63% | +56.03% | +7.55% | +56.04% |
+| Q1 | 30450 | +0.74% | +54.29% | +1.41% | +55.91% | +2.85% | +57.33% |
+| Q2 | 28789 | +0.75% | +55.29% | +1.33% | +56.36% | +2.43% | +57.78% |
+| Q3 | 29435 | +0.61% | +54.65% | +1.19% | +56.04% | +2.34% | +57.20% |
+| Q4 | 28789 | +0.52% | +54.23% | +1.20% | +55.92% | +2.52% | +57.68% |
+| Q5 | 30338 | +0.65% | +54.51% | +1.36% | +55.62% | +2.77% | +57.21% |
 
-**Top-minus-bottom quintile spread:** 5d +1.15%  |  10d +2.83%  |  20d +5.24%  (positive ⇒ higher-ranked names outperform lower-ranked names).
+**Top-minus-bottom quintile spread:** 5d -0.08%  |  10d -0.06%  |  20d -0.07%  (positive ⇒ higher-ranked names outperform lower-ranked names).
 
 ## Entry vs Exit Attribution
 
@@ -155,14 +158,14 @@ _Buy the top 2 ranked names each day, hold a fixed period, **no** stop-loss / ta
 
 | Hold period | Raw avg return / trade | Raw win rate | N trades |
 |-------------|------------------------|--------------|----------|
-| 5d | +2.29% | +56.07% | 214 |
-| 10d | +4.82% | +60.78% | 204 |
-| 20d | +12.33% | +63.04% | 184 |
-| 30d | +18.22% | +65.24% | 164 |
+| 5d | +0.61% | +52.20% | 3734 |
+| 10d | +1.57% | +54.30% | 3724 |
+| 20d | +3.14% | +56.02% | 3704 |
+| 30d | +5.09% | +56.51% | 3684 |
 
-**Full strategy (with exit rules):** total return +59.45%, win rate +60.00%, avg hold 62.67 trading days.
+**Full strategy (with exit rules):** total return +1188.42%, win rate +52.12%, avg hold 65.65 trading days.
 
-The raw signal (buy top names, hold fixed, no stops) is **positive across holding periods** (avg +9.41% per trade, 61% win rate). That points to genuine signal quality — higher-ranked names tend to rise even without exit rules.
+The raw signal (buy top names, hold fixed, no stops) is **positive across holding periods** (avg +2.60% per trade, 55% win rate). That points to genuine signal quality — higher-ranked names tend to rise even without exit rules.
 
 ## P&L Attribution
 
@@ -170,54 +173,56 @@ The raw signal (buy top names, hold fixed, no stops) is **positive across holdin
 
 | Ticker | P&L |
 |--------|-----|
-| MU | $17,346.95 |
-| INTC | $14,932.60 |
-| ON | $8,203.10 |
-| KLAC | $5,091.39 |
-| DELL | $3,851.53 |
+| MU | $180,306.94 |
+| AMD | $102,386.54 |
+| ARM | $101,008.19 |
+| PLTR | $100,746.00 |
+| DELL | $67,725.08 |
 
 **Worst 5 contributors:**
 
 | Ticker | P&L |
 |--------|-----|
-| ZS | $-3,439.91 |
-| SEDG | $-1,959.91 |
-| PLUG | $-1,792.19 |
-| SNPS | $-1,540.54 |
-| TXN | $-1,359.70 |
+| MELI | $-15,791.18 |
+| OKTA | $-15,544.43 |
+| BA | $-12,380.28 |
+| TTD | $-12,236.92 |
+| SE | $-9,372.62 |
 
 **P&L by asset group:**
 
 | Group | P&L |
 |-------|-----|
-| semiconductors | $17,346.95 |
-| software_cybersecurity | $5,390.15 |
-| _(ungrouped)_ | $36,708.73 |
+| semiconductors | $384,242.97 |
+| mega_cap_growth | $55,450.77 |
+| software_cybersecurity | $33,556.24 |
+| financial_crypto_beta | $32,413.27 |
+| _(ungrouped)_ | $682,757.17 |
 
 ## Turnover and Re-entry Diagnostics
 
 | Metric | Value |
 |--------|-------|
-| Total trades | 41 |
-| Trades / month | 7.43 |
-| Avg holding period | 62.67 trading days |
+| Total trades | 625 |
+| Trades / month | 6.98 |
+| Avg holding period | 65.65 trading days |
 | Stop-loss → re-entry ≤5d | 0 |
 
-**Most-entered tickers:** `MU`×2, `ON`×2, `KLAC`×2, `SEDG`×2, `TSM`×1, `ASML`×1, `LRCX`×1, `MCHP`×1
+**Most-entered tickers:** `PLUG`×9, `SMCI`×8, `OXY`×8, `AMD`×8, `SOFI`×8, `AXON`×7, `SEDG`×7, `MRVL`×7
 
 ## Exposure and Benchmark Capture
 
 | Metric | Value |
 |--------|-------|
-| Avg exposure | +90.31% |
-| Max exposure | +98.77% |
-| Avg cash (drag) | +9.69% |
-| Correlation to SPY | 0.71 |
-| Correlation to QQQ | 0.78 |
-| Beta to SPY | 2.02 |
-| Beta to QQQ | 1.56 |
-| Up-capture vs QQQ | 1.84 |
-| Down-capture vs QQQ | 1.55 |
+| Avg exposure | +93.27% |
+| Max exposure | +99.41% |
+| Avg cash (drag) | +6.73% |
+| Correlation to SPY | 0.74 |
+| Correlation to QQQ | 0.80 |
+| Beta to SPY | 1.12 |
+| Beta to QQQ | 0.99 |
+| Up-capture vs QQQ | 1.11 |
+| Down-capture vs QQQ | 1.01 |
 
 _Beta ≈ 1 with high correlation ⇒ performance is mostly market exposure; low beta with a positive quintile spread ⇒ more genuine selection alpha._
 

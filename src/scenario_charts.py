@@ -37,6 +37,30 @@ def _short_reason(reason: str) -> str:
     return "+".join(parts)
 
 
+def _score_panel(price_data: "pd.DataFrame", config: Dict) -> "pd.DataFrame":
+    """Composite score per (date, ticker) over the full panel — one pass, reused for every
+    chart. Computed at a weekly cadence on long windows to stay fast and keep bars legible."""
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).parent))
+    from signals import calculate_signals, rank_candidates
+    from backtest import _build_ticker_weights, _SIGNAL_WINDOW
+
+    uni = config["tickers"]
+    weights = config.get("signals", {}).get("weights")
+    tw = _build_ticker_weights(config) or None
+    idx = price_data.index
+    step = 5 if len(idx) > 400 else 1                     # weekly cadence on long windows
+    rows: Dict = {}
+    for i in range(_SIGNAL_WINDOW, len(idx), step):
+        sl = price_data.iloc[max(0, i + 1 - _SIGNAL_WINDOW): i + 1]
+        sig = calculate_signals(sl, uni)
+        if sig.empty:
+            continue
+        rk = rank_candidates(sig, top_n=len(sig), weights=weights, ticker_weights=tw)
+        rows[idx[i]] = dict(zip(rk["ticker"], rk["composite_score"]))
+    return pd.DataFrame.from_dict(rows, orient="index").sort_index() if rows else pd.DataFrame()
+
+
 def _per_ticker_returns(trades: pd.DataFrame, last_close: float,
                         seed_open: float = None) -> Tuple[float, float, List[float]]:
     """Active compounded return from round-trips (+ open MTM) and number of round trips.
@@ -54,9 +78,12 @@ def _per_ticker_returns(trades: pd.DataFrame, last_close: float,
 
 
 def make_charts(trades_csv: Path, out_dir: Path, scenario: str, since=None,
-                close: "pd.DataFrame" = None) -> Dict[str, Dict]:
+                close: "pd.DataFrame" = None, price_data: "pd.DataFrame" = None,
+                config: Dict = None) -> Dict[str, Dict]:
     """If `close` ([dates × tickers]) is provided it is used directly (e.g. the panel
-    the backtest already fetched); otherwise prices are downloaded via yfinance."""
+    the backtest already fetched); otherwise prices are downloaded via yfinance.
+    If `price_data` (full OHLCV panel) + `config` are provided, each chart also overlays
+    the per-date composite score as bars on a secondary axis."""
     trades = pd.read_csv(trades_csv, parse_dates=["date"])
     tickers = sorted(trades["ticker"].unique())
 
@@ -67,6 +94,15 @@ def make_charts(trades_csv: Path, out_dir: Path, scenario: str, since=None,
         raw = yf.download(tickers, start=start.isoformat(), end=end.isoformat(),
                           interval="1d", auto_adjust=True, progress=False)
         close = raw["Close"] if isinstance(raw.columns, pd.MultiIndex) else raw[["Close"]].rename(columns={"Close": tickers[0]})
+
+    # Composite-score panel (optional overlay) — computed once, reused for every ticker.
+    score_df = pd.DataFrame()
+    min_score = (config or {}).get("signals", {}).get("min_composite_score")
+    if price_data is not None and config is not None:
+        try:
+            score_df = _score_panel(price_data, config)
+        except Exception:                                # overlay is a nicety; never fail charts
+            score_df = pd.DataFrame()
 
     out_dir.mkdir(parents=True, exist_ok=True)
     summary: Dict[str, Dict] = {}
@@ -88,6 +124,26 @@ def make_charts(trades_csv: Path, out_dir: Path, scenario: str, since=None,
         active_ret, n_rt, _ = _per_ticker_returns(tt, float(px.iloc[-1]), seed_open=seed)
 
         fig, ax = plt.subplots(figsize=(13, 6))
+
+        # composite-score bars on a secondary axis, scaled to the lower ~45% so the price
+        # line/markers stay clearly readable above them.
+        if not score_df.empty and tk in score_df.columns:
+            ss = score_df[tk].dropna()
+            ss = ss[(ss.index >= px.index[0]) & (ss.index <= px.index[-1])]
+            if not ss.empty:
+                ax2 = ax.twinx()
+                diffs = ss.index.to_series().diff().dt.days.dropna()
+                width = max(1.0, float(diffs.median()) * 0.85) if not diffs.empty else 5.0
+                ax2.bar(ss.index, ss.values, width=width, color="#4575b4", alpha=0.22, zorder=0)
+                ax2.set_ylim(0, 2.2)                       # score 1.0 → ~45% of chart height
+                ax2.set_yticks([0, 0.5, 1.0])
+                ax2.set_ylabel("composite score (0–1)", color="#4575b4", fontsize=8)
+                ax2.tick_params(axis="y", labelcolor="#4575b4", labelsize=7)
+                if min_score:
+                    ax2.axhline(min_score, color="#4575b4", lw=0.7, ls=":", alpha=0.7)
+                ax.set_zorder(ax2.get_zorder() + 1)        # draw price/markers above the bars
+                ax.patch.set_visible(False)
+
         ax.plot(px.index, px.values, color="#333", lw=1.1, label=f"{tk} close")
 
         # shade held periods (buy → next sell)
@@ -149,8 +205,22 @@ def main() -> None:
             sys.exit(1)
         trades_csv = matches[-1]
 
+    # Load the scenario config + full OHLCV panel so charts can overlay composite-score bars.
+    price_data = cfg = None
+    try:
+        sys.path.insert(0, str(Path(__file__).parent))
+        from scenarios import load_scenario, build_config
+        from backtest import load_config, fetch_backtest_data
+        cfg = build_config(load_config(root / "config"), load_scenario(args.scenario))
+        trades_dates = pd.read_csv(trades_csv, parse_dates=["date"])["date"]
+        price_data = fetch_backtest_data(cfg["tickers"], trades_dates.min().date(),
+                                         (trades_dates.max() + timedelta(days=3)).date())
+    except Exception as exc:
+        print(f"  (composite-score overlay unavailable: {exc})")
+
     out_dir = root / "reports" / f"charts_{args.scenario}_{date.today().isoformat()}"
-    summary = make_charts(trades_csv, out_dir, args.scenario, since=since)
+    summary = make_charts(trades_csv, out_dir, args.scenario, since=since,
+                          price_data=price_data, config=cfg)
 
     print()
     print(f"  Trades : {trades_csv.name}")
