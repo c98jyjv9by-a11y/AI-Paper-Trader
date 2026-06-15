@@ -265,7 +265,7 @@ signals:
 
 Changes take effect on the next run of any command.
 
-**Named scenarios** — `config/scenarios/<name>.yaml` overlays the base config (custom `tickers`, plus `portfolio`/`signals`/`risk`/`ticker_groups` overrides). Exit fields resolve per ticker in this order: a matching `ticker_groups` entry → the scenario `risk:` block (the **all-ticker** override layer) → the base `strategy.yaml` default. So `risk:` is where you set a rule for *every* name at once; add `ticker_groups` only to override specific names on top. Run with `python run.py scenario <name> --start … --end …`.
+**Named scenarios** — a scenario *is* a model: a named, self-contained config bundle (`config/scenarios/<name>.yaml`) that overlays the base config (custom `tickers`, plus `portfolio`/`signals`/`risk`/`ticker_groups` overrides). Exit fields resolve per ticker in this order: a matching `ticker_groups` entry → the scenario `risk:` block (the **all-ticker** override layer) → the base `strategy.yaml` default. So `risk:` is where you set a rule for *every* name at once; add `ticker_groups` only to override specific names on top. Scenarios are comparable, borrowable, and versionable; the research tools (`calibrate`/`active`/`screen`/`suite`) discover what goes into them. Run with `python run.py scenario <name> --start … --end …`. **See `config/scenarios/README.md` for the full structure.**
 
 ---
 
