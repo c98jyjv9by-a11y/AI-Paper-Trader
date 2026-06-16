@@ -108,19 +108,26 @@ def _load_ranking_snapshot(root: Path, scenario: str, d) -> Optional[List[Dict[s
     return out or None
 
 
+def _trade_row(r) -> Dict[str, Any]:
+    pnl = r.get("realized_pnl")
+    return {"date": str(r.get("date", "")), "action": str(r["action"]),
+            "ticker": str(r["ticker"]), "shares": int(r["shares"]),
+            "price": float(r["price"]), "reason": str(r.get("reason", "")),
+            "pnl": (None if pd.isna(pnl) else float(pnl))}
+
+
 def _today_trades(trades: Optional[pd.DataFrame], day_iso: str) -> List[Dict[str, Any]]:
     """Transactions executed on `day_iso` (buys filled, exits, vol-trim sells)."""
     if trades is None or trades.empty or "date" not in trades.columns:
         return []
-    td = trades[trades["date"].astype(str) == day_iso]
-    out = []
-    for _, r in td.iterrows():
-        pnl = r.get("realized_pnl")
-        out.append({"action": str(r["action"]), "ticker": str(r["ticker"]),
-                    "shares": int(r["shares"]), "price": float(r["price"]),
-                    "reason": str(r.get("reason", "")),
-                    "pnl": (None if pd.isna(pnl) else float(pnl))})
-    return out
+    return [_trade_row(r) for _, r in trades[trades["date"].astype(str) == day_iso].iterrows()]
+
+
+def _recent_trades(trades: Optional[pd.DataFrame], n: int = 10) -> List[Dict[str, Any]]:
+    """The most recent `n` trades across all dates (chronological order)."""
+    if trades is None or trades.empty:
+        return []
+    return [_trade_row(r) for _, r in trades.tail(n).iterrows()]
 
 
 def _write_ranking_snapshot(root: Path, scenario: str, d, ranked_rows) -> None:
@@ -270,6 +277,7 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
         "snapshot_used": snapshot_used,
         # vol-targeting risk budget (latest bar): forecast vol + exposure multiplier
         "today_trades": _today_trades(trades, mark.date().isoformat()),
+        "recent_trades": _recent_trades(trades, 10),
         "target_vol": cfg.get("risk", {}).get("target_vol"),
         "forecast_vol": (float(eq["forecast_vol"].dropna().iloc[-1])
                          if "forecast_vol" in eq.columns and eq["forecast_vol"].notna().any() else None),
@@ -351,6 +359,20 @@ def render_md(d: Dict[str, Any]) -> str:
                      f"| {x['reason']} | {pnl} |")
         L += ["", "_Buys fill at the latest close; exits / vol-trims fill same day. "
               "`vol_trim` = volatility-governor de-risk sale (if enabled)._", ""]
+
+    # ── Recent trade log (last 10 across all dates) ──
+    rt = d.get("recent_trades") or []
+    L += ["## Recent trade log (last 10)", ""]
+    if not rt:
+        L += ["_No trades in this run._", ""]
+    else:
+        L += ["| Date | Action | Ticker | Shares | Price | Reason | Realized P&L |",
+              "|------|--------|--------|------:|------:|--------|------:|"]
+        for x in rt:
+            pnl = "—" if x["pnl"] is None else f"${x['pnl']:,.0f}"
+            L.append(f"| {x['date']} | {x['action']} | {x['ticker']} | {x['shares']} "
+                     f"| {x['price']:.2f} | {x['reason']} | {pnl} |")
+        L += [""]
 
     # ── (A) ranking scored on the PRIOR CLOSE, marked forward to the latest price ──
     def _px2(v):
