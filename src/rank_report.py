@@ -35,12 +35,11 @@ def _pct(v: Optional[float], d: str = "—") -> str:
     return d if v is None or (isinstance(v, float) and pd.isna(v)) else f"{v * 100:+.2f}%"
 
 
-# Intraday checkpoints every 2 hours from open to close, labeled in Chicago Central Time.
+# Intraday checkpoints every 2 hours from 9:00 CT to the close, labeled in Chicago Central Time.
 # Keys are the underlying 30-min bar timestamps in market tz (America/New_York = CT+1);
-# the official close (CT 15:00 / ET 16:00) is handled separately via the daily close.
-#   ET 09:30 → CT 08:30 (open) · ET 11:30 → CT 10:30 · ET 13:30 → CT 12:30 · ET 15:30 → CT 14:30
-_CHECKPOINTS = [("09:30", "8:30 CT (open)"), ("11:30", "10:30 CT"),
-                ("13:30", "12:30 CT"), ("15:30", "14:30 CT")]
+# the close (CT 15:00 / ET 16:00) is handled separately via the daily close.
+#   ET 10:00 → CT 9:00 · ET 12:00 → CT 11:00 · ET 14:00 → CT 13:00
+_CHECKPOINTS = [("10:00", "9:00 CT"), ("12:00", "11:00 CT"), ("14:00", "13:00 CT")]
 _CLOSE_LABEL = "Latest (≈15:00 CT close)"
 
 
@@ -349,7 +348,8 @@ def render_md(d: Dict[str, Any]) -> str:
 
         L += [f"## A2) Intraday return progression — {d['mark']} (vs prior close {d['rank_close']})", "",
               "_Return from the prior close to each **2-hour checkpoint, Chicago Central Time** "
-              "(8:30 open → 15:00 close), using 30-min bars. `Close` is the official daily close. "
+              "(9:00 → 11:00 → 13:00 → 15:00 close), using 30-min bars. The last column is the "
+              "latest/close. "
               "Watch the spread between the top and bottom AVG rows build through the session._", ""]
         L += tbl_intra(f"Top {tn} @ prior close — intraday path",
                        [(r["ticker"], r["return"]) for r in rows[:tn]])
