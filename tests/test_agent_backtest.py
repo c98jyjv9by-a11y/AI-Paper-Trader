@@ -101,3 +101,61 @@ def test_rule_settings_differentiate_and_diverge():
     # discretionary concentrates -> takes one buy, skips the other -> a divergence is logged
     assert disc["n_divergences"] >= 1
     assert disc["n_trades"] == 1
+
+
+# ── Context providers ────────────────────────────────────────────────────────────
+def test_macro_provider_no_lookahead_and_breadth():
+    import context_providers as C
+    dates = pd.bdate_range("2025-09-01", periods=80)
+    # AAA uptrend (above its MA), BBB downtrend (below); SPY uptrend
+    close = _close(dates, {
+        "AAA": [100 * 1.01 ** i for i in range(80)],
+        "BBB": [100 * 0.99 ** i for i in range(80)],
+        "SPY": [100 * 1.004 ** i for i in range(80)],
+        "QQQ": [100 * 1.004 ** i for i in range(80)],
+    })
+    m = C.MacroProvider()
+    m._uni = close
+    m._x = pd.DataFrame()                          # no VIX/sector data → those lines just omit
+    blk = m.block(dates[-1].date(), ["AAA", "BBB"], [])
+    assert "SPY" in blk and "ABOVE 50d MA" in blk
+    assert "Breadth: 1/2" in blk                   # AAA above, BBB below
+    # no look-ahead: a block as of an early date must not see later bars
+    early = m.block(dates[40].date(), ["AAA", "BBB"], [])
+    assert "MACRO CONTEXT" in early
+
+
+def test_build_providers_unknown_raises():
+    import context_providers as C
+    try:
+        C.build_providers(["bogus"], ["AAA"], date(2026, 1, 1), date(2026, 1, 5), pd.DataFrame())
+        assert False, "expected ValueError"
+    except ValueError as e:
+        assert "Unknown context provider" in str(e)
+
+
+def test_stub_providers_return_text():
+    import context_providers as C
+    for P in (C.SocialProvider(), C.AnalystProvider()):
+        assert P.block(date(2026, 1, 5), ["AAA"], []) != ""
+
+
+def test_llm_actions_prompt_includes_context_blocks(monkeypatch):
+    captured = {}
+
+    class FakeResp:
+        content = []
+
+    class FakeMsgs:
+        def create(self, **kw):
+            captured["prompt"] = kw["messages"][0]["content"]
+            return FakeResp()
+
+    class FakeClient:
+        messages = FakeMsgs()
+
+    spec = _spec(date(2026, 1, 5))
+    A._llm_actions(FakeClient(), "m", "discretionary", spec, A.Paper(1000), {},
+                   ["AAA"], context_blocks=["MARKET / MACRO CONTEXT: regime risk-on"])
+    assert "ADDITIONAL INFORMATION SOURCES" in captured["prompt"]
+    assert "regime risk-on" in captured["prompt"]

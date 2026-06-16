@@ -189,9 +189,12 @@ def _spec_to_text(spec: Dict[str, Any], pf: Paper, prices: Dict[str, float]) -> 
     return "\n".join(L)
 
 
-def _llm_actions(client, model: str, setting: str, spec, pf, prices, universe) -> List[Dict[str, Any]]:
+def _llm_actions(client, model: str, setting: str, spec, pf, prices, universe,
+                 context_blocks: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    extra = ("\n\nADDITIONAL INFORMATION SOURCES:\n" + "\n\n".join(context_blocks)
+             if context_blocks else "")
     prompt = (f"{PLAN}\n\nYOUR SETTING: {setting.upper()}\nTradeable universe: "
-              f"{', '.join(universe)}\n\n{_spec_to_text(spec, pf, prices)}\n\n"
+              f"{', '.join(universe)}\n\n{_spec_to_text(spec, pf, prices)}{extra}\n\n"
               "Call submit_decisions with your actions for the next open (empty list = hold).")
     resp = client.messages.create(
         model=model, max_tokens=1500,
@@ -310,7 +313,7 @@ def _load_api_key(root: Path) -> Optional[str]:
 def run(scenario: str, start: date, end: date, *,
         settings=SETTINGS, model: str = DEFAULT_MODEL, no_llm: bool = False,
         start_cash: float = 100_000.0, slippage: float = 0.001, seed_first_book: bool = True,
-        workers: Optional[int] = None, out: Optional[Path] = None) -> Dict[str, Any]:
+        context: str = "", workers: Optional[int] = None, out: Optional[Path] = None) -> Dict[str, Any]:
     from scenarios import build_config, load_scenario
     from backtest import load_config, fetch_backtest_data, run_backtest
 
@@ -328,6 +331,12 @@ def run(scenario: str, start: date, end: date, *,
     _t, eq, _p = run_backtest(cfg, panel, start, end)
     eq_by = dict(zip(eq["date"].astype(str), eq["total_portfolio_value"].astype(float)))
 
+    # Optional information-source providers injected into the agent context.
+    providers = []
+    if context.strip() and not no_llm:
+        from context_providers import build_providers
+        providers = build_providers([c for c in context.split(",")], cfg["tickers"], start, end, close)
+
     client = None
     if not no_llm and any(s != "strict" for s in settings):
         import anthropic                            # lazy: only when an LLM setting runs
@@ -338,7 +347,8 @@ def run(scenario: str, start: date, end: date, *,
             return _strict_actions(spec)
         if no_llm:
             return _rule_actions(setting, spec, pf, prices)
-        return _llm_actions(client, model, setting, spec, pf, prices, cfg["tickers"])
+        blocks = [p.block(spec["mark"], cfg["tickers"], list(pf.pos)) for p in providers]
+        return _llm_actions(client, model, setting, spec, pf, prices, cfg["tickers"], blocks)
 
     results = {s: _simulate(s, specs, close, decide=decide, start_cash=start_cash,
                             slippage=slippage, seed_first_book=seed_first_book)
@@ -358,18 +368,19 @@ def run(scenario: str, start: date, end: date, *,
     out = Path(out) if out else (root / "reports" /
           f"agent_backtest_{scenario}_{start.isoformat()}_{end.isoformat()}.md")
     out.write_text(_report(scenario, d0, d1, results, bench, model, no_llm, series["pdf"],
-                           seed_first_book))
+                           seed_first_book, context))
     return {"report": str(out), "pdf": series["pdf"], "results": results, "bench": bench}
 
 
-def _report(scenario, d0, d1, results, bench, model, no_llm, pdf, seeded=True) -> str:
+def _report(scenario, d0, d1, results, bench, model, no_llm, pdf, seeded=True, context="") -> str:
     strict_ret = results.get("strict", {}).get("ret")
     L = [f"# Agent backtest — {scenario}",
          f"**Window:** {d0} → {d1}  |  **Decider:** {'deterministic rules (--no-llm)' if no_llm else model}  "
          f"|  **Packet:** `{Path(pdf).name}`", "",
          "_The agent reads one daily page at a time (no look-ahead) and emits structured trades; "
          "the harness owns all fills (next-open, with slippage) and accounting._",
-         f"_Start: {'seeded with the first page held book (level with the model)' if seeded else 'flat (100% cash)'}._",
+         f"_Start: {'seeded with the first page held book (level with the model)' if seeded else 'flat (100% cash)'}."
+         f"  Extra context sources: {context or 'none'}._",
          "",
          "## Scorecard", "",
          "| Setting | Final | Return | Max DD | Trades | Divergences | vs Model |",
@@ -422,13 +433,15 @@ def main(argv=None):
                     help="use deterministic rule stand-ins instead of the LLM (offline)")
     ap.add_argument("--no-seed", action="store_true",
                     help="start the agent flat instead of seeding it with the first page's held book")
+    ap.add_argument("--context", default="",
+                    help="comma list of extra info sources to inject: macro,news,social,analyst")
     ap.add_argument("--workers", type=int)
     ap.add_argument("--out")
     a = ap.parse_args(argv)
     res = run(a.scenario, date.fromisoformat(a.start), date.fromisoformat(a.end),
               settings=tuple(s.strip() for s in a.settings.split(",") if s.strip()),
               model=a.model, no_llm=a.no_llm, seed_first_book=not a.no_seed,
-              workers=a.workers, out=Path(a.out) if a.out else None)
+              context=a.context, workers=a.workers, out=Path(a.out) if a.out else None)
     print(f"Wrote {res['report']}")
     for s, r in res["results"].items():
         print(f"  {s:14s} final {_money(r['final'])}  return {_pct(r['ret'])}  "
