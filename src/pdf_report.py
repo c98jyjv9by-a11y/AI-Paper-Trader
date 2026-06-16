@@ -18,6 +18,7 @@ Read-only with respect to data/. Writes reports/eod_<scenario>_<date>.pdf.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import textwrap
 from datetime import date
@@ -71,16 +72,16 @@ def _new_page(pdf: PdfPages):
     return fig, ax
 
 
-def _banner(ax, scenario: str, d: Dict[str, Any], subtitle: str):
+def _banner(ax, scenario: str, mark, rank_close, subtitle: str):
     """Top navy banner with title + run metadata."""
     ax.add_patch(plt.Rectangle((0, 0.93), 1, 0.07, transform=ax.transAxes,
                                facecolor=NAVY, edgecolor="none", zorder=0))
     ax.text(0.06, 0.965, f"{scenario}  —  End-of-Day Update",
             color="white", fontsize=15, fontweight="bold", va="center")
     ax.text(0.06, 0.943, subtitle, color="#b9c6d8", fontsize=8.5, va="center")
-    ax.text(0.94, 0.958, d["mark"].isoformat(), color="white", fontsize=11,
+    ax.text(0.94, 0.958, mark.isoformat(), color="white", fontsize=11,
             fontweight="bold", va="center", ha="right")
-    ax.text(0.94, 0.940, f"ranked @ close {d['rank_close']}", color="#b9c6d8",
+    ax.text(0.94, 0.940, f"ranked @ close {rank_close}", color="#b9c6d8",
             fontsize=7.5, va="center", ha="right")
 
 
@@ -337,40 +338,55 @@ def _commentary(d: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, List[str]]:
 
 
 # ── Pages ──────────────────────────────────────────────────────────────────────
-def _page_cover(pdf, d, cfg, comm):
-    fig, ax = _new_page(pdf)
-    _banner(ax, d["scenario"], d, "Systematic momentum portfolio · daily update")
+def _cover_spec(d: Dict[str, Any], comm: Dict[str, List[str]]) -> Dict[str, Any]:
+    """Flat, picklable bundle of everything the cover page needs (for the parallel
+    cover-series harness — closures/DataFrames in `d` are not picklable)."""
+    one_d = (d.get("stats") or {}).get("1D", {})
+    return {
+        "scenario": d["scenario"], "mark": d["mark"], "rank_close": d["rank_close"],
+        "pv": d.get("pv"), "port_1d": one_d.get("port"),
+        "signal_strength": d.get("signal_strength"), "exposure_mult": d.get("exposure_mult"),
+        "next_session": d.get("next_session") or {},
+        "observations": comm["observations"], "recommendations": comm["recommendations"],
+    }
 
-    # snapshot strip
-    stats = d.get("stats", {})
-    one_d = stats.get("1D", {})
-    port_1d = one_d.get("port")
-    pv = d.get("pv")
+
+def _render_cover(pdf, spec: Dict[str, Any], page: int = 1):
+    """Render one cover page from a picklable spec (used by both build_pdf and the series)."""
+    fig, ax = _new_page(pdf)
+    _banner(ax, spec["scenario"], spec["mark"], spec["rank_close"],
+            "Systematic momentum portfolio · daily update")
+
+    pv, port_1d, em = spec.get("pv"), spec.get("port_1d"), spec.get("exposure_mult")
     y = _cards(ax, 0.905, [
         ("Portfolio value", _money(pv), NAVY),
         ("Session return", _pct(port_1d), _ret_color(port_1d)),
-        ("Signal spread", _pct(d.get("signal_strength")), _ret_color(d.get("signal_strength"))),
-        ("Exposure", (f"{d['exposure_mult']:.2f}×" if d.get("exposure_mult") is not None else "—"),
-         (RED if (d.get("exposure_mult") or 1) < 0.999 else GREEN)),
+        ("Signal spread", _pct(spec.get("signal_strength")), _ret_color(spec.get("signal_strength"))),
+        ("Exposure", (f"{em:.2f}×" if em is not None else "—"),
+         (RED if (em or 1) < 0.999 else GREEN)),
     ])
 
     # Queued decision for next session (decide at today's close → fill next open)
     y = _section(ax, y - 0.005, "Queued for next session  (after today's close → next open)")
-    y = _queued_block(ax, y, d.get("next_session") or {})
+    y = _queued_block(ax, y, spec.get("next_session") or {})
 
     y = _section(ax, y - 0.008, "Market commentary")
-    y = _bullets(ax, y, comm["observations"])
+    y = _bullets(ax, y, spec["observations"])
 
     y = _section(ax, y - 0.01, "Recommendations — tonight → next open")
-    y = _bullets(ax, y, comm["recommendations"])
+    y = _bullets(ax, y, spec["recommendations"])
 
-    _footer(ax, 1)
+    _footer(ax, page)
     pdf.savefig(fig); plt.close(fig)
+
+
+def _page_cover(pdf, d, cfg, comm):
+    _render_cover(pdf, _cover_spec(d, comm), page=1)
 
 
 def _page_signals(pdf, d):
     fig, ax = _new_page(pdf)
-    _banner(ax, d["scenario"], d, "Signal performance & benchmarks")
+    _banner(ax, d["scenario"], d["mark"], d["rank_close"], "Signal performance & benchmarks")
     y = 0.90
 
     y = _section(ax, y, "Signal strength (ranking-close → latest)")
@@ -420,7 +436,7 @@ def _page_signals(pdf, d):
 
 def _page_rankings(pdf, d):
     fig, ax = _new_page(pdf)
-    _banner(ax, d["scenario"], d, f"Current composite ranking (scored on {d['mark']}) — sets up next session")
+    _banner(ax, d["scenario"], d["mark"], d["rank_close"], f"Current composite ranking (scored on {d['mark']}) — sets up next session")
     y = 0.90
     rows_cur = d.get("rows_cur") or []
     tn = d["top_n"]
@@ -471,7 +487,7 @@ def _page_rankings(pdf, d):
 
 def _page_activity(pdf, d):
     fig, ax = _new_page(pdf)
-    _banner(ax, d["scenario"], d, "Holdings & recent activity")
+    _banner(ax, d["scenario"], d["mark"], d["rank_close"], "Holdings & recent activity")
     y = 0.90
 
     # held book
@@ -564,16 +580,126 @@ def run(scenario: str, start: date, end: date, output: Optional[Path] = None) ->
     return build_pdf(d, cfg, out)
 
 
+# ── Cover-series harness (one cover page per date over a horizon) ─────────────────
+# For backtesting an agent's read-and-act loop: render the EOD cover page for every
+# trading day in [start, end] into one combined PDF, plus return the per-date specs.
+# Each date is reconstructed with NO look-ahead (rank_report.build_report(..., fast=True)
+# is windowed on data <= that date; fast mode skips snapshot/intraday I/O & network).
+
+_MAX_SERIES_WORKERS = 8
+_S_PDATA = None
+_S_CFG = None
+_S_SCENARIO = None
+_S_START = None
+_S_TOPN = None
+
+
+def _series_pool_init(pdata, cfg, scenario, start, top_n):
+    global _S_PDATA, _S_CFG, _S_SCENARIO, _S_START, _S_TOPN
+    _S_PDATA, _S_CFG, _S_SCENARIO, _S_START, _S_TOPN = pdata, cfg, scenario, start, top_n
+
+
+def _series_worker(d_iso: str):
+    """Build one date's cover spec from the shared (initializer-set) price panel."""
+    import pandas as pd
+    import rank_report
+    D = date.fromisoformat(d_iso)
+    sub = _S_PDATA.loc[:pd.Timestamp(D)]
+    try:
+        rep = rank_report.build_report(_S_SCENARIO, _S_START, D, top_n=_S_TOPN,
+                                       cfg=_S_CFG, pdata=sub, fast=True)
+        return (d_iso, _cover_spec(rep, _commentary(rep, _S_CFG)), None)
+    except Exception as exc:                       # one bad date must not sink the batch
+        return (d_iso, None, f"{type(exc).__name__}: {exc}")
+
+
+def run_cover_series(scenario: str, start: date, end: date,
+                     out_path: Optional[Path] = None, *, sim_start: Optional[date] = None,
+                     workers: Optional[int] = None, top_n: int = 10,
+                     warmup_days: int = 200) -> Dict[str, Any]:
+    """Render the EOD COVER PAGE for every trading day in [start, end] — one page per
+    date — into a single combined PDF, for backtesting an agent's ability to read the
+    daily output and act.
+
+    Parallelized across dates (process pool; the price panel is shared once via the pool
+    initializer, not pickled per task). Each page is a faithful, no-look-ahead
+    reconstruction of what the cover would have shown on that date.
+
+    sim_start: the model's inception used for the backtest warmup (default = `start`).
+      Pass an earlier date so the volatility governor / momentum signals are mature on
+      the first pages instead of warming up across the early horizon.
+
+    Returns a single combined dict: {pdf, pages, dates, specs, errors} — `specs` is the
+    list of per-date cover bundles (commentary, recommendations, queued decision, metrics)
+    in date order, so the agent harness can consume the data directly as well as the PDF.
+    """
+    import pandas as pd
+    sys.path.insert(0, str(Path(__file__).parent))
+    from scenarios import build_config, load_scenario
+    from backtest import load_config as _load_cfg, fetch_backtest_data
+
+    root = Path(__file__).parent.parent
+    cfg = build_config(_load_cfg(root / "config"), load_scenario(scenario))
+    sim_start = sim_start or start
+    pdata = fetch_backtest_data(cfg["tickers"], sim_start, end, warmup_days=warmup_days)
+
+    close = pdata["Close"]
+    dates = [ts.date().isoformat() for ts in close.index if start <= ts.date() <= end]
+    if not dates:
+        raise ValueError(f"No trading days in [{start}, {end}].")
+
+    n = workers or max(1, min(_MAX_SERIES_WORKERS, (os.cpu_count() or 2) - 1, len(dates)))
+    specs: Dict[str, Any] = {}
+    errors: Dict[str, str] = {}
+    initargs = (pdata, cfg, scenario, sim_start, top_n)
+
+    if n > 1 and len(dates) > 1:
+        import multiprocessing as mp
+        with mp.Pool(n, initializer=_series_pool_init, initargs=initargs) as pool:
+            for d_iso, spec, err in pool.imap_unordered(_series_worker, dates):
+                (specs if spec is not None else errors)[d_iso] = spec if spec is not None else err
+    else:
+        _series_pool_init(*initargs)
+        for d_iso in dates:
+            _, spec, err = _series_worker(d_iso)
+            (specs if spec is not None else errors)[d_iso] = spec if spec is not None else err
+
+    ordered = sorted(specs)
+    out_path = Path(out_path) if out_path else (
+        root / "reports" / f"eod_series_{scenario}_{start.isoformat()}_{end.isoformat()}.pdf")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with PdfPages(out_path) as pdf:
+        for i, d_iso in enumerate(ordered, 1):
+            _render_cover(pdf, specs[d_iso], page=i)
+
+    return {"pdf": str(out_path), "pages": len(ordered), "dates": ordered,
+            "specs": [specs[k] for k in ordered], "errors": errors}
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Professional end-of-day PDF report for a scenario.")
     ap.add_argument("--scenario", required=True)
     ap.add_argument("--start", required=True)
     ap.add_argument("--end", required=True)
     ap.add_argument("--out")
+    ap.add_argument("--series", action="store_true",
+                    help="render the COVER page for every date in [start, end] into one combined PDF")
+    ap.add_argument("--sim-start", help="backtest warmup inception for --series (default = start)")
+    ap.add_argument("--workers", type=int, help="parallel workers for --series")
     a = ap.parse_args(argv)
-    out = run(a.scenario, date.fromisoformat(a.start), date.fromisoformat(a.end),
-              Path(a.out) if a.out else None)
-    print(f"Wrote {out}")
+    if a.series:
+        res = run_cover_series(
+            a.scenario, date.fromisoformat(a.start), date.fromisoformat(a.end),
+            Path(a.out) if a.out else None,
+            sim_start=date.fromisoformat(a.sim_start) if a.sim_start else None,
+            workers=a.workers)
+        print(f"Wrote {res['pages']} cover pages → {res['pdf']}")
+        if res["errors"]:
+            print(f"  ({len(res['errors'])} date(s) skipped: {', '.join(sorted(res['errors'])[:5])}…)")
+    else:
+        out = run(a.scenario, date.fromisoformat(a.start), date.fromisoformat(a.end),
+                  Path(a.out) if a.out else None)
+        print(f"Wrote {out}")
 
 
 if __name__ == "__main__":

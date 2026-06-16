@@ -137,37 +137,37 @@ _Return from the prior close to each **hourly Chicago-time checkpoint** (9:00, 1
 
 ## B) CURRENT composite ranking (scored on latest prices 2026-06-16) — sets up the next session
 
-_Recomputed on the current/provisional prices. 19/83 names clear the buy gate now. `Δrank vs prior` = move vs the prior-close ranking (▲ = ranked higher now)._
+_Recomputed on the current/provisional prices. 20/83 names clear the buy gate now. `Δrank vs prior` = move vs the prior-close ranking (▲ = ranked higher now)._
 
 ### Top 10 (highest buy scores @ current prices)
 
 | # | Ticker | Score | Gate | 2026-06-16 px | Δrank vs prior | Held |
 |---|--------|------:|:----:|------:|:-------------:|:----:|
-| 1 | AMAT | 0.915 | ✓ | 568.23 | ▲3 |  |
-| 2 | ARM | 0.913 | ✓ | 396.34 | ▼1 | HELD |
-| 3 | HOOD | 0.901 | ✓ | 96.71 | ▲2 |  |
-| 4 | KLAC | 0.888 | ✓ | 237.33 | ▼1 |  |
+| 1 | AMAT | 0.913 | ✓ | 568.23 | ▲3 |  |
+| 2 | ARM | 0.910 | ✓ | 396.34 | ▼1 | HELD |
+| 3 | HOOD | 0.904 | ✓ | 96.71 | ▲2 |  |
+| 4 | KLAC | 0.885 | ✓ | 237.33 | ▼1 |  |
 | 5 | LRCX | 0.881 | ✓ | 369.34 | ▼3 |  |
 | 6 | SOFI | 0.842 | ✓ | 17.71 | ▲14 |  |
-| 7 | MU | 0.814 | ✓ | 1020.76 | ▲3 |  |
-| 8 | MRVL | 0.796 | ✓ | 278.67 | ▼1 | HELD |
-| 9 | RBLX | 0.792 | ✓ | 49.34 | ▲12 |  |
-| 10 | VST | 0.775 | ✓ | 158.61 | ▲15 |  |
+| 7 | MU | 0.809 | ✓ | 1020.76 | ▲3 |  |
+| 8 | RBLX | 0.799 | ✓ | 49.34 | ▲13 |  |
+| 9 | MRVL | 0.794 | ✓ | 278.67 | ▼2 | HELD |
+| 10 | VST | 0.773 | ✓ | 158.61 | ▲15 |  |
 
 ### Bottom 10 (lowest buy scores @ current prices)
 
 | # | Ticker | Score | Gate | 2026-06-16 px | Δrank vs prior | Held |
 |---|--------|------:|:----:|------:|:-------------:|:----:|
-| 74 | OXY | 0.249 | — | 53.67 | • |  |
-| 75 | SMCI | 0.228 | — | 29.22 | ▼5 |  |
-| 76 | ADBE | 0.227 | — | 207.32 | ▼1 |  |
-| 77 | TTD | 0.211 | — | 18.96 | ▼13 |  |
+| 74 | OXY | 0.245 | — | 53.67 | • |  |
+| 75 | ADBE | 0.227 | — | 207.32 | • |  |
+| 76 | SMCI | 0.219 | — | 29.22 | ▼6 |  |
+| 77 | TTD | 0.206 | — | 18.96 | ▼13 |  |
 | 78 | ZS | 0.198 | — | 127.23 | ▲1 |  |
-| 79 | NOW | 0.195 | — | 101.33 | ▼14 |  |
+| 79 | NOW | 0.198 | — | 101.33 | ▼14 |  |
 | 80 | SAP | 0.184 | — | 165.41 | • |  |
-| 81 | HUBS | 0.175 | — | 182.85 | • |  |
-| 82 | INTU | 0.168 | — | 280.99 | • |  |
-| 83 | PLUG | 0.110 | — | 2.71 | • |  |
+| 81 | HUBS | 0.173 | — | 182.85 | • |  |
+| 82 | INTU | 0.165 | — | 280.99 | • |  |
+| 83 | PLUG | 0.108 | — | 2.71 | • |  |
 
 ## Group returns (ranking-close → latest)
 

@@ -22,6 +22,7 @@ python run.py suite  --train-start … --train-end … --test-start … --test-e
 python run.py scenario davids_model --start … --end …                            # run a named scenario (config/scenarios/<name>.yaml); incl. sensitivity + auto charts + auto status&rank report; --no-sensitivity / --no-charts / --no-status to skip
 python run.py rank <name> [--start … --end …] [--top N]                          # status & rank report: top/bottom ranks + signal strength + held book vs SPY/QQQ (dated md + csv)
 python src/pdf_report.py --scenario <name> --start … --end …                     # professional end-of-day PDF update (auto-generated commentary + recommendations, rankings, holdings, activity); also auto-written on every scenario run as reports/eod_<name>_<date>.pdf
+python src/pdf_report.py --scenario <name> --start … --end … --series [--sim-start … --workers N]  # one EOD COVER page per trading day over [start,end] into a single combined PDF (parallelized, no look-ahead) — for backtesting an agent's read-and-act loop; run_cover_series() also returns the per-date specs
 python run.py adaptive --start … --end … [--rebalance-days N --lookback-days N --top-n N]  # per-ticker weekly rotating-signal backtest (auto-writes per-ticker charts; --no-charts to skip)
 ```
 

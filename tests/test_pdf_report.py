@@ -115,6 +115,57 @@ def test_build_pdf_renders_queued_trades(tmp_path):
     assert out.exists() and out.read_bytes()[:5].startswith(b"%PDF")
 
 
+def test_cover_spec_is_picklable_with_expected_keys():
+    import pickle
+    d, cfg = _dict_and_cfg()
+    spec = P._cover_spec(d, P._commentary(d, cfg))
+    assert {"scenario", "mark", "rank_close", "pv", "port_1d", "signal_strength",
+            "exposure_mult", "next_session", "observations", "recommendations"} <= set(spec)
+    pickle.loads(pickle.dumps(spec))            # must survive process boundary
+
+
+def test_render_cover_multipage(tmp_path):
+    from matplotlib.backends.backend_pdf import PdfPages
+    d, cfg = _dict_and_cfg()
+    spec = P._cover_spec(d, P._commentary(d, cfg))
+    out = tmp_path / "series.pdf"
+    with PdfPages(out) as pdf:
+        for i in range(1, 4):
+            P._render_cover(pdf, spec, page=i)
+    assert out.exists() and out.read_bytes()[:5].startswith(b"%PDF")
+
+
+def test_run_cover_series_orchestration(tmp_path, monkeypatch):
+    """Serial path (workers=1) with the heavy deps stubbed — exercises date filtering,
+    ordering, page count and combined output without network or a real backtest."""
+    import backtest, scenarios, rank_report
+    dates = pd.bdate_range("2026-06-01", "2026-06-05")
+    cols = pd.MultiIndex.from_product([["Close"], ["AAA", "BBB", "SPY", "QQQ"]])
+    panel = pd.DataFrame(100.0, index=dates, columns=cols)
+
+    monkeypatch.setattr(backtest, "load_config", lambda *a, **k: {})
+    monkeypatch.setattr(scenarios, "load_scenario", lambda *a, **k: {})
+    monkeypatch.setattr(scenarios, "build_config", lambda *a, **k: {
+        "tickers": ["AAA", "BBB"], "portfolio": {}, "signals": {}, "risk": {}})
+    monkeypatch.setattr(backtest, "fetch_backtest_data", lambda *a, **k: panel)
+    monkeypatch.setattr(rank_report, "build_report", lambda scenario, start, end, **k: {
+        "scenario": scenario, "mark": end, "rank_close": end,
+        "stats": {"1D": {"port": 0.01}}, "pv": 100000.0, "signal_strength": 0.02,
+        "exposure_mult": 0.9,
+        "next_session": {"buys": [], "sells": [], "buy_reason": "x", "sell_reason": "y"}})
+    monkeypatch.setattr(P, "_commentary", lambda d, cfg: {
+        "observations": ["obs"], "recommendations": ["rec"]})
+
+    out = tmp_path / "combined.pdf"
+    res = P.run_cover_series("model_v4", date(2026, 6, 1), date(2026, 6, 5),
+                             out_path=out, workers=1)
+    assert res["pages"] == 5                      # 5 business days, all rendered
+    assert res["dates"] == sorted(res["dates"])   # date-ordered
+    assert not res["errors"]
+    assert len(res["specs"]) == 5
+    assert out.exists() and out.read_bytes()[:5].startswith(b"%PDF")
+
+
 def test_parse_helpers():
     assert abs(P._parse_pct("-4.03%") + 0.0403) < 1e-9
     assert P._parse_pct("—") is None

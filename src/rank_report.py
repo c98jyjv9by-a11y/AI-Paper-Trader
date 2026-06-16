@@ -215,7 +215,7 @@ def _write_ranking_snapshot(root: Path, scenario: str, d, ranked_rows) -> None:
 def build_report(scenario: str, start: date, end: date, top_n: int = 10,
                  *, cfg: Optional[Dict[str, Any]] = None, pdata: Optional[pd.DataFrame] = None,
                  eq: Optional[pd.DataFrame] = None, positions: Optional[pd.DataFrame] = None,
-                 trades: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
+                 trades: Optional[pd.DataFrame] = None, fast: bool = False) -> Dict[str, Any]:
     """Build the rank/status snapshot. The scenario run can pass its already-computed
     cfg/pdata/eq/positions to avoid re-fetching and re-running the backtest."""
     root = Path(__file__).parent.parent
@@ -262,7 +262,10 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
 
     # Prior-close ranking (Section A). Prefer a saved snapshot for that date (authoritative —
     # what was actually produced, immune to later feed gaps); else recompute from data.
-    snap = _load_ranking_snapshot(root, scenario, rank_close.date())
+    # `fast` mode (used by the cover-series harness): always recompute scores from price
+    # history and skip the snapshot read/write + intraday fetch — no disk side-effects, no
+    # network, and a consistent no-look-ahead reconstruction for every historical date.
+    snap = None if fast else _load_ranking_snapshot(root, scenario, rank_close.date())
     snapshot_used = bool(snap)
     if snap:
         rows = [{
@@ -290,11 +293,12 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
             "price": _px(t, mark), "held": t in held,
         })
     # Persist the current ranking as the snapshot for `mark`'s date (becomes the next
-    # session's authoritative prior-close ranking).
-    try:
-        _write_ranking_snapshot(root, scenario, mark.date(), rows_cur)
-    except Exception as exc:
-        log.warning("Could not write ranking snapshot: %s", exc)
+    # session's authoritative prior-close ranking). Skipped in fast/series mode.
+    if not fast:
+        try:
+            _write_ranking_snapshot(root, scenario, mark.date(), rows_cur)
+        except Exception as exc:
+            log.warning("Could not write ranking snapshot: %s", exc)
     # rank movement vs the prior-close ranking (for context)
     prior_rank = {x["ticker"]: x["rank"] for x in rows}
     for x in rows_cur:
@@ -302,16 +306,17 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
 
     # intraday return progression (vs prior close) for the top/bottom-N prior-close names
     intraday = None
-    try:
-        need = ([x["ticker"] for x in rows[:top_n]] + [x["ticker"] for x in rows[-top_n:]]
-                + sorted(held))                          # include held positions too
-        # Anchor each needed ticker to its actual prior close (not just the snapshot rows),
-        # so held names outside the top/bottom-N still get intraday checkpoints.
-        pc_map = {t: _px(t, rank_close) for t in set(need) if _px(t, rank_close)}
-        intraday = intraday_returns(sorted(set(need)), mark.date(), pc_map)
-    except Exception as exc:                              # intraday is a nicety; never fail the report
-        log.warning("Intraday checkpoints skipped: %s", exc)
-        intraday = None
+    if not fast:
+        try:
+            need = ([x["ticker"] for x in rows[:top_n]] + [x["ticker"] for x in rows[-top_n:]]
+                    + sorted(held))                          # include held positions too
+            # Anchor each needed ticker to its actual prior close (not just the snapshot rows),
+            # so held names outside the top/bottom-N still get intraday checkpoints.
+            pc_map = {t: _px(t, rank_close) for t in set(need) if _px(t, rank_close)}
+            intraday = intraday_returns(sorted(set(need)), mark.date(), pc_map)
+        except Exception as exc:                          # intraday is a nicety; never fail the report
+            log.warning("Intraday checkpoints skipped: %s", exc)
+            intraday = None
 
     # Universe-level stats over ALL names (price-based, so they stay correct even when the
     # prior-close ranking comes from a partial snapshot).
