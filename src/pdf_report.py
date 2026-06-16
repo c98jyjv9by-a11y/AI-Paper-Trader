@@ -114,24 +114,25 @@ def _bullets(ax, y: float, items: List[str], width: int = 95, lh: float = 0.0185
     return y
 
 
-def _queued_block(ax, y: float, ns: Dict[str, Any]) -> float:
+def _queued_block(ax, y: float, ns: Dict[str, Any], *, fontsize: float = 8.6,
+                  lh: float = 0.0185, gap: float = 0.008, width: int = 95) -> float:
     """Render the next-session queued trades, or an explicit no-trade reason."""
     buys = ns.get("buys") or []
     sells = ns.get("sells") or []
 
     if not buys and not sells:
         # status chip
-        ax.add_patch(plt.Rectangle((0.075, y - 0.026), 0.30, 0.024, transform=ax.transAxes,
+        ax.add_patch(plt.Rectangle((0.075, y - 0.024), 0.30, 0.022, transform=ax.transAxes,
                                    facecolor="#e8edf3", edgecolor=RULE, lw=0.8, zorder=0))
-        ax.text(0.09, y - 0.014, "● NO TRADES — hold current book", color=NAVY,
-                fontsize=9, va="center", fontweight="bold")
-        y -= 0.038
+        ax.text(0.09, y - 0.013, "● NO TRADES — hold current book", color=NAVY,
+                fontsize=8.5, va="center", fontweight="bold")
+        y -= 0.034
         items = []
         if ns.get("buy_reason"):
             items.append("Buys — " + ns["buy_reason"])
         if ns.get("sell_reason"):
             items.append("Sells — " + ns["sell_reason"])
-        return _bullets(ax, y, items, fontsize=8.6)
+        return _bullets(ax, y, items, fontsize=fontsize, lh=lh, gap=gap, width=width)
 
     rows, colors = [], []
     for b in buys:
@@ -342,11 +343,22 @@ def _cover_spec(d: Dict[str, Any], comm: Dict[str, List[str]]) -> Dict[str, Any]
     """Flat, picklable bundle of everything the cover page needs (for the parallel
     cover-series harness — closures/DataFrames in `d` are not picklable)."""
     one_d = (d.get("stats") or {}).get("1D", {})
+    pos = d.get("positions")
+    retfn = d.get("ret")
+    holdings = []
+    if pos is not None and not pos.empty:
+        for _, p in pos.sort_values("ticker").iterrows():
+            holdings.append({
+                "ticker": str(p["ticker"]), "shares": int(p["shares"]),
+                "entry": float(p["entry_price"]), "now": float(p["current_price"]),
+                "unreal": float(p["current_price"] / p["entry_price"] - 1),
+                "session": (retfn(p["ticker"]) if retfn else None),
+            })
     return {
         "scenario": d["scenario"], "mark": d["mark"], "rank_close": d["rank_close"],
         "pv": d.get("pv"), "cash": d.get("cash"), "port_1d": one_d.get("port"),
         "signal_strength": d.get("signal_strength"), "exposure_mult": d.get("exposure_mult"),
-        "next_session": d.get("next_session") or {},
+        "next_session": d.get("next_session") or {}, "holdings": holdings,
         "observations": comm["observations"], "recommendations": comm["recommendations"],
     }
 
@@ -367,15 +379,31 @@ def _render_cover(pdf, spec: Dict[str, Any], page: int = 1):
          (RED if (em or 1) < 0.999 else GREEN)),
     ])
 
+    # Held book (moved onto the cover so the page is self-contained for the agent harness)
+    hold = spec.get("holdings") or []
+    y = _section(ax, y - 0.004,
+                 f"Held book — {len(hold)} positions  (portfolio {_money(pv)}, cash {_money(cash)})")
+    if not hold:
+        ax.text(0.075, y, "No open positions.", color=MIDGREY, fontsize=8.0, va="top"); y -= 0.024
+    else:
+        hrows = [[h["ticker"], str(h["shares"]), _money(h["entry"], 2), _money(h["now"], 2),
+                  _pct(h["unreal"]), _pct(h["session"])] for h in hold]
+        y = _table(ax, y, ["Ticker", "Shares", "Entry", "Now", "Unreal %", "Session"], hrows,
+                   [0.20, 0.15, 0.17, 0.17, 0.155, 0.155],
+                   align=["left", "right", "right", "right", "right", "right"],
+                   row_h=0.0188, fontsize=7.4, header_fontsize=7.0,
+                   text_color=lambda r, c, v: (_ret_color(_parse_pct(v)) if c in (4, 5) else "#1f2a3a"))
+
     # Queued decision for next session (decide at today's close → fill next open)
-    y = _section(ax, y - 0.005, "Queued for next session  (after today's close → next open)")
-    y = _queued_block(ax, y, spec.get("next_session") or {})
+    y = _section(ax, y - 0.006, "Queued for next session  (after today's close → next open)")
+    y = _queued_block(ax, y, spec.get("next_session") or {},
+                      fontsize=7.6, lh=0.0148, gap=0.004, width=112)
 
-    y = _section(ax, y - 0.008, "Market commentary")
-    y = _bullets(ax, y, spec["observations"])
+    y = _section(ax, y - 0.006, "Market commentary")
+    y = _bullets(ax, y, spec["observations"], width=114, lh=0.0146, gap=0.004, fontsize=7.5)
 
-    y = _section(ax, y - 0.01, "Recommendations — tonight → next open")
-    y = _bullets(ax, y, spec["recommendations"])
+    y = _section(ax, y - 0.006, "Recommendations — tonight → next open")
+    y = _bullets(ax, y, spec["recommendations"], width=114, lh=0.0146, gap=0.004, fontsize=7.5)
 
     _footer(ax, page)
     pdf.savefig(fig); plt.close(fig)
@@ -488,27 +516,9 @@ def _page_rankings(pdf, d):
 
 def _page_activity(pdf, d):
     fig, ax = _new_page(pdf)
-    _banner(ax, d["scenario"], d["mark"], d["rank_close"], "Holdings & recent activity")
+    _banner(ax, d["scenario"], d["mark"], d["rank_close"], "Recent activity")
     y = 0.90
-
-    # held book
-    pos = d.get("positions")
-    retfn = d.get("ret")
-    y = _section(ax, y, f"Held book — {0 if pos is None else len(pos)} positions  "
-                        f"(portfolio {_money(d.get('pv'))}, cash {_money(d.get('cash'))})")
-    if pos is None or pos.empty:
-        ax.text(0.075, y, "No open positions.", color=MIDGREY, fontsize=8.8, va="top"); y -= 0.03
-    else:
-        hrows = []
-        for _, p in pos.sort_values("ticker").iterrows():
-            u = p["current_price"] / p["entry_price"] - 1
-            hrows.append([p["ticker"], str(int(p["shares"])), _money(p["entry_price"], 2),
-                          _money(p["current_price"], 2), _pct(u), _pct(retfn(p["ticker"]) if retfn else None)])
-        def hcolor(r, c, v):
-            return _ret_color(_parse_pct(v)) if c in (4, 5) else "#1f2a3a"
-        y = _table(ax, y, ["Ticker", "Shares", "Entry", "Now", "Unreal %", "Session"], hrows,
-                   [0.18, 0.15, 0.17, 0.17, 0.165, 0.165],
-                   align=["left", "right", "right", "right", "right", "right"], text_color=hcolor)
+    # (Held book lives on the cover now.)
 
     # today's transactions
     tt = d.get("today_trades") or []
