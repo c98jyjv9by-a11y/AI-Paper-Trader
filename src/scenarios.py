@@ -155,6 +155,10 @@ def _scenario_sensitivity_tasks(cfg: Dict[str, Any]):
     add_runwide("score_entry_above", "Persistence-buy threshold", [None, 0.80, 0.85, 0.90],
                 r.get("score_entry_above"), lambda v: "off" if v is None else f"{v:.2f}",
                 _set(["risk", "score_entry_above"]))
+    # Barroso volatility targeting: scale gross exposure by target_vol / forecast_vol.
+    add_runwide("target_vol", "Vol-target (annualized)", [None, 0.15, 0.20, 0.25, 0.30],
+                r.get("target_vol"), lambda v: "off" if v is None else f"{v:.0%}",
+                _set(["risk", "target_vol"]))
 
     # Signal-weight profile (run-wide): the scenario's own weights vs fixed alternatives.
     config_weights = s.get("weights") or _DEFAULT_WEIGHTS

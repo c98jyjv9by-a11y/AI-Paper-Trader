@@ -33,6 +33,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 import yaml
 # yfinance is imported lazily inside fetch_backtest_data — it is slow to import
@@ -315,6 +316,7 @@ def _queue_entries(
     portfolio_value: float,
     cash: float,
     config: Dict[str, Any],
+    exposure_mult: float = 1.0,
 ) -> List[Dict[str, Any]]:
     """
     Determine which tickers to buy tomorrow based on today's signals.
@@ -322,11 +324,14 @@ def _queue_entries(
     Orders are QUEUED here (not filled). They fill at tomorrow's close price.
     Sizing uses today's close as an estimate; overnight moves cause minor drift.
 
+    exposure_mult scales the gross-exposure cap and per-position size (Barroso-style
+    volatility targeting: <1 shrinks the risk budget when forecast vol is high).
+
     Returns a list of order dicts: {ticker, shares, signal_price, reason}.
     """
     max_new = config["portfolio"]["max_new_trades_per_day"]
-    max_pct = resolve_max_position_pct(config)
-    max_exp = config["portfolio"]["max_total_exposure"]
+    max_pct = resolve_max_position_pct(config) * exposure_mult
+    max_exp = config["portfolio"]["max_total_exposure"] * exposure_mult
 
     # Optional score-weighted sizing: position size scales linearly with the
     # ticker's composite_score (in [0,1]) between min_position_pct and max_pct.
@@ -578,6 +583,14 @@ def run_backtest(
     # max-hold is suppressed until score < max_hold_score_max (let still-strong names run).
     stop_loss_score_max = config.get("risk", {}).get("stop_loss_score_max")
     max_hold_score_max = config.get("risk", {}).get("max_hold_score_max")
+    # Barroso-style volatility targeting (default off): scale gross exposure by
+    # clip(target_vol / forecast_vol, floor, cap), where forecast_vol = the portfolio's
+    # own trailing realized vol (annualized). Shrinks the risk budget when vol is high.
+    target_vol = config.get("risk", {}).get("target_vol")               # annualized, e.g. 0.20
+    vol_lookback = int(config.get("risk", {}).get("vol_lookback_days", 126))  # Barroso: 6 months
+    vol_floor = float(config.get("risk", {}).get("vol_exposure_floor", 0.3))
+    vol_cap = float(config.get("risk", {}).get("vol_exposure_cap", 1.0))
+    port_values: List[float] = []        # running portfolio value series → daily-return vol
     # Persistence rules (default off):
     #   score_exit_below for score_exit_days consecutive days  -> SELL (score decay).
     #   score_entry_above for score_entry_days consecutive days -> BUY (persistence entry);
@@ -752,6 +765,18 @@ def run_backtest(
             else 0.0
         )
         portfolio_value = cash + equity
+        port_values.append(portfolio_value)
+
+        # Volatility-targeting multiplier (Barroso): scale exposure by target/forecast vol,
+        # forecast = annualized std of the portfolio's trailing daily returns (no look-ahead).
+        exposure_mult = 1.0
+        if target_vol and len(port_values) > vol_lookback // 4:
+            vals = np.asarray(port_values[-(vol_lookback + 1):], dtype=float)
+            rets = vals[1:] / vals[:-1] - 1.0
+            sd = float(np.std(rets, ddof=1)) if rets.size >= 2 else 0.0
+            fcast = sd * (252.0 ** 0.5)
+            if fcast > 0:
+                exposure_mult = min(vol_cap, max(vol_floor, target_vol / fcast))
 
         # ── 5. Compute signals (no look-ahead) and queue entries for tomorrow ─
         if bar_idx + 1 < n_timestamps:
@@ -862,7 +887,8 @@ def run_backtest(
                             subset="ticker", keep="first").reset_index(drop=True)
 
                 pending_orders = (
-                    _queue_entries(ranked, positions, portfolio_value, cash, config)
+                    _queue_entries(ranked, positions, portfolio_value, cash, config,
+                                   exposure_mult=exposure_mult)
                     if regime_ok else []
                 )
                 if signal_sink is not None:
@@ -1509,6 +1535,8 @@ def generate_backtest_report(
     _persist_desc = ("none" if r.get("score_entry_above") is None
                      else f"> {r['score_entry_above']} for {r.get('score_entry_days', 3)}d"
                      + ("  (rotate-funded)" if r.get("fund_by_rotation") else ""))
+    _voltarget_desc = ("off" if r.get("target_vol") is None
+                       else f"{r['target_vol']:.0%} — scale exposure by target/forecast vol")
 
     lines: List[str] = [
         "# AI Paper Trader — Backtest Report",
@@ -1601,6 +1629,7 @@ def generate_backtest_report(
         f"| Max-hold only if score < | {('none' if r.get('max_hold_score_max') is None else r['max_hold_score_max'])} |",
         f"| Score-decay sell | {_decay_desc} |",
         f"| Persistence buy | {_persist_desc} |",
+        f"| Vol target (annualized) | {_voltarget_desc} |",
         f"| Slippage | {r.get('slippage', 0) * 100:.2f}% per fill |",
         "",
     ]
