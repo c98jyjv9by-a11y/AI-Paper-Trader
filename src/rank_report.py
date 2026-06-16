@@ -204,7 +204,9 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
     try:
         need = ([x["ticker"] for x in rows[:top_n]] + [x["ticker"] for x in rows[-top_n:]]
                 + sorted(held))                          # include held positions too
-        pc_map = {x["ticker"]: x["rank_close_px"] for x in rows}
+        # Anchor each needed ticker to its actual prior close (not just the snapshot rows),
+        # so held names outside the top/bottom-N still get intraday checkpoints.
+        pc_map = {t: _px(t, rank_close) for t in set(need) if _px(t, rank_close)}
         intraday = intraday_returns(sorted(set(need)), mark.date(), pc_map)
     except Exception as exc:                              # intraday is a nicety; never fail the report
         log.warning("Intraday checkpoints skipped: %s", exc)
