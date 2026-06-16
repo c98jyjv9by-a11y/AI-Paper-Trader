@@ -113,6 +113,44 @@ def _bullets(ax, y: float, items: List[str], width: int = 95, lh: float = 0.0185
     return y
 
 
+def _queued_block(ax, y: float, ns: Dict[str, Any]) -> float:
+    """Render the next-session queued trades, or an explicit no-trade reason."""
+    buys = ns.get("buys") or []
+    sells = ns.get("sells") or []
+
+    if not buys and not sells:
+        # status chip
+        ax.add_patch(plt.Rectangle((0.075, y - 0.026), 0.30, 0.024, transform=ax.transAxes,
+                                   facecolor="#e8edf3", edgecolor=RULE, lw=0.8, zorder=0))
+        ax.text(0.09, y - 0.014, "● NO TRADES — hold current book", color=NAVY,
+                fontsize=9, va="center", fontweight="bold")
+        y -= 0.038
+        items = []
+        if ns.get("buy_reason"):
+            items.append("Buys — " + ns["buy_reason"])
+        if ns.get("sell_reason"):
+            items.append("Sells — " + ns["sell_reason"])
+        return _bullets(ax, y, items, fontsize=8.6)
+
+    rows, colors = [], []
+    for b in buys:
+        rows.append(["BUY", b["ticker"], str(b["shares"]), _money(b["price"], 2),
+                     _money(b["value"]), b["reason"]])
+        colors.append(GREEN)
+    for s in sells:
+        rows.append(["SELL", s["ticker"], str(s["shares"]), _money(s["price"], 2),
+                     _money(s.get("value")), s["reason"]])
+        colors.append(RED)
+
+    def qcolor(r, c, v):
+        return colors[r] if c == 0 else "#1f2a3a"
+
+    return _table(ax, y, ["Action", "Ticker", "Shares", "Price", "Value", "Reason"], rows,
+                  [0.12, 0.13, 0.12, 0.14, 0.16, 0.33],
+                  align=["left", "left", "right", "right", "right", "left"],
+                  text_color=qcolor)
+
+
 def _cards(ax, y: float, cards: List[tuple], h: float = 0.075):
     """Row of metric cards: list of (label, value, value_color)."""
     n = len(cards); x0 = 0.06; gapw = 0.015
@@ -316,7 +354,11 @@ def _page_cover(pdf, d, cfg, comm):
          (RED if (d.get("exposure_mult") or 1) < 0.999 else GREEN)),
     ])
 
-    y = _section(ax, y - 0.005, "Market commentary")
+    # Queued decision for next session (decide at today's close → fill next open)
+    y = _section(ax, y - 0.005, "Queued for next session  (after today's close → next open)")
+    y = _queued_block(ax, y, d.get("next_session") or {})
+
+    y = _section(ax, y - 0.008, "Market commentary")
     y = _bullets(ax, y, comm["observations"])
 
     y = _section(ax, y - 0.01, "Recommendations — tonight → next open")

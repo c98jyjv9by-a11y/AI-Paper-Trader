@@ -49,6 +49,12 @@ def _dict_and_cfg():
             {"date": "2026-05-19", "action": "BUY", "ticker": "CRWD", "shares": 18,
              "price": 617.50, "reason": "momentum_score=0.94", "pnl": None},
         ],
+        "next_session": {
+            "buys": [], "sells": [],
+            "buy_reason": "No risk budget to add — book 90% invested vs 73% cap.",
+            "sell_reason": "No exit triggered — stops score-gated and none qualify.",
+            "invested_frac": 0.90, "exposure_cap_frac": 0.73,
+        },
         "target_vol": 0.35, "forecast_vol": 0.429, "exposure_mult": 0.82,
         "univ_avg": -0.0161, "top_avg": -0.0572, "bot_avg": -0.0170, "signal_strength": -0.0403,
         "advancers": 23, "n_gate": 14, "n_gate_cur": 3, "intraday": None,
@@ -92,6 +98,21 @@ def test_build_pdf_writes_four_page_file(tmp_path):
     assert out.exists() and out.stat().st_size > 5000
     head = out.read_bytes()[:5]
     assert head.startswith(b"%PDF")
+
+
+def test_build_pdf_renders_queued_trades(tmp_path):
+    d, cfg = _dict_and_cfg()
+    d["next_session"] = {
+        "buys": [{"ticker": "AMAT", "shares": 25, "price": 568.23, "value": 14205.0,
+                  "reason": "momentum_score=0.913"}],
+        "sells": [{"ticker": "INTC", "shares": 123, "price": 117.05, "value": 14397.0,
+                   "reason": "rotation_funded", "pnl": 2700.0}],
+        "buy_reason": None, "sell_reason": None,
+        "invested_frac": 0.74, "exposure_cap_frac": 0.82,
+    }
+    out = tmp_path / "eod_trades.pdf"
+    P.build_pdf(d, cfg, out)
+    assert out.exists() and out.read_bytes()[:5].startswith(b"%PDF")
 
 
 def test_parse_helpers():

@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from scenarios import load_scenario, build_config
 from backtest import (
-    load_config, fetch_backtest_data, run_backtest,
+    load_config, fetch_backtest_data, run_backtest, next_session_decision,
     _build_ticker_weights, _SIGNAL_WINDOW,
 )
 from signals import calculate_signals, rank_candidates
@@ -128,6 +128,81 @@ def _recent_trades(trades: Optional[pd.DataFrame], n: int = 10) -> List[Dict[str
     if trades is None or trades.empty:
         return []
     return [_trade_row(r) for _, r in trades.tail(n).iterrows()]
+
+
+def _persistence_candidates(pdata: pd.DataFrame, cfg: Dict[str, Any], held: set,
+                            thr: float, days: int) -> List[str]:
+    """Unheld tickers whose composite score has been >= `thr` for the last `days` closes
+    (the persistence-buy precondition). Used to explain a no-buy decision."""
+    close = pdata["Close"]
+    uni = cfg["tickers"]
+    w = cfg["signals"].get("weights")
+    tw = _build_ticker_weights(cfg) or None
+    n = len(close.index)
+    if n - days < _SIGNAL_WINDOW:
+        return []
+    above: Optional[set] = None
+    for i in range(n - days, n):
+        ts = close.index[i]
+        sl = pdata.loc[:ts].iloc[-_SIGNAL_WINDOW:]
+        rf = rank_candidates(calculate_signals(sl, uni), top_n=len(uni), weights=w, ticker_weights=tw)
+        sc = dict(zip(rf["ticker"], rf["composite_score"]))
+        day_above = {t for t, v in sc.items()
+                     if v is not None and v >= thr and t not in held}
+        above = day_above if above is None else (above & day_above)
+    return sorted(above or set())
+
+
+def _next_session_block(cfg, pdata, positions, held, pv, cash, em, rows_cur) -> Dict[str, Any]:
+    """Queued decision for next session (decide at last close → fill next open), plus an
+    explicit reason when there is no trade."""
+    ns = next_session_decision(cfg, pdata)
+    buys, sells = ns["buys"], ns["sells"]
+    risk = cfg.get("risk", {})
+    base_exp = float(cfg["portfolio"]["max_total_exposure"])
+    cap = base_exp * (em or 1.0)
+    invested = ((pv - cash) / pv) if pv else 0.0
+
+    buy_reason = None
+    if not buys:
+        thr = risk.get("score_entry_above")
+        days = int(risk.get("score_entry_days", 3) or 3)
+        persist = _persistence_candidates(pdata, cfg, held, thr, days) if thr else []
+        gate_unheld = [r for r in rows_cur if r["clears_gate"] and not r["held"]]
+        if invested >= cap - 0.005:
+            buy_reason = (
+                f"No risk budget to add — the book is {invested*100:.0f}% invested versus the "
+                f"volatility-scaled exposure cap of {cap*100:.0f}% (base {base_exp*100:.0f}% × "
+                f"{(em or 1):.2f}× governor). "
+                + (f"Persistence candidate(s) {', '.join(persist)} are blocked by the cap."
+                   if persist else "No persistence-buy candidate either "
+                   f"(no unheld name has held score >{thr:.2f} for {days} consecutive days)."
+                   if thr else "No new-entry candidate."))
+        elif thr and not persist and not gate_unheld:
+            buy_reason = "No buy: no unheld name clears the entry gate."
+        elif thr and not persist:
+            buy_reason = (f"No buy: no unheld name has held score >{thr:.2f} for {days} consecutive "
+                          f"days (persistence rule); standard momentum adds did not clear sizing/cash.")
+        else:
+            buy_reason = "No buy: no name qualified for a new entry under the entry rules."
+
+    sell_reason = None
+    if not sells:
+        bits = []
+        ssm, mhm = risk.get("stop_loss_score_max"), risk.get("max_hold_score_max")
+        if ssm is not None:
+            bits.append(f"stops are score-gated (fire only below {ssm:.2f} composite) and none qualify")
+        else:
+            bits.append("no stop-loss / take-profit / trailing trigger hit")
+        if mhm is not None:
+            bits.append(f"max-hold suppressed until score <{mhm:.2f}")
+        if not risk.get("score_exit_below"):
+            bits.append("score-decay sell disabled")
+        bits.append("no rotation funding required")
+        sell_reason = "No exit triggered — " + "; ".join(bits) + "."
+
+    return {"buys": buys, "sells": sells, "buy_reason": buy_reason, "sell_reason": sell_reason,
+            "invested_frac": invested, "exposure_cap_frac": cap}
 
 
 def _write_ranking_snapshot(root: Path, scenario: str, d, ranked_rows) -> None:
@@ -278,6 +353,9 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
         # vol-targeting risk budget (latest bar): forecast vol + exposure multiplier
         "today_trades": _today_trades(trades, mark.date().isoformat()),
         "recent_trades": _recent_trades(trades, 10),
+        "next_session": _next_session_block(cfg, pdata, positions, held, pv, cash,
+                                            (float(eq["exposure_mult"].iloc[-1])
+                                             if "exposure_mult" in eq.columns else 1.0), rows_cur),
         "target_vol": cfg.get("risk", {}).get("target_vol"),
         "forecast_vol": (float(eq["forecast_vol"].dropna().iloc[-1])
                          if "forecast_vol" in eq.columns and eq["forecast_vol"].notna().any() else None),

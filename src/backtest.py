@@ -1071,6 +1071,46 @@ def run_backtest(
     return trades_df, equity_df, positions
 
 
+def next_session_decision(config: Dict[str, Any], price_data: pd.DataFrame) -> Dict[str, Any]:
+    """What the model would DECIDE at the last bar's close, to execute next session
+    (after today's close / before tomorrow's open).
+
+    The engine decides at bar T and fills at T+1, and it *skips* entry-queueing on the
+    true last bar (no T+1 exists). To surface that final decision faithfully — without
+    re-implementing any rule — we append one synthetic 'next session' bar equal to the
+    last close, so step-6 queueing fires on the real final bar and fills at today's
+    prices on the synthetic bar. No look-ahead: the final-bar decision is windowed on
+    data <= the real last bar, unaffected by the appended duplicate.
+
+    Returns {"buys": [...], "sells": [...]} where each item carries
+    {ticker, shares, price, value, reason[, pnl]}.  buys fill on the synthetic next
+    bar; sells (exits + rotation funding) are dated the real last bar.
+    """
+    last = price_data.index[-1]
+    nxt = last + pd.Timedelta(days=1)
+    synth = price_data.loc[[last]].copy()
+    synth.index = [nxt]
+    pd2 = pd.concat([price_data, synth])
+    start = price_data.index[0].date()
+    trades, _eq, _pos = run_backtest(config, pd2, start, nxt.date())
+
+    last_iso, nxt_iso = last.date().isoformat(), nxt.date().isoformat()
+
+    def _row(r, with_pnl=False):
+        d = {"ticker": str(r["ticker"]), "shares": int(r["shares"]),
+             "price": float(r["price"]), "value": float(r["trade_value"]),
+             "reason": str(r.get("reason", ""))}
+        if with_pnl:
+            d["pnl"] = (None if pd.isna(r.get("realized_pnl")) else float(r["realized_pnl"]))
+        return d
+
+    if trades.empty:
+        return {"buys": [], "sells": []}
+    buys = [_row(r) for _, r in trades[(trades["date"] == nxt_iso) & (trades["action"] == "BUY")].iterrows()]
+    sells = [_row(r, True) for _, r in trades[(trades["date"] == last_iso) & (trades["action"] == "SELL")].iterrows()]
+    return {"buys": buys, "sells": sells}
+
+
 # ─── Metrics ──────────────────────────────────────────────────────────────────
 
 
