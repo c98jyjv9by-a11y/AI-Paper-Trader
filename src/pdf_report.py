@@ -351,6 +351,7 @@ def _cover_spec(d: Dict[str, Any], comm: Dict[str, List[str]]) -> Dict[str, Any]
             holdings.append({
                 "ticker": str(p["ticker"]), "shares": int(p["shares"]),
                 "entry": float(p["entry_price"]), "now": float(p["current_price"]),
+                "value": float(p["current_price"]) * int(p["shares"]),
                 "unreal": float(p["current_price"] / p["entry_price"] - 1),
                 "session": (retfn(p["ticker"]) if retfn else None),
             })
@@ -387,12 +388,12 @@ def _render_cover(pdf, spec: Dict[str, Any], page: int = 1):
         ax.text(0.075, y, "No open positions.", color=MIDGREY, fontsize=8.0, va="top"); y -= 0.024
     else:
         hrows = [[h["ticker"], str(h["shares"]), _money(h["entry"], 2), _money(h["now"], 2),
-                  _pct(h["unreal"]), _pct(h["session"])] for h in hold]
-        y = _table(ax, y, ["Ticker", "Shares", "Entry", "Now", "Unreal %", "Session"], hrows,
-                   [0.20, 0.15, 0.17, 0.17, 0.155, 0.155],
-                   align=["left", "right", "right", "right", "right", "right"],
+                  _money(h.get("value")), _pct(h["unreal"]), _pct(h["session"])] for h in hold]
+        y = _table(ax, y, ["Ticker", "Shares", "Entry", "Now", "Value", "Unreal %", "Session"], hrows,
+                   [0.15, 0.12, 0.15, 0.15, 0.16, 0.135, 0.135],
+                   align=["left", "right", "right", "right", "right", "right", "right"],
                    row_h=0.0188, fontsize=7.4, header_fontsize=7.0,
-                   text_color=lambda r, c, v: (_ret_color(_parse_pct(v)) if c in (4, 5) else "#1f2a3a"))
+                   text_color=lambda r, c, v: (_ret_color(_parse_pct(v)) if c in (5, 6) else "#1f2a3a"))
 
     # Queued decision for next session (decide at today's close → fill next open)
     y = _section(ax, y - 0.006, "Queued for next session  (after today's close → next open)")

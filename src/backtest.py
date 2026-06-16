@@ -1071,7 +1071,8 @@ def run_backtest(
     return trades_df, equity_df, positions
 
 
-def next_session_decision(config: Dict[str, Any], price_data: pd.DataFrame) -> Dict[str, Any]:
+def next_session_decision(config: Dict[str, Any], price_data: pd.DataFrame,
+                          start: Optional[date] = None) -> Dict[str, Any]:
     """What the model would DECIDE at the last bar's close, to execute next session
     (after today's close / before tomorrow's open).
 
@@ -1082,6 +1083,11 @@ def next_session_decision(config: Dict[str, Any], price_data: pd.DataFrame) -> D
     prices on the synthetic bar. No look-ahead: the final-bar decision is windowed on
     data <= the real last bar, unaffected by the appended duplicate.
 
+    `start` MUST match the simulation start of the report this decision accompanies —
+    otherwise the simulated book (and thus the queued decision) diverges from the
+    report's held book. Defaults to the first bar (i.e. assumes price_data starts at the
+    sim inception with no extra warmup rows).
+
     Returns {"buys": [...], "sells": [...]} where each item carries
     {ticker, shares, price, value, reason[, pnl]}.  buys fill on the synthetic next
     bar; sells (exits + rotation funding) are dated the real last bar.
@@ -1091,7 +1097,7 @@ def next_session_decision(config: Dict[str, Any], price_data: pd.DataFrame) -> D
     synth = price_data.loc[[last]].copy()
     synth.index = [nxt]
     pd2 = pd.concat([price_data, synth])
-    start = price_data.index[0].date()
+    start = start or price_data.index[0].date()
     trades, _eq, _pos = run_backtest(config, pd2, start, nxt.date())
 
     last_iso, nxt_iso = last.date().isoformat(), nxt.date().isoformat()

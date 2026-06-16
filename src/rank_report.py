@@ -153,10 +153,11 @@ def _persistence_candidates(pdata: pd.DataFrame, cfg: Dict[str, Any], held: set,
     return sorted(above or set())
 
 
-def _next_session_block(cfg, pdata, positions, held, pv, cash, em, rows_cur) -> Dict[str, Any]:
+def _next_session_block(cfg, pdata, positions, held, pv, cash, em, rows_cur, start) -> Dict[str, Any]:
     """Queued decision for next session (decide at last close → fill next open), plus an
-    explicit reason when there is no trade."""
-    ns = next_session_decision(cfg, pdata)
+    explicit reason when there is no trade. `start` must match the report's sim start so
+    the simulated book agrees with the report's held book."""
+    ns = next_session_decision(cfg, pdata, start)
     buys, sells = ns["buys"], ns["sells"]
     risk = cfg.get("risk", {})
     base_exp = float(cfg["portfolio"]["max_total_exposure"])
@@ -360,7 +361,8 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
         "recent_trades": _recent_trades(trades, 10),
         "next_session": _next_session_block(cfg, pdata, positions, held, pv, cash,
                                             (float(eq["exposure_mult"].iloc[-1])
-                                             if "exposure_mult" in eq.columns else 1.0), rows_cur),
+                                             if "exposure_mult" in eq.columns else 1.0),
+                                            rows_cur, start),
         "target_vol": cfg.get("risk", {}).get("target_vol"),
         "forecast_vol": (float(eq["forecast_vol"].dropna().iloc[-1])
                          if "forecast_vol" in eq.columns and eq["forecast_vol"].notna().any() else None),
