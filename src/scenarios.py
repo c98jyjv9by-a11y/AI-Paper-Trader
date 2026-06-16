@@ -358,12 +358,20 @@ def run_scenario(name: str, start_date: date, end_date: date, charts: bool = Tru
         try:
             import rank_report
             d = rank_report.build_report(name, start_date, end_date,
-                                         cfg=cfg, pdata=price_data, eq=equity, positions=positions)
+                                         cfg=cfg, pdata=price_data, eq=equity,
+                                         positions=positions, trades=trades)
             status_md = reports_dir / f"status_{tag}.md"
             status_md.write_text(rank_report.render_md(d))
             rank_report.ranking_csv(d).to_csv(backtests_dir / f"status_{tag}.csv", index=False)
             log.info("Wrote status & rank report: signal strength %s",
                      _pct(d.get("signal_strength")))
+            try:                                        # professional end-of-day PDF
+                import pdf_report
+                pdf_path = reports_dir / f"eod_{tag}.pdf"
+                pdf_report.build_pdf(d, cfg, pdf_path)
+                log.info("Wrote end-of-day PDF report: %s", pdf_path.name)
+            except Exception as exc:                    # PDF is a nicety; never fail the run
+                log.warning("EOD PDF skipped: %s", exc)
         except Exception as exc:                        # status is a nicety; never fail the run
             log.warning("Status report skipped: %s", exc)
             status_md = None

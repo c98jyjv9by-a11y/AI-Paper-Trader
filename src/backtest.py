@@ -310,6 +310,28 @@ def _evaluate_backtest_exits(
 # ─── Entry queueing ──────────────────────────────────────────────────────────
 
 
+def _momentum_spread_negative(scores: Dict[str, float], close: pd.DataFrame, bar_idx: int,
+                              window: int = 5, q: float = 0.2) -> bool:
+    """True if momentum is INVERTING: the top-score quintile's trailing-`window`-day return
+    is below the bottom quintile's (the Daniel-Moskowitz crash signal). Used to gate vol-trim
+    so it only fires in genuine regime stress, not on benign volatility."""
+    items = [(t, s) for t, s in scores.items() if t in close.columns]
+    if len(items) < 10 or bar_idx - window < 0:
+        return False
+    items.sort(key=lambda x: x[1], reverse=True)
+    k = max(1, int(len(items) * q))
+
+    def _ret(t):
+        a = close[t].iloc[bar_idx - window]; b = close[t].iloc[bar_idx]
+        return (b / a - 1.0) if (pd.notna(a) and pd.notna(b) and a > 0) else None
+
+    top = [r for r in (_ret(t) for t, _ in items[:k]) if r is not None]
+    bot = [r for r in (_ret(t) for t, _ in items[-k:]) if r is not None]
+    if not top or not bot:
+        return False
+    return (sum(top) / len(top)) - (sum(bot) / len(bot)) < 0
+
+
 def _queue_entries(
     ranked: pd.DataFrame,
     open_positions: pd.DataFrame,
@@ -590,6 +612,16 @@ def run_backtest(
     vol_lookback = int(config.get("risk", {}).get("vol_lookback_days", 126))  # Barroso: 6 months
     vol_floor = float(config.get("risk", {}).get("vol_exposure_floor", 0.3))
     vol_cap = float(config.get("risk", {}).get("vol_exposure_cap", 1.0))
+    # Vol-trim (default off): when the vol budget shrinks below current gross, SELL whole
+    # lowest-composite-score holdings down to the target (reason "vol_trim"). Symmetric
+    # de-risking — the governor caps the whole book, not just new buys.
+    vol_trim = bool(config.get("risk", {}).get("vol_trim_to_target", False))
+    vol_trim_deadband = float(config.get("risk", {}).get("vol_trim_deadband", 0.10))
+    # Partial-trim variant: if vol_trim_score_below is set, instead of selling WHOLE
+    # lowest-score names to a gross target, PARTIALLY trim each held name whose score is
+    # below the threshold by (1 - exposure_mult) — optionally only when momentum is inverting.
+    vol_trim_score_below = config.get("risk", {}).get("vol_trim_score_below")   # None => whole-position mode
+    vol_trim_require_spread = bool(config.get("risk", {}).get("vol_trim_require_spread", True))
     port_values: List[float] = []        # running portfolio value series → daily-return vol
     # Persistence rules (default off):
     #   score_exit_below for score_exit_days consecutive days  -> SELL (score decay).
@@ -719,7 +751,7 @@ def run_backtest(
         #    Score as of today's close (data ≤ bar_idx) — same window the entry
         #    ranking uses, so it's "the score at that same time"; no look-ahead.
         current_scores = None
-        if need_scores or fund_by_rotation:
+        if need_scores or fund_by_rotation or vol_trim:
             sl_now = price_data.iloc[max(0, bar_idx + 1 - _SIGNAL_WINDOW): bar_idx + 1]
             sig_now = calculate_signals(sl_now, tickers)
             if not sig_now.empty:
@@ -769,14 +801,95 @@ def run_backtest(
 
         # Volatility-targeting multiplier (Barroso): scale exposure by target/forecast vol,
         # forecast = annualized std of the portfolio's trailing daily returns (no look-ahead).
+        # forecast_vol is computed whenever there's enough history (even with targeting off,
+        # so it's visible in the report); the multiplier only scales when target_vol is set.
         exposure_mult = 1.0
-        if target_vol and len(port_values) > vol_lookback // 4:
+        forecast_vol: Optional[float] = None
+        if len(port_values) > vol_lookback // 4:
             vals = np.asarray(port_values[-(vol_lookback + 1):], dtype=float)
             rets = vals[1:] / vals[:-1] - 1.0
             sd = float(np.std(rets, ddof=1)) if rets.size >= 2 else 0.0
-            fcast = sd * (252.0 ** 0.5)
-            if fcast > 0:
-                exposure_mult = min(vol_cap, max(vol_floor, target_vol / fcast))
+            forecast_vol = sd * (252.0 ** 0.5)
+            if target_vol and forecast_vol > 0:
+                exposure_mult = min(vol_cap, max(vol_floor, target_vol / forecast_vol))
+
+        # ── 4b. Vol-trim: de-risk the EXISTING book (reason "vol_trim"; never arms the
+        #    stop/cooldown gates). Two modes:
+        #      * whole-position (default): sell whole lowest-score names to a gross target.
+        #      * partial weak-only (vol_trim_score_below set): trim each held name with
+        #        score < threshold by (1-mult), optionally only when momentum is inverting.
+        if vol_trim and exposure_mult < 0.999 and not positions.empty:
+            sc = current_scores or {}
+            # Optional spread gate: only trim when the top-score quintile's trailing 5d return
+            # is BELOW the bottom quintile's (momentum inverting — the crash regime).
+            spread_ok = True
+            if vol_trim_require_spread:
+                spread_ok = _momentum_spread_negative(sc, close, bar_idx)
+
+            if spread_ok and vol_trim_score_below is not None:
+                # PARTIAL, weak-only: trim each sub-threshold name by (1 - exposure_mult),
+                # with a 5% min-trade deadband (also bounds day-to-day compounding).
+                for tk in list(positions["ticker"]):
+                    if sc.get(tk, 1.0) >= vol_trim_score_below:
+                        continue
+                    prow = positions[positions["ticker"] == tk].iloc[0]
+                    shrs = int(prow["shares"]); px = float(prow["current_price"])
+                    if shrs <= 0 or np.isnan(px):
+                        continue
+                    target = int(shrs * exposure_mult)
+                    sell_shares = shrs - target
+                    if sell_shares < max(1, int(shrs * 0.05)):     # min-trade deadband
+                        continue
+                    sell_px = apply_slippage(px, "sell", slippage)
+                    ep = float(prow["entry_price"])
+                    all_trades.append({
+                        "date": bar_date.isoformat(), "action": "SELL", "ticker": tk,
+                        "shares": sell_shares, "price": sell_px,
+                        "trade_value": round(sell_px * sell_shares, 2),
+                        "reason": "vol_trim", "realized_pnl": round((sell_px - ep) * sell_shares, 2),
+                        "holding_days": round((bar_date - prow["entry_date"]).days * 5 / 7, 1),
+                        "entry_price": ep, "highest_price": float(prow.get("highest_price", px)),
+                        "lowest_price": float(prow.get("lowest_price", px)),
+                    })
+                    cash += round(sell_px * sell_shares, 2)
+                    realized_pnl += round((sell_px - ep) * sell_shares, 2)
+                    positions.loc[positions["ticker"] == tk, "shares"] = target
+                positions = positions[positions["shares"] > 0].reset_index(drop=True)
+                equity = (float((positions["shares"] * positions["current_price"]).sum())
+                          if not positions.empty else 0.0)
+                portfolio_value = cash + equity
+
+            elif spread_ok and vol_trim_score_below is None:
+                # WHOLE-position: sell lowest-score names down to the vol-scaled gross target.
+                base_exp = float(config["portfolio"]["max_total_exposure"])
+                target_gross = base_exp * exposure_mult * portfolio_value
+                invested_now = float((positions["shares"] * positions["current_price"]).sum())
+                if invested_now > target_gross * (1 + vol_trim_deadband):
+                    order = sorted(positions["ticker"], key=lambda t: sc.get(t, float("inf")))
+                    for tk in order:
+                        if invested_now <= target_gross * (1 + vol_trim_deadband):
+                            break
+                        prow = positions[positions["ticker"] == tk].iloc[0]
+                        px = float(prow["current_price"]); shrs = int(prow["shares"])
+                        if shrs <= 0 or np.isnan(px):
+                            continue
+                        sell_px = apply_slippage(px, "sell", slippage)
+                        ep = float(prow["entry_price"])
+                        all_trades.append({
+                            "date": bar_date.isoformat(), "action": "SELL", "ticker": tk,
+                            "shares": shrs, "price": sell_px, "trade_value": round(sell_px * shrs, 2),
+                            "reason": "vol_trim", "realized_pnl": round((sell_px - ep) * shrs, 2),
+                            "holding_days": round((bar_date - prow["entry_date"]).days * 5 / 7, 1),
+                            "entry_price": ep, "highest_price": float(prow.get("highest_price", px)),
+                            "lowest_price": float(prow.get("lowest_price", px)),
+                        })
+                        cash += round(sell_px * shrs, 2)
+                        realized_pnl += round((sell_px - ep) * shrs, 2)
+                        positions = positions[positions["ticker"] != tk].reset_index(drop=True)
+                        invested_now -= shrs * px
+                    equity = (float((positions["shares"] * positions["current_price"]).sum())
+                              if not positions.empty else 0.0)
+                    portfolio_value = cash + equity
 
         # ── 5. Compute signals (no look-ahead) and queue entries for tomorrow ─
         if bar_idx + 1 < n_timestamps:
@@ -931,6 +1044,8 @@ def run_backtest(
                 "spy_cumulative_return": _bench_return(close, "SPY", bar_ts, bench_start_ts),
                 "qqq_cumulative_return": _bench_return(close, "QQQ", bar_ts, bench_start_ts),
                 "equal_weight_cumulative_return": _equal_weight_hold_return(close, tickers, bar_ts, bench_start_ts),
+                "forecast_vol": round(forecast_vol, 6) if forecast_vol is not None else None,
+                "exposure_mult": round(exposure_mult, 4),
             }
         )
 
@@ -949,11 +1064,51 @@ def run_backtest(
         "date", "cash", "open_positions_value", "total_portfolio_value",
         "realized_pnl_to_date", "unrealized_pnl", "daily_return",
         "cumulative_return", "spy_cumulative_return", "qqq_cumulative_return",
-        "equal_weight_cumulative_return",
+        "equal_weight_cumulative_return", "forecast_vol", "exposure_mult",
     ]
     equity_df = equity_df.reindex(columns=[c for c in col_order if c in equity_df.columns])
 
     return trades_df, equity_df, positions
+
+
+def next_session_decision(config: Dict[str, Any], price_data: pd.DataFrame) -> Dict[str, Any]:
+    """What the model would DECIDE at the last bar's close, to execute next session
+    (after today's close / before tomorrow's open).
+
+    The engine decides at bar T and fills at T+1, and it *skips* entry-queueing on the
+    true last bar (no T+1 exists). To surface that final decision faithfully — without
+    re-implementing any rule — we append one synthetic 'next session' bar equal to the
+    last close, so step-6 queueing fires on the real final bar and fills at today's
+    prices on the synthetic bar. No look-ahead: the final-bar decision is windowed on
+    data <= the real last bar, unaffected by the appended duplicate.
+
+    Returns {"buys": [...], "sells": [...]} where each item carries
+    {ticker, shares, price, value, reason[, pnl]}.  buys fill on the synthetic next
+    bar; sells (exits + rotation funding) are dated the real last bar.
+    """
+    last = price_data.index[-1]
+    nxt = last + pd.Timedelta(days=1)
+    synth = price_data.loc[[last]].copy()
+    synth.index = [nxt]
+    pd2 = pd.concat([price_data, synth])
+    start = price_data.index[0].date()
+    trades, _eq, _pos = run_backtest(config, pd2, start, nxt.date())
+
+    last_iso, nxt_iso = last.date().isoformat(), nxt.date().isoformat()
+
+    def _row(r, with_pnl=False):
+        d = {"ticker": str(r["ticker"]), "shares": int(r["shares"]),
+             "price": float(r["price"]), "value": float(r["trade_value"]),
+             "reason": str(r.get("reason", ""))}
+        if with_pnl:
+            d["pnl"] = (None if pd.isna(r.get("realized_pnl")) else float(r["realized_pnl"]))
+        return d
+
+    if trades.empty:
+        return {"buys": [], "sells": []}
+    buys = [_row(r) for _, r in trades[(trades["date"] == nxt_iso) & (trades["action"] == "BUY")].iterrows()]
+    sells = [_row(r, True) for _, r in trades[(trades["date"] == last_iso) & (trades["action"] == "SELL")].iterrows()]
+    return {"buys": buys, "sells": sells}
 
 
 # ─── Metrics ──────────────────────────────────────────────────────────────────

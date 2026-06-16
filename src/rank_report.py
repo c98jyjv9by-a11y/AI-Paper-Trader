@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from scenarios import load_scenario, build_config
 from backtest import (
-    load_config, fetch_backtest_data, run_backtest,
+    load_config, fetch_backtest_data, run_backtest, next_session_decision,
     _build_ticker_weights, _SIGNAL_WINDOW,
 )
 from signals import calculate_signals, rank_candidates
@@ -108,6 +108,103 @@ def _load_ranking_snapshot(root: Path, scenario: str, d) -> Optional[List[Dict[s
     return out or None
 
 
+def _trade_row(r) -> Dict[str, Any]:
+    pnl = r.get("realized_pnl")
+    return {"date": str(r.get("date", "")), "action": str(r["action"]),
+            "ticker": str(r["ticker"]), "shares": int(r["shares"]),
+            "price": float(r["price"]), "reason": str(r.get("reason", "")),
+            "pnl": (None if pd.isna(pnl) else float(pnl))}
+
+
+def _today_trades(trades: Optional[pd.DataFrame], day_iso: str) -> List[Dict[str, Any]]:
+    """Transactions executed on `day_iso` (buys filled, exits, vol-trim sells)."""
+    if trades is None or trades.empty or "date" not in trades.columns:
+        return []
+    return [_trade_row(r) for _, r in trades[trades["date"].astype(str) == day_iso].iterrows()]
+
+
+def _recent_trades(trades: Optional[pd.DataFrame], n: int = 10) -> List[Dict[str, Any]]:
+    """The most recent `n` trades across all dates (chronological order)."""
+    if trades is None or trades.empty:
+        return []
+    return [_trade_row(r) for _, r in trades.tail(n).iterrows()]
+
+
+def _persistence_candidates(pdata: pd.DataFrame, cfg: Dict[str, Any], held: set,
+                            thr: float, days: int) -> List[str]:
+    """Unheld tickers whose composite score has been >= `thr` for the last `days` closes
+    (the persistence-buy precondition). Used to explain a no-buy decision."""
+    close = pdata["Close"]
+    uni = cfg["tickers"]
+    w = cfg["signals"].get("weights")
+    tw = _build_ticker_weights(cfg) or None
+    n = len(close.index)
+    if n - days < _SIGNAL_WINDOW:
+        return []
+    above: Optional[set] = None
+    for i in range(n - days, n):
+        ts = close.index[i]
+        sl = pdata.loc[:ts].iloc[-_SIGNAL_WINDOW:]
+        rf = rank_candidates(calculate_signals(sl, uni), top_n=len(uni), weights=w, ticker_weights=tw)
+        sc = dict(zip(rf["ticker"], rf["composite_score"]))
+        day_above = {t for t, v in sc.items()
+                     if v is not None and v >= thr and t not in held}
+        above = day_above if above is None else (above & day_above)
+    return sorted(above or set())
+
+
+def _next_session_block(cfg, pdata, positions, held, pv, cash, em, rows_cur) -> Dict[str, Any]:
+    """Queued decision for next session (decide at last close → fill next open), plus an
+    explicit reason when there is no trade."""
+    ns = next_session_decision(cfg, pdata)
+    buys, sells = ns["buys"], ns["sells"]
+    risk = cfg.get("risk", {})
+    base_exp = float(cfg["portfolio"]["max_total_exposure"])
+    cap = base_exp * (em or 1.0)
+    invested = ((pv - cash) / pv) if pv else 0.0
+
+    buy_reason = None
+    if not buys:
+        thr = risk.get("score_entry_above")
+        days = int(risk.get("score_entry_days", 3) or 3)
+        persist = _persistence_candidates(pdata, cfg, held, thr, days) if thr else []
+        gate_unheld = [r for r in rows_cur if r["clears_gate"] and not r["held"]]
+        if invested >= cap - 0.005:
+            buy_reason = (
+                f"No risk budget to add — the book is {invested*100:.0f}% invested versus the "
+                f"volatility-scaled exposure cap of {cap*100:.0f}% (base {base_exp*100:.0f}% × "
+                f"{(em or 1):.2f}× governor). "
+                + (f"Persistence candidate(s) {', '.join(persist)} are blocked by the cap."
+                   if persist else "No persistence-buy candidate either "
+                   f"(no unheld name has held score >{thr:.2f} for {days} consecutive days)."
+                   if thr else "No new-entry candidate."))
+        elif thr and not persist and not gate_unheld:
+            buy_reason = "No buy: no unheld name clears the entry gate."
+        elif thr and not persist:
+            buy_reason = (f"No buy: no unheld name has held score >{thr:.2f} for {days} consecutive "
+                          f"days (persistence rule); standard momentum adds did not clear sizing/cash.")
+        else:
+            buy_reason = "No buy: no name qualified for a new entry under the entry rules."
+
+    sell_reason = None
+    if not sells:
+        bits = []
+        ssm, mhm = risk.get("stop_loss_score_max"), risk.get("max_hold_score_max")
+        if ssm is not None:
+            bits.append(f"stops are score-gated (fire only below {ssm:.2f} composite) and none qualify")
+        else:
+            bits.append("no stop-loss / take-profit / trailing trigger hit")
+        if mhm is not None:
+            bits.append(f"max-hold suppressed until score <{mhm:.2f}")
+        if not risk.get("score_exit_below"):
+            bits.append("score-decay sell disabled")
+        bits.append("no rotation funding required")
+        sell_reason = "No exit triggered — " + "; ".join(bits) + "."
+
+    return {"buys": buys, "sells": sells, "buy_reason": buy_reason, "sell_reason": sell_reason,
+            "invested_frac": invested, "exposure_cap_frac": cap}
+
+
 def _write_ranking_snapshot(root: Path, scenario: str, d, ranked_rows) -> None:
     p = _ranking_snapshot_path(root, scenario, d)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -117,7 +214,8 @@ def _write_ranking_snapshot(root: Path, scenario: str, d, ranked_rows) -> None:
 
 def build_report(scenario: str, start: date, end: date, top_n: int = 10,
                  *, cfg: Optional[Dict[str, Any]] = None, pdata: Optional[pd.DataFrame] = None,
-                 eq: Optional[pd.DataFrame] = None, positions: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
+                 eq: Optional[pd.DataFrame] = None, positions: Optional[pd.DataFrame] = None,
+                 trades: Optional[pd.DataFrame] = None, fast: bool = False) -> Dict[str, Any]:
     """Build the rank/status snapshot. The scenario run can pass its already-computed
     cfg/pdata/eq/positions to avoid re-fetching and re-running the backtest."""
     root = Path(__file__).parent.parent
@@ -151,7 +249,9 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
 
     # current held book + portfolio stats (reuse the scenario run's results if given)
     if eq is None or positions is None:
-        _, eq, positions = run_backtest(cfg, pdata, start, end)
+        _t, eq, positions = run_backtest(cfg, pdata, start, end)
+        if trades is None:
+            trades = _t
     held = set(positions["ticker"]) if not positions.empty else set()
     pv = float(eq["total_portfolio_value"].iloc[-1])
     cash = float(eq["cash"].iloc[-1])
@@ -162,7 +262,10 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
 
     # Prior-close ranking (Section A). Prefer a saved snapshot for that date (authoritative —
     # what was actually produced, immune to later feed gaps); else recompute from data.
-    snap = _load_ranking_snapshot(root, scenario, rank_close.date())
+    # `fast` mode (used by the cover-series harness): always recompute scores from price
+    # history and skip the snapshot read/write + intraday fetch — no disk side-effects, no
+    # network, and a consistent no-look-ahead reconstruction for every historical date.
+    snap = None if fast else _load_ranking_snapshot(root, scenario, rank_close.date())
     snapshot_used = bool(snap)
     if snap:
         rows = [{
@@ -190,11 +293,12 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
             "price": _px(t, mark), "held": t in held,
         })
     # Persist the current ranking as the snapshot for `mark`'s date (becomes the next
-    # session's authoritative prior-close ranking).
-    try:
-        _write_ranking_snapshot(root, scenario, mark.date(), rows_cur)
-    except Exception as exc:
-        log.warning("Could not write ranking snapshot: %s", exc)
+    # session's authoritative prior-close ranking). Skipped in fast/series mode.
+    if not fast:
+        try:
+            _write_ranking_snapshot(root, scenario, mark.date(), rows_cur)
+        except Exception as exc:
+            log.warning("Could not write ranking snapshot: %s", exc)
     # rank movement vs the prior-close ranking (for context)
     prior_rank = {x["ticker"]: x["rank"] for x in rows}
     for x in rows_cur:
@@ -202,16 +306,17 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
 
     # intraday return progression (vs prior close) for the top/bottom-N prior-close names
     intraday = None
-    try:
-        need = ([x["ticker"] for x in rows[:top_n]] + [x["ticker"] for x in rows[-top_n:]]
-                + sorted(held))                          # include held positions too
-        # Anchor each needed ticker to its actual prior close (not just the snapshot rows),
-        # so held names outside the top/bottom-N still get intraday checkpoints.
-        pc_map = {t: _px(t, rank_close) for t in set(need) if _px(t, rank_close)}
-        intraday = intraday_returns(sorted(set(need)), mark.date(), pc_map)
-    except Exception as exc:                              # intraday is a nicety; never fail the report
-        log.warning("Intraday checkpoints skipped: %s", exc)
-        intraday = None
+    if not fast:
+        try:
+            need = ([x["ticker"] for x in rows[:top_n]] + [x["ticker"] for x in rows[-top_n:]]
+                    + sorted(held))                          # include held positions too
+            # Anchor each needed ticker to its actual prior close (not just the snapshot rows),
+            # so held names outside the top/bottom-N still get intraday checkpoints.
+            pc_map = {t: _px(t, rank_close) for t in set(need) if _px(t, rank_close)}
+            intraday = intraday_returns(sorted(set(need)), mark.date(), pc_map)
+        except Exception as exc:                          # intraday is a nicety; never fail the report
+            log.warning("Intraday checkpoints skipped: %s", exc)
+            intraday = None
 
     # Universe-level stats over ALL names (price-based, so they stay correct even when the
     # prior-close ranking comes from a partial snapshot).
@@ -250,6 +355,17 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
         "scenario": scenario, "rank_close": rank_close.date(), "mark": mark.date(),
         "min_score": min_score, "rows": rows, "n": n, "top_n": top_n,
         "snapshot_used": snapshot_used,
+        # vol-targeting risk budget (latest bar): forecast vol + exposure multiplier
+        "today_trades": _today_trades(trades, mark.date().isoformat()),
+        "recent_trades": _recent_trades(trades, 10),
+        "next_session": _next_session_block(cfg, pdata, positions, held, pv, cash,
+                                            (float(eq["exposure_mult"].iloc[-1])
+                                             if "exposure_mult" in eq.columns else 1.0), rows_cur),
+        "target_vol": cfg.get("risk", {}).get("target_vol"),
+        "forecast_vol": (float(eq["forecast_vol"].dropna().iloc[-1])
+                         if "forecast_vol" in eq.columns and eq["forecast_vol"].notna().any() else None),
+        "exposure_mult": (float(eq["exposure_mult"].iloc[-1])
+                          if "exposure_mult" in eq.columns else None),
         "univ_avg": (sum(rets) / len(rets)) if rets else None,
         "top_avg": top_avg, "bot_avg": bot_avg, "signal_strength": signal_strength,
         "advancers": advancers, "n_gate": n_gate,
@@ -292,6 +408,54 @@ def render_md(d: Dict[str, Any]) -> str:
         "(momentum signal working). One session is mostly market beta; read the spread, not the level._",
         "",
     ]
+
+    # ── Risk budget (volatility targeting) ──
+    fv, em, tv = d.get("forecast_vol"), d.get("exposure_mult"), d.get("target_vol")
+    if fv is not None or tv is not None:
+        L += ["## Risk budget (volatility targeting)", "",
+              "| Metric | Value |", "|--------|-------|",
+              f"| Forecast volatility (annualized, 126d) | {_pct(fv)} |",
+              f"| Vol target | {('off' if tv is None else _pct(tv))} |",
+              f"| Exposure multiplier | {('—' if em is None else f'{em:.2f}×')} |",
+              f"| Effective vs base exposure | {('100% (targeting off)' if tv is None else f'{(em or 1)*100:.0f}% of budget')} |",
+              ""]
+        if tv is not None:
+            state = ("at full risk budget (calm — forecast ≤ target)" if (em or 1) >= 0.999
+                     else f"de-risked to {(em or 1)*100:.0f}% (forecast vol above the {_pct(tv)} target)")
+            L += [f"_Scales gross exposure by clip(target / forecast vol, floor, cap); currently **{state}**. "
+                  "Affects position sizing only — not the composite scores._", ""]
+        else:
+            L += ["_Forecast vol shown for context; this scenario has no vol target, so exposure is unscaled. "
+                  "(Sizing-only knob — it never changes the composite scores.)_", ""]
+
+    # ── Today's transactions ──
+    tt = d.get("today_trades") or []
+    L += [f"## Today's transactions ({d['mark']})", ""]
+    if not tt:
+        L += ["_No transactions today._", ""]
+    else:
+        L += ["| Action | Ticker | Shares | Price | Reason | Realized P&L |",
+              "|--------|--------|------:|------:|--------|------:|"]
+        for x in tt:
+            pnl = "—" if x["pnl"] is None else f"${x['pnl']:,.0f}"
+            L.append(f"| {x['action']} | {x['ticker']} | {x['shares']} | {x['price']:.2f} "
+                     f"| {x['reason']} | {pnl} |")
+        L += ["", "_Buys fill at the latest close; exits / vol-trims fill same day. "
+              "`vol_trim` = volatility-governor de-risk sale (if enabled)._", ""]
+
+    # ── Recent trade log (last 10 across all dates) ──
+    rt = d.get("recent_trades") or []
+    L += ["## Recent trade log (last 10)", ""]
+    if not rt:
+        L += ["_No trades in this run._", ""]
+    else:
+        L += ["| Date | Action | Ticker | Shares | Price | Reason | Realized P&L |",
+              "|------|--------|--------|------:|------:|--------|------:|"]
+        for x in rt:
+            pnl = "—" if x["pnl"] is None else f"${x['pnl']:,.0f}"
+            L.append(f"| {x['date']} | {x['action']} | {x['ticker']} | {x['shares']} "
+                     f"| {x['price']:.2f} | {x['reason']} | {pnl} |")
+        L += [""]
 
     # ── (A) ranking scored on the PRIOR CLOSE, marked forward to the latest price ──
     def _px2(v):
