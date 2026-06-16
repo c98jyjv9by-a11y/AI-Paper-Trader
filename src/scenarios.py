@@ -274,7 +274,7 @@ def _pct(v: Optional[float], d: str = "—") -> str:
 
 
 def run_scenario(name: str, start_date: date, end_date: date, charts: bool = True,
-                 sensitivity: bool = True) -> Dict[str, str]:
+                 sensitivity: bool = True, status: bool = True) -> Dict[str, str]:
     setup_logging()
     run_date = date.today()
     root = Path(__file__).parent.parent
@@ -327,11 +327,28 @@ def run_scenario(name: str, start_date: date, end_date: date, charts: bool = Tru
         try:
             import scenario_charts
             chart_dir = reports_dir / f"charts_{tag}"
-            n = len(scenario_charts.make_charts(trades_csv, chart_dir, name, close=price_data["Close"]))
+            n = len(scenario_charts.make_charts(trades_csv, chart_dir, name, close=price_data["Close"],
+                                                price_data=price_data, config=cfg))
             log.info("Wrote %d per-ticker charts to %s", n, chart_dir)
         except Exception as exc:                       # charts are a nicety; never fail the run
             log.warning("Chart generation skipped: %s", exc)
             chart_dir = None
+
+    # Status & rank report (midday signal-strength snapshot), reusing this run's data.
+    status_md = None
+    if status:
+        try:
+            import rank_report
+            d = rank_report.build_report(name, start_date, end_date,
+                                         cfg=cfg, pdata=price_data, eq=equity, positions=positions)
+            status_md = reports_dir / f"status_{tag}.md"
+            status_md.write_text(rank_report.render_md(d))
+            rank_report.ranking_csv(d).to_csv(backtests_dir / f"status_{tag}.csv", index=False)
+            log.info("Wrote status & rank report: signal strength %s",
+                     _pct(d.get("signal_strength")))
+        except Exception as exc:                        # status is a nicety; never fail the run
+            log.warning("Status report skipped: %s", exc)
+            status_md = None
 
     print()
     print(f"  Scenario     : {scenario.get('name', name)}  ({len(cfg['tickers'])} tickers)")
@@ -343,10 +360,17 @@ def run_scenario(name: str, start_date: date, end_date: date, charts: bool = Tru
     print(f"  Beat EW-Hold : {'YES' if (metrics.get('total_return') or -9) > (metrics.get('equal_weight_return') or 9) else 'no'}")
     print()
     print(f"  Report : {md}")
+    if status_md is not None:
+        print(f"  Status : {status_md}  (rank + signal-strength snapshot)")
     if chart_dir is not None:
         print(f"  Charts : {chart_dir}  (per-ticker price + buy/sell reasons vs hold)")
+        packet = chart_dir / f"{name}_charts_packet.pdf"
+        if packet.exists():
+            print(f"  Packet : {packet}  (all charts in one PDF)")
     print()
     out = {"report": str(md)}
+    if status_md is not None:
+        out["status"] = str(status_md)
     if chart_dir is not None:
         out["charts"] = str(chart_dir)
     return out
@@ -363,6 +387,7 @@ def main() -> None:
     p.add_argument("--list", action="store_true", help="list available scenarios and exit")
     p.add_argument("--no-charts", action="store_true", help="skip per-ticker annotated charts")
     p.add_argument("--no-sensitivity", action="store_true", help="skip the sensitivity analysis section")
+    p.add_argument("--no-status", action="store_true", help="skip the status & rank report")
     args = p.parse_args()
 
     if args.list or not args.name:
@@ -381,7 +406,7 @@ def main() -> None:
         print("Error: --end must be after --start")
         sys.exit(1)
     run_scenario(args.name, start_date, end_date, charts=not args.no_charts,
-                 sensitivity=not args.no_sensitivity)
+                 sensitivity=not args.no_sensitivity, status=not args.no_status)
 
 
 if __name__ == "__main__":

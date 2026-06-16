@@ -15,6 +15,7 @@ Commands:
     screen              Factor screen — rank candidate signals by out-of-sample predictive power
     suite               Run the whole stack once → ONE consolidated summary report
     scenario            Run a named scenario (trimmed universe + per-ticker rules)
+    rank                Rank a scenario's universe as of the last close → dated Markdown report
     adaptive            Adaptive per-ticker rotating-signal backtest (weekly signal rotation)
     agent               Run the LIVE daily paper-trading agent (mutates data/)
 
@@ -130,7 +131,17 @@ def _cmd_scenario(args: argparse.Namespace) -> None:
         sys.exit(1)
     s, e = _dates(args)
     scenarios.run_scenario(args.name, s, e, charts=not args.no_charts,
-                           sensitivity=not args.no_sensitivity)
+                           sensitivity=not args.no_sensitivity, status=not args.no_status)
+
+
+def _cmd_rank(args: argparse.Namespace) -> None:
+    import rank_report
+    end = date.fromisoformat(args.end) if args.end else date.today()
+    start = date.fromisoformat(args.start) if args.start else date(end.year, 1, 1)
+    if end <= start:
+        print("Error: --end must be after --start")
+        sys.exit(1)
+    rank_report.run(args.scenario, start, end, args.top)
 
 
 def _cmd_adaptive(args: argparse.Namespace) -> None:
@@ -222,7 +233,16 @@ def build_parser() -> argparse.ArgumentParser:
     scn.add_argument("--list", action="store_true", help="list available scenarios and exit")
     scn.add_argument("--no-charts", action="store_true", help="skip the auto per-ticker charts")
     scn.add_argument("--no-sensitivity", action="store_true", help="skip the sensitivity analysis section")
+    scn.add_argument("--no-status", action="store_true", help="skip the auto status & rank report")
     scn.set_defaults(func=_cmd_scenario)
+
+    rk = sub.add_parser("rank",
+                        help="Rank a scenario's universe as of the last close → dated Markdown report")
+    rk.add_argument("scenario", help="scenario name (see config/scenarios/)")
+    rk.add_argument("--start", metavar="YYYY-MM-DD", help="backtest start (default: Jan 1 of end's year)")
+    rk.add_argument("--end", metavar="YYYY-MM-DD", help="end date (default: today)")
+    rk.add_argument("--top", type=int, default=10, help="top/bottom N to show (default 10)")
+    rk.set_defaults(func=_cmd_rank)
 
     ad = sub.add_parser("adaptive",
                         help="Adaptive per-ticker rotating-signal backtest (weekly, holds the recently-best signal per name)")

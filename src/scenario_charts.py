@@ -20,9 +20,22 @@ from typing import Dict, List, Tuple
 
 import matplotlib
 matplotlib.use("Agg")
+import matplotlib.colors as mcolors
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import pandas as pd
+
+# Composite-score bar color by band: prominent green (strong) → existing blue → prominent red (weak).
+def _score_color(s: float):
+    if s > 0.90:
+        return mcolors.to_rgba("#1a9850", 0.65)   # prominent green
+    if s >= 0.80:
+        return mcolors.to_rgba("#66bd63", 0.45)   # lighter green
+    if s >= 0.40:
+        return mcolors.to_rgba("#4575b4", 0.22)   # existing (neutral)
+    if s >= 0.20:
+        return mcolors.to_rgba("#fc8d59", 0.50)   # lightish red
+    return mcolors.to_rgba("#d73027", 0.70)       # prominent red
 
 _REASON_LABEL = {
     "take_profit": ("take-profit", "#1a9850"),
@@ -35,6 +48,64 @@ _REASON_LABEL = {
 def _short_reason(reason: str) -> str:
     parts = [_REASON_LABEL.get(p, (p, ""))[0] for p in str(reason).split("+")]
     return "+".join(parts)
+
+
+def _write_cover_page(pdf, scenario: str, trades: "pd.DataFrame", n_tickers: int,
+                      has_scores: bool, min_score) -> None:
+    """First page of the packet: title, window, and a legend for markers + score-color bands."""
+    import matplotlib.patches as mpatches
+    fig = plt.figure(figsize=(13, 6)); fig.subplots_adjust(left=0.08, right=0.92, top=0.9, bottom=0.1)
+    ax = fig.add_axes([0, 0, 1, 1]); ax.axis("off")
+    d0, d1 = trades["date"].min().date(), trades["date"].max().date()
+    ax.text(0.06, 0.88, f"{scenario} — chart packet", fontsize=22, weight="bold")
+    ax.text(0.06, 0.81, f"{n_tickers} tickers   ·   trades {d0} → {d1}   ·   one chart per page",
+            fontsize=12, color="#444")
+    ax.text(0.06, 0.70, "Markers", fontsize=13, weight="bold")
+    ax.scatter(0.075, 0.645, marker="^", s=120, color="#1a9850", edgecolor="white")
+    ax.text(0.11, 0.638, "BUY", fontsize=11)
+    ax.scatter(0.075, 0.595, marker="v", s=120, color="#d73027", edgecolor="white")
+    ax.text(0.11, 0.588, "SELL (exit reason annotated: take-profit / stop-loss / trailing-stop / max-hold)", fontsize=11)
+    ax.text(0.06, 0.515, "Shading", fontsize=13, weight="bold")
+    ax.text(0.075, 0.47, "green band = period the position was held", fontsize=11)
+    if has_scores:
+        ax.text(0.06, 0.39, "Composite-score bars (lower axis, 0–1)", fontsize=13, weight="bold")
+        bands = [("> 0.90  strong", "#1a9850", 0.65), ("0.80–0.90", "#66bd63", 0.45),
+                 ("0.40–0.80  neutral", "#4575b4", 0.22), ("0.20–0.40", "#fc8d59", 0.50),
+                 ("< 0.20  weak", "#d73027", 0.70)]
+        for i, (lbl, c, a) in enumerate(bands):
+            y = 0.33 - i * 0.05
+            ax.add_patch(mpatches.Rectangle((0.075, y), 0.03, 0.03, color=c, alpha=a,
+                                            transform=ax.transAxes))
+            ax.text(0.115, y + 0.004, lbl, fontsize=11)
+        if min_score:
+            ax.text(0.46, 0.33, f"dotted line on charts = buy gate ({min_score})", fontsize=11, color="#444")
+    ax.text(0.06, 0.04, "Each page: price (black) with held-period shading, buy/sell markers, "
+            "and the active-vs-buy&hold verdict in the title.", fontsize=9, color="#666")
+    pdf.savefig(fig); plt.close(fig)
+
+
+def _score_panel(price_data: "pd.DataFrame", config: Dict) -> "pd.DataFrame":
+    """Composite score per (date, ticker) over the full panel — one pass, reused for every
+    chart. Computed at a weekly cadence on long windows to stay fast and keep bars legible."""
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).parent))
+    from signals import calculate_signals, rank_candidates
+    from backtest import _build_ticker_weights, _SIGNAL_WINDOW
+
+    uni = config["tickers"]
+    weights = config.get("signals", {}).get("weights")
+    tw = _build_ticker_weights(config) or None
+    idx = price_data.index
+    step = 5 if len(idx) > 400 else 1                     # weekly cadence on long windows
+    rows: Dict = {}
+    for i in range(_SIGNAL_WINDOW, len(idx), step):
+        sl = price_data.iloc[max(0, i + 1 - _SIGNAL_WINDOW): i + 1]
+        sig = calculate_signals(sl, uni)
+        if sig.empty:
+            continue
+        rk = rank_candidates(sig, top_n=len(sig), weights=weights, ticker_weights=tw)
+        rows[idx[i]] = dict(zip(rk["ticker"], rk["composite_score"]))
+    return pd.DataFrame.from_dict(rows, orient="index").sort_index() if rows else pd.DataFrame()
 
 
 def _per_ticker_returns(trades: pd.DataFrame, last_close: float,
@@ -54,9 +125,12 @@ def _per_ticker_returns(trades: pd.DataFrame, last_close: float,
 
 
 def make_charts(trades_csv: Path, out_dir: Path, scenario: str, since=None,
-                close: "pd.DataFrame" = None) -> Dict[str, Dict]:
+                close: "pd.DataFrame" = None, price_data: "pd.DataFrame" = None,
+                config: Dict = None) -> Dict[str, Dict]:
     """If `close` ([dates × tickers]) is provided it is used directly (e.g. the panel
-    the backtest already fetched); otherwise prices are downloaded via yfinance."""
+    the backtest already fetched); otherwise prices are downloaded via yfinance.
+    If `price_data` (full OHLCV panel) + `config` are provided, each chart also overlays
+    the per-date composite score as bars on a secondary axis."""
     trades = pd.read_csv(trades_csv, parse_dates=["date"])
     tickers = sorted(trades["ticker"].unique())
 
@@ -68,9 +142,24 @@ def make_charts(trades_csv: Path, out_dir: Path, scenario: str, since=None,
                           interval="1d", auto_adjust=True, progress=False)
         close = raw["Close"] if isinstance(raw.columns, pd.MultiIndex) else raw[["Close"]].rename(columns={"Close": tickers[0]})
 
+    # Composite-score panel (optional overlay) — computed once, reused for every ticker.
+    score_df = pd.DataFrame()
+    min_score = (config or {}).get("signals", {}).get("min_composite_score")
+    if price_data is not None and config is not None:
+        try:
+            score_df = _score_panel(price_data, config)
+        except Exception:                                # overlay is a nicety; never fail charts
+            score_df = pd.DataFrame()
+
     out_dir.mkdir(parents=True, exist_ok=True)
     summary: Dict[str, Dict] = {}
     since_ts = pd.Timestamp(since) if since else None
+
+    # Combined multi-page PDF "packet" — every per-ticker chart in one file, cover page first.
+    from matplotlib.backends.backend_pdf import PdfPages
+    packet_path = out_dir / f"{scenario}_charts_packet.pdf"
+    pdf = PdfPages(packet_path)
+    _write_cover_page(pdf, scenario, trades, len(tickers), bool(not score_df.empty), min_score)
 
     for tk in tickers:
         if tk not in close.columns:
@@ -88,6 +177,27 @@ def make_charts(trades_csv: Path, out_dir: Path, scenario: str, since=None,
         active_ret, n_rt, _ = _per_ticker_returns(tt, float(px.iloc[-1]), seed_open=seed)
 
         fig, ax = plt.subplots(figsize=(13, 6))
+
+        # composite-score bars on a secondary axis, scaled to the lower ~45% so the price
+        # line/markers stay clearly readable above them.
+        if not score_df.empty and tk in score_df.columns:
+            ss = score_df[tk].dropna()
+            ss = ss[(ss.index >= px.index[0]) & (ss.index <= px.index[-1])]
+            if not ss.empty:
+                ax2 = ax.twinx()
+                diffs = ss.index.to_series().diff().dt.days.dropna()
+                width = max(1.0, float(diffs.median()) * 0.85) if not diffs.empty else 5.0
+                bar_colors = [_score_color(v) for v in ss.values]
+                ax2.bar(ss.index, ss.values, width=width, color=bar_colors, zorder=0)
+                ax2.set_ylim(0, 2.2)                       # score 1.0 → ~45% of chart height
+                ax2.set_yticks([0, 0.5, 1.0])
+                ax2.set_ylabel("composite score (0–1)  ·  green=strong, red=weak", color="#555", fontsize=8)
+                ax2.tick_params(axis="y", labelcolor="#4575b4", labelsize=7)
+                if min_score:
+                    ax2.axhline(min_score, color="#4575b4", lw=0.7, ls=":", alpha=0.7)
+                ax.set_zorder(ax2.get_zorder() + 1)        # draw price/markers above the bars
+                ax.patch.set_visible(False)
+
         ax.plot(px.index, px.values, color="#333", lw=1.1, label=f"{tk} close")
 
         # shade held periods (buy → next sell)
@@ -124,10 +234,16 @@ def make_charts(trades_csv: Path, out_dir: Path, scenario: str, since=None,
         ax.legend(loc="upper left", fontsize=8)
         fig.tight_layout()
         path = out_dir / f"{tk}.png"
-        fig.savefig(path, dpi=130); plt.close(fig)
+        fig.savefig(path, dpi=130)
+        pdf.savefig(fig)                                  # add this chart as a page in the packet
+        plt.close(fig)
 
         summary[tk] = {"active_return": active_ret, "hold_return": hold_ret,
                        "excess": active_ret - hold_ret, "round_trips": n_rt, "png": str(path)}
+
+    pdf.close()
+    if not summary:                                       # no charts → drop the cover-only packet
+        packet_path.unlink(missing_ok=True)
     return summary
 
 
@@ -149,12 +265,29 @@ def main() -> None:
             sys.exit(1)
         trades_csv = matches[-1]
 
+    # Load the scenario config + full OHLCV panel so charts can overlay composite-score bars.
+    price_data = cfg = None
+    try:
+        sys.path.insert(0, str(Path(__file__).parent))
+        from scenarios import load_scenario, build_config
+        from backtest import load_config, fetch_backtest_data
+        cfg = build_config(load_config(root / "config"), load_scenario(args.scenario))
+        trades_dates = pd.read_csv(trades_csv, parse_dates=["date"])["date"]
+        price_data = fetch_backtest_data(cfg["tickers"], trades_dates.min().date(),
+                                         (trades_dates.max() + timedelta(days=3)).date())
+    except Exception as exc:
+        print(f"  (composite-score overlay unavailable: {exc})")
+
     out_dir = root / "reports" / f"charts_{args.scenario}_{date.today().isoformat()}"
-    summary = make_charts(trades_csv, out_dir, args.scenario, since=since)
+    summary = make_charts(trades_csv, out_dir, args.scenario, since=since,
+                          price_data=price_data, config=cfg)
 
     print()
     print(f"  Trades : {trades_csv.name}")
     print(f"  Charts : {out_dir}")
+    packet = out_dir / f"{args.scenario}_charts_packet.pdf"
+    if packet.exists():
+        print(f"  Packet : {packet}  (all charts in one PDF)")
     print()
     print(f"  {'Ticker':<8}{'Active':>10}{'Hold':>10}{'Excess':>10}{'RoundTrips':>12}")
     for tk, s in summary.items():
