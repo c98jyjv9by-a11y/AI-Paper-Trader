@@ -1,0 +1,150 @@
+# ─── Scenario: model_v3 ─────────────────────────────────────────────────────
+# Copy of model_v2 (same 83-name universe + all-ticker exit rule) PLUS score-
+# conditional exits:
+#   * a STOP-LOSS only fires if the name's current composite score is below 0.90
+#     (a still-strong name is given room — its stop is suppressed).
+#   * a MAX-HOLDING exit is suppressed UNTIL the score falls below 0.80
+#     (let a still-strong name keep running past the 90-day hold cap).
+# Take-profit and trailing-stop are never score-gated. Both thresholds are swept in
+# the scenario's sensitivity analysis.
+#
+# Override layering (per ticker, per field): ticker_groups entry → scenario `risk:`
+# (all-ticker) → base config/strategy.yaml default.
+
+name: model_v3
+description: >
+  model_v2's 83-name universe and uniform exit rule, plus score-conditional exits:
+  stop-loss only below a 0.90 composite score, and max-hold suppressed until the
+  score falls below 0.80 — so still-strong names are given room to run.
+
+tickers:
+  - CRWD
+  - ORCL
+  - COIN
+  - NFLX
+  - PANW
+  - GOOGL
+  - BAC
+  - MSFT
+  - AVGO
+  - AMZN
+  - COST
+  - ASML
+  - AAPL
+  - JPM
+  - TSM
+  - GS
+  - META
+  - TSLA
+  - MU
+  - AMD
+  - NVDA
+  # ── Dispersion / diversification adds (uncorrelated sectors + momentum leaders) ──
+  - LLY                            # healthcare megatrend — near-zero tech correlation
+  - VST                            # AI-power utility — momentum, new sector (listed 2021)
+  - AXON                           # defense/public-safety tech — persistent uptrend
+  - GE                             # industrials turnaround — low tech beta
+  - PLTR                           # high-octane momentum (high vol, fat right tail)
+  - OXY                            # energy diversifier — anti-correlated to tech
+  # ── Adversarial / anti-survivorship laggards (test ranker discrimination) ──
+  - INTC                           # semis loser vs NVDA/AMD — down ~60%, dividend cut
+  - BA                             # industrials loser vs GE — door-plug + strike decline
+  - PFE                            # healthcare loser vs LLY — post-COVID downtrend
+  - PYPL                           # broken-growth fintech — long laggard off 2021 peak
+  - SEDG                           # solar collapse (~-95%) — falling-knife stress test
+  - PLUG                           # green-hydrogen collapse (~-95%) — extreme left tail
+  # ── Growth / tech / mega-cap breadth adds (50 names) ──
+  # Large-cap software / SaaS
+  - ADBE
+  - CRM
+  - NOW
+  - INTU
+  - SAP
+  - WDAY
+  - SNOW
+  - DDOG
+  - NET
+  - MDB
+  - ZS
+  - FTNT
+  - TEAM
+  - OKTA
+  - TWLO
+  - HUBS
+  - SNPS
+  - CDNS
+  # Semiconductors / hardware / AI infra
+  - QCOM
+  - TXN
+  - AMAT
+  - LRCX
+  - KLAC
+  - NXPI
+  - MRVL
+  - ADI
+  - MCHP
+  - "ON"                           # quoted — bare ON is parsed as boolean true in YAML
+  - ARM                            # IPO Sep-2023 — short history
+  - ANET
+  - CSCO
+  - IBM
+  - DELL
+  - SMCI
+  - VRT
+  - APP
+  # Internet / platform / consumer growth
+  - SHOP
+  - UBER
+  - ABNB                           # listed Dec-2020
+  - MELI
+  - SE
+  - SPOT
+  - DASH                           # listed Dec-2020
+  - RBLX                           # listed 2021
+  - PINS
+  - SNAP
+  - TTD
+  - NU                             # listed 2021
+  # Fintech / high-beta growth
+  - HOOD                           # listed 2021
+  - SOFI                           # listed 2021
+
+portfolio:
+  max_position_pct: 0.085         # manual per-name cap (83-name universe)
+  max_total_exposure: 0.90
+  max_new_trades_per_day: 2
+
+signals:
+  min_composite_score: 0.70      # ranker still orders the full universe each day
+
+# ─── ALL-TICKER overrides ─────────────────────────────────────────────────────
+# Every field here applies to ALL tickers unless a ticker_groups entry overrides it.
+risk:
+  stop_loss: 0.15                 # 15% stop, anchored to entry, for every name
+  take_profit: null              # no fixed profit cap — let winners run
+  trailing_stop: null             # no trailing stop
+  max_holding_days: 90            # exit after 90 trading days
+  # Anti-falling-knife re-entry gate (trough-based): after a STOP-LOSS exit, track
+  # the name's lowest price since that stop and block re-entry until it bounces
+  # >=10% above that trough. Only fires after stops; it merely UNBLOCKS re-entry.
+  reentry_recover_pct: 0.10
+  # ── Score-conditional exits (new in model_v3) ──
+  stop_loss_score_max: 0.90       # stop-loss fires only when current composite score < 0.90
+  max_hold_score_max: 0.80        # max-hold suppressed until composite score < 0.80
+  # ── Persistence rules (consecutive-day score conditions) ──
+  # Score-decay sell DISABLED: the sensitivity sweep showed the 0.50 setting was the
+  # worst cell — it dumped names that then recovered (off → +466% vs +361%, lower DD,
+  # higher PF). Left here, commented, for reference.
+  # score_exit_below: 0.50
+  # score_exit_days: 3
+  score_entry_above: 0.90         # BUY if composite score > 0.90 for score_entry_days in a row (raised 0.85→0.90 per sweep)
+  score_entry_days: 3
+  fund_by_rotation: true          # if cash is short for a persistence buy, sell the lowest 3-day-avg holding
+
+# Per-ticker overrides layer ON TOP of the all-ticker `risk:` block above.
+# Leave commented to apply the uniform rule to everyone. Example for one name:
+#   msft:
+#     tickers: [MSFT]
+#     stop_loss: 0.075
+#     trailing_stop: 0.10
+# ticker_groups:

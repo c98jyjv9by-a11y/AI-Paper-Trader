@@ -73,7 +73,8 @@ class TestSensitivityTasks:
         tasks, groups, marks, has_ticker = sc._scenario_sensitivity_tasks(self._cfg())
         keys = {g[0] for g in groups}
         assert {"max_total_exposure", "max_position_pct", "max_new_trades_per_day",
-                "min_composite_score", "slippage", "reentry_recover_pct", "signal_weights"}.issubset(keys)
+                "min_composite_score", "slippage", "reentry_recover_pct", "signal_weights",
+                "stop_loss_score_max", "max_hold_score_max"}.issubset(keys)
         assert {"tk_stop_loss", "tk_take_profit", "tk_trailing_stop", "tk_max_holding_days"}.issubset(keys)
         assert has_ticker is True
         assert len(tasks) > 20

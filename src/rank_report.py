@@ -99,11 +99,19 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
     rank_close = close.index[-2]          # last completed close → ranking anchor
     mark = close.index[-1]                # latest available price (may be provisional)
 
-    def ret(t: str) -> Optional[float]:
+    def _px_asof(t: str, ts) -> Optional[float]:
+        """Last VALID (non-NaN) close at or before ts for ticker t. Forward-fills across
+        transient feed gaps (e.g. Yahoo briefly serving NaN for the prior session), so a
+        missing bar doesn't blank the row — it falls back to the name's last good close."""
         if t not in close.columns:
             return None
-        a, b = close.loc[rank_close, t], close.loc[mark, t]
-        return (b / a - 1) if (a == a and b == b and a > 0) else None
+        s = close[t]
+        s = s[s.index <= ts].dropna()
+        return float(s.iloc[-1]) if len(s) else None
+
+    def ret(t: str) -> Optional[float]:
+        a, b = _px_asof(t, rank_close), _px_asof(t, mark)
+        return (b / a - 1) if (a and b and a > 0) else None
 
     # (A) ranking as of the last completed close (sets up the session that just happened)
     sl = pdata.loc[:rank_close].iloc[-_SIGNAL_WINDOW:]
@@ -128,8 +136,8 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
         rows.append({
             "rank": i + 1, "ticker": t, "score": float(r["composite_score"]),
             "clears_gate": (min_score is None or r["composite_score"] >= min_score),
-            "rank_close_px": float(close.loc[rank_close, t]) if t in close.columns else None,
-            "mark_px": float(close.loc[mark, t]) if t in close.columns else None,
+            "rank_close_px": _px_asof(t, rank_close),
+            "mark_px": _px_asof(t, mark),
             "return": ret(t), "held": t in held,
         })
     # current-price ranking rows (no forward return — this is the standing right now)
@@ -139,7 +147,7 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
         rows_cur.append({
             "rank": i + 1, "ticker": t, "score": float(r["composite_score"]),
             "clears_gate": (min_score is None or r["composite_score"] >= min_score),
-            "price": float(close.loc[mark, t]) if t in close.columns else None,
+            "price": _px_asof(t, mark),
             "held": t in held,
         })
     # rank movement vs the prior-close ranking (for context)
@@ -166,11 +174,12 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
     bot_avg = (sum(x["return"] for x in rows[-top_n:] if x["return"] is not None) / top_n) if n else None
     signal_strength = (top_avg - bot_avg) if (top_avg is not None and bot_avg is not None) else None
     n_gate = sum(1 for x in rows if x["clears_gate"])
-    # dollar-weighted held-book return over the session
-    dw_num = sum(p["shares"] * close.loc[rank_close, p["ticker"]] * (ret(p["ticker"]) or 0.0)
-                 for _, p in positions.iterrows() if p["ticker"] in close.columns)
-    dw_den = sum(p["shares"] * close.loc[rank_close, p["ticker"]]
-                 for _, p in positions.iterrows() if p["ticker"] in close.columns)
+    # dollar-weighted held-book return over the session (last-valid-close anchor per name)
+    _held_anchor = {p["ticker"]: _px_asof(p["ticker"], rank_close) for _, p in positions.iterrows()}
+    dw_num = sum(p["shares"] * _held_anchor[p["ticker"]] * (ret(p["ticker"]) or 0.0)
+                 for _, p in positions.iterrows() if _held_anchor.get(p["ticker"]))
+    dw_den = sum(p["shares"] * _held_anchor[p["ticker"]]
+                 for _, p in positions.iterrows() if _held_anchor.get(p["ticker"]))
     held_dw = (dw_num / dw_den) if dw_den else None
 
     # portfolio vs benchmarks (trailing windows from the run's equity)
@@ -346,7 +355,9 @@ def render_md(d: Dict[str, Any]) -> str:
         L.append(f"| {w} | {_pct(m)} | {_pct(sp)} | {_pct(q)} | {vs_s} | {vs_q} |")
     L += ["",
           "_Ranking is reproducible from price history (composite of 1d/5d/20d returns + volume "
-          "ratio); the latest mark may be a provisional intraday bar that settles at the close._", ""]
+          "ratio); the latest mark may be a provisional intraday bar that settles at the close. "
+          "Prices use each ticker's last valid close (forward-filled across transient feed gaps), so "
+          "a briefly-missing prior-day bar doesn't blank a row._", ""]
     return "\n".join(L)
 
 

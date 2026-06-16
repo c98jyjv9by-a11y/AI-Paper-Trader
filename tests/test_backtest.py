@@ -197,6 +197,91 @@ class TestCashOnBuys:
 # ─── 3. Cash credit on sells ──────────────────────────────────────────────────
 
 
+class TestScoreConditionalExits:
+    """stop_loss_score_max / max_hold_score_max gate the stop-loss and max-hold exits."""
+
+    def _underwater(self):  # -25% vs entry → stop-loss territory
+        return _make_positions(("AAA", 10, 100.0, date(2024, 1, 1), 75.0))
+
+    def test_stop_fires_when_score_below_threshold(self):
+        exits, _ = _evaluate_backtest_exits(
+            self._underwater(), date(2024, 1, 15),
+            stop_loss=0.15, take_profit=None, max_holding_days=999, slippage=0.001,
+            scores={"AAA": 0.50}, stop_loss_score_max=0.90)
+        assert exits and "stop_loss" in exits[0]["reason"]
+
+    def test_stop_suppressed_when_score_strong(self):
+        exits, remaining = _evaluate_backtest_exits(
+            self._underwater(), date(2024, 1, 15),
+            stop_loss=0.15, take_profit=None, max_holding_days=999, slippage=0.001,
+            scores={"AAA": 0.95}, stop_loss_score_max=0.90)
+        assert exits == []                       # strong score → stop suppressed, position kept
+        assert len(remaining) == 1
+
+    def test_stop_fires_when_score_unknown(self):
+        exits, _ = _evaluate_backtest_exits(
+            self._underwater(), date(2024, 1, 15),
+            stop_loss=0.15, take_profit=None, max_holding_days=999, slippage=0.001,
+            scores={}, stop_loss_score_max=0.90)   # no score → don't suppress the protective stop
+        assert exits and "stop_loss" in exits[0]["reason"]
+
+    def test_max_hold_suppressed_until_score_drops(self):
+        # at entry price (no stop/tp), but long past the hold cap
+        pos = _make_positions(("AAA", 10, 100.0, date(2024, 1, 1), 100.0))
+        strong, _ = _evaluate_backtest_exits(
+            pos, date(2024, 6, 1), stop_loss=0.15, take_profit=None,
+            max_holding_days=20, slippage=0.001,
+            scores={"AAA": 0.85}, max_hold_score_max=0.80)
+        assert strong == []                       # score 0.85 ≥ 0.80 → max-hold suppressed
+        weak, _ = _evaluate_backtest_exits(
+            pos, date(2024, 6, 1), stop_loss=0.15, take_profit=None,
+            max_holding_days=20, slippage=0.001,
+            scores={"AAA": 0.50}, max_hold_score_max=0.80)
+        assert weak and "max_holding_period" in weak[0]["reason"]
+
+    def test_no_gating_by_default_matches_legacy(self):
+        # thresholds None → behaves exactly as before (stop fires)
+        exits, _ = _evaluate_backtest_exits(
+            self._underwater(), date(2024, 1, 15),
+            stop_loss=0.15, take_profit=None, max_holding_days=999, slippage=0.001)
+        assert exits and "stop_loss" in exits[0]["reason"]
+
+
+class TestPersistenceRules:
+    """End-to-end run_backtest paths for score-decay sells + persistence buys + rotation."""
+
+    def test_score_decay_sells_appear(self):
+        data = _make_price_data(["AAA", "BBB", "CCC"], n_days=120, seed=3)
+        cfg = _make_config(["AAA", "BBB", "CCC"], max_new=3, stop_loss=0.50,
+                           take_profit=None, max_holding=999)
+        cfg["risk"]["score_exit_below"] = 0.99      # almost everything is "below" → decay fires
+        cfg["risk"]["score_exit_days"] = 3
+        dates = data.index
+        t, _e, _p = run_backtest(cfg, data, dates[30].date(), dates[-1].date())
+        assert t["reason"].astype(str).str.contains("score_decay").any()
+
+    def test_rotation_funded_when_cash_short(self):
+        data = _make_price_data(["AAA", "BBB", "CCC", "DDD"], n_days=120, seed=5)
+        cfg = _make_config(["AAA", "BBB", "CCC", "DDD"], max_new=4, max_position_pct=0.30,
+                           max_exposure=0.95, stop_loss=0.50, take_profit=None, max_holding=999)
+        cfg["risk"]["score_entry_above"] = 0.0      # everything "persists" → always wants to buy
+        cfg["risk"]["score_entry_days"] = 1
+        cfg["risk"]["fund_by_rotation"] = True
+        dates = data.index
+        t, _e, _p = run_backtest(cfg, data, dates[30].date(), dates[-1].date())
+        # with exposure ~maxed and constant buy pressure, rotation funding should engage
+        assert t["reason"].astype(str).str.contains("rotation_funded").any()
+
+    def test_defaults_off_no_new_reasons(self):
+        data = _make_price_data(["AAA", "BBB"], n_days=80, seed=1)
+        cfg = _make_config(["AAA", "BBB"], stop_loss=0.05, take_profit=0.10, max_holding=10)
+        dates = data.index
+        t, _e, _p = run_backtest(cfg, data, dates[25].date(), dates[-1].date())
+        reasons = t["reason"].astype(str)
+        assert not reasons.str.contains("score_decay").any()
+        assert not reasons.str.contains("rotation_funded").any()
+
+
 class TestCashOnSells:
     def test_cash_increases_when_stop_loss_fires(self):
         """

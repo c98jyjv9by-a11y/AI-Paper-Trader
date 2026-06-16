@@ -141,6 +141,20 @@ def _scenario_sensitivity_tasks(cfg: Dict[str, Any]):
     add_runwide("reentry_recover_pct", "Re-entry Recovery Gate", [None, 0.0, 0.05, 0.10],
                 r.get("reentry_recover_pct"), lambda v: "off" if v is None else f"{v:.0%}",
                 _set(["risk", "reentry_recover_pct"]))
+    # Score-conditional exits: stop-loss only fires below this score; max-hold suppressed above it.
+    add_runwide("stop_loss_score_max", "Stop-loss only if score <", [None, 0.85, 0.90, 0.95],
+                r.get("stop_loss_score_max"), lambda v: "off" if v is None else f"{v:.2f}",
+                _set(["risk", "stop_loss_score_max"]))
+    add_runwide("max_hold_score_max", "Max-hold only if score <", [None, 0.70, 0.80, 0.90],
+                r.get("max_hold_score_max"), lambda v: "off" if v is None else f"{v:.2f}",
+                _set(["risk", "max_hold_score_max"]))
+    # Persistence rules (consecutive-day score thresholds)
+    add_runwide("score_exit_below", "Score-decay sell threshold", [None, 0.40, 0.50, 0.60],
+                r.get("score_exit_below"), lambda v: "off" if v is None else f"{v:.2f}",
+                _set(["risk", "score_exit_below"]))
+    add_runwide("score_entry_above", "Persistence-buy threshold", [None, 0.80, 0.85, 0.90],
+                r.get("score_entry_above"), lambda v: "off" if v is None else f"{v:.2f}",
+                _set(["risk", "score_entry_above"]))
 
     # Signal-weight profile (run-wide): the scenario's own weights vs fixed alternatives.
     config_weights = s.get("weights") or _DEFAULT_WEIGHTS
