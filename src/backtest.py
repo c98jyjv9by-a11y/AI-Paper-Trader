@@ -157,6 +157,43 @@ def fetch_backtest_data(
         data.columns = pd.MultiIndex.from_product([data.columns, all_tickers[:1]])
 
     log.info("Downloaded %d bars", len(data))
+    data = _apply_price_overrides(data, Path(__file__).parent.parent / "config" / "price_overrides.csv")
+    return data
+
+
+def _apply_price_overrides(data: pd.DataFrame, overrides_path: Path) -> pd.DataFrame:
+    """Patch ONLY missing (NaN) Close cells from a manual override file, so transient
+    feed gaps can be filled by hand without ever clobbering real data.
+
+    File: config/price_overrides.csv with columns `date,ticker,close`. A row is applied
+    only when that (date, ticker) Close is currently NaN — if the real price is present
+    (now or once the feed backfills), the override is ignored. Missing file → no-op.
+    """
+    if not overrides_path.exists() or "Close" not in set(data.columns.get_level_values(0)):
+        return data
+    try:
+        ov = pd.read_csv(overrides_path)
+    except Exception as exc:                       # never let overrides break a run
+        log.warning("Could not read price overrides (%s) — skipping", exc)
+        return data
+    filled = 0
+    for _, r in ov.iterrows():
+        try:
+            ts = pd.Timestamp(r["date"]).normalize()
+            col = ("Close", str(r["ticker"]).strip())
+            px = float(r["close"])
+        except Exception:
+            continue
+        if col not in data.columns:
+            continue
+        match = data.index[data.index.normalize() == ts]
+        if len(match) == 0:
+            continue
+        if pd.isna(data.loc[match[0], col]):       # fill gaps only; real data always wins
+            data.loc[match[0], col] = px
+            filled += 1
+    if filled:
+        log.info("Applied %d price override(s) to NaN cells from %s", filled, overrides_path.name)
     return data
 
 
