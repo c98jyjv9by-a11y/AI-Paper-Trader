@@ -35,11 +35,13 @@ def _pct(v: Optional[float], d: str = "—") -> str:
     return d if v is None or (isinstance(v, float) and pd.isna(v)) else f"{v * 100:+.2f}%"
 
 
-# Intraday checkpoints every 2 hours from 9:00 CT to the close, labeled in Chicago Central Time.
-# Keys are the underlying 30-min bar timestamps in market tz (America/New_York = CT+1);
-# the close (CT 15:00 / ET 16:00) is handled separately via the daily close.
-#   ET 10:00 → CT 9:00 · ET 12:00 → CT 11:00 · ET 14:00 → CT 13:00
-_CHECKPOINTS = [("10:00", "9:00 CT"), ("12:00", "11:00 CT"), ("14:00", "13:00 CT")]
+# Hourly intraday checkpoints from 9:00 CT to the last full hour before close, labeled in
+# Chicago Central Time. Keys are the underlying 30-min bar timestamps in market tz (ET = CT+1).
+# Only checkpoints that already have data are rendered (future hours are dropped); the close
+# (CT 15:00 / ET 16:00) is the trailing "Latest" column, handled via the daily close.
+#   ET 10:00→CT 9:00 · 11:00→10:00 · 12:00→11:00 · 13:00→12:00 · 14:00→13:00 · 15:00→14:00
+_CHECKPOINTS = [("10:00", "9:00 CT"), ("11:00", "10:00 CT"), ("12:00", "11:00 CT"),
+                ("13:00", "12:00 CT"), ("14:00", "13:00 CT"), ("15:00", "14:00 CT")]
 _CLOSE_LABEL = "Latest (≈15:00 CT close)"
 
 
@@ -318,15 +320,17 @@ def render_md(d: Dict[str, Any]) -> str:
     L += tbl_prior(f"Top {tn} (highest buy scores @ prior close)", rows[:tn], d["top_avg"])
     L += tbl_prior(f"Bottom {tn} (lowest buy scores @ prior close)", rows[-tn:], d["bot_avg"])
 
-    # intraday progression (return vs prior close at each 2h CT checkpoint; Close = daily close)
+    # intraday progression (return vs prior close at each hourly CT checkpoint; only render
+    # checkpoints that already have data — future hours are dropped; Latest is the far-right col)
     intra = d.get("intraday")
     if intra:
-        cps = _CHECKPOINTS
+        cps = [cp for cp in _CHECKPOINTS                      # keep only hours with ≥1 data point
+               if any(rec.get(cp[0]) is not None for rec in intra.values())]
         ret = d["ret"]
 
         def tbl_intra(title, items):
-            # items: list of (ticker, close_return). Header uses CT labels; trailing Close column.
-            hdr = "| Ticker | " + " | ".join(lbl for _, lbl in cps) + f" | {_CLOSE_LABEL} |"
+            # items: list of (ticker, latest_return). Hourly CT columns + Latest at far right.
+            hdr = "| Ticker | " + "".join(f"{lbl} | " for _, lbl in cps) + f"{_CLOSE_LABEL} |"
             sep = "|--------|" + "------:|" * (len(cps) + 1)
             out = [f"### {title}", "", hdr, sep]
             sums = {hhmm: [0.0, 0] for hhmm, _ in cps}; csum = [0.0, 0]
@@ -340,16 +344,16 @@ def render_md(d: Dict[str, Any]) -> str:
                         sums[hhmm][0] += v; sums[hhmm][1] += 1
                 if cl is not None:
                     csum[0] += cl; csum[1] += 1
-                out.append(f"| {tkr} | " + " | ".join(cells) + f" | {_pct(cl)} |")
+                out.append(f"| {tkr} | " + "".join(c + " | " for c in cells) + f"{_pct(cl)} |")
             avg_cells = [_pct(sums[h][0] / sums[h][1]) if sums[h][1] else "—" for h, _ in cps]
-            out += ["| **AVG** | " + " | ".join(avg_cells) +
-                    f" | {_pct(csum[0] / csum[1]) if csum[1] else '—'} |", ""]
+            out += ["| **AVG** | " + "".join(c + " | " for c in avg_cells) +
+                    f"{_pct(csum[0] / csum[1]) if csum[1] else '—'} |", ""]
             return out
 
         L += [f"## A2) Intraday return progression — {d['mark']} (vs prior close {d['rank_close']})", "",
-              "_Return from the prior close to each **2-hour checkpoint, Chicago Central Time** "
-              "(9:00 → 11:00 → 13:00 → 15:00 close), using 30-min bars. The last column is the "
-              "latest/close. "
+              "_Return from the prior close to each **hourly Chicago-time checkpoint** (9:00, 10:00, "
+              "11:00 … up to whatever has traded so far), using 30-min bars. The far-right **Latest** "
+              "column is the most recent price (≈the 15:00 CT close). "
               "Watch the spread between the top and bottom AVG rows build through the session._", ""]
         L += tbl_intra(f"Top {tn} @ prior close — intraday path",
                        [(r["ticker"], r["return"]) for r in rows[:tn]])
