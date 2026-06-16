@@ -1,0 +1,165 @@
+# ─── Scenario: model_v4 (RECOMMENDED CONFIG) ────────────────────────────────
+# Built on model_v3 (83-name universe + all-ticker exits + score-conditional exits
+# + persistence buy + rotation funding), adding the one validated improvement from
+# this round of analysis: Barroso-style VOLATILITY TARGETING.
+#
+# What carries over from model_v3 (already sensitivity-tuned):
+#   * stop-loss only fires when composite score < 0.90; max-hold suppressed until < 0.80
+#   * persistence buy: score > 0.90 for 3 consecutive days (raised from 0.85 per the sweep)
+#   * score-decay sell DISABLED (0.50 was the worst cell — dumped names that recovered)
+#   * rotation funding on; trough-based re-entry gate at 10%
+#
+# NEW in v4 — volatility targeting (Barroso & Santa-Clara, "Momentum Has Its Moments"):
+#   scale gross exposure by clip(target_vol / forecast_vol, floor, cap), where forecast
+#   = the portfolio's own trailing 126-day realized vol (annualized). Tuned to model_v3's
+#   (hotter) vol profile: a 0.35 target dominated on 2018-2026 (incl. 2018/2020/2022
+#   crashes) — return +1077%→+1658%, max drawdown -41.5%→-37.9%, Sharpe 1.10→1.28, PF
+#   1.88→2.19. (model_v2's lower-vol book wanted ~0.25; v3 runs hotter, so 0.35.)
+#   IN-SAMPLE on one window — re-tune/validate OOS before trusting the magnitude.
+#
+# Override layering (per ticker, per field): ticker_groups entry → scenario `risk:`
+# (all-ticker) → base config/strategy.yaml default.
+
+name: model_v4
+description: >
+  RECOMMENDED config. model_v3 (83-name universe, score-conditional exits, persistence
+  buy >0.90, rotation funding) plus Barroso volatility targeting (~35% annualized, tuned
+  to v3's vol profile) that shrinks gross exposure when forecast vol is high — dominated
+  v3 on return, drawdown, Sharpe and PF in 2018-2026 validation.
+
+tickers:
+  - CRWD
+  - ORCL
+  - COIN
+  - NFLX
+  - PANW
+  - GOOGL
+  - BAC
+  - MSFT
+  - AVGO
+  - AMZN
+  - COST
+  - ASML
+  - AAPL
+  - JPM
+  - TSM
+  - GS
+  - META
+  - TSLA
+  - MU
+  - AMD
+  - NVDA
+  # ── Dispersion / diversification adds (uncorrelated sectors + momentum leaders) ──
+  - LLY                            # healthcare megatrend — near-zero tech correlation
+  - VST                            # AI-power utility — momentum, new sector (listed 2021)
+  - AXON                           # defense/public-safety tech — persistent uptrend
+  - GE                             # industrials turnaround — low tech beta
+  - PLTR                           # high-octane momentum (high vol, fat right tail)
+  - OXY                            # energy diversifier — anti-correlated to tech
+  # ── Adversarial / anti-survivorship laggards (test ranker discrimination) ──
+  - INTC                           # semis loser vs NVDA/AMD — down ~60%, dividend cut
+  - BA                             # industrials loser vs GE — door-plug + strike decline
+  - PFE                            # healthcare loser vs LLY — post-COVID downtrend
+  - PYPL                           # broken-growth fintech — long laggard off 2021 peak
+  - SEDG                           # solar collapse (~-95%) — falling-knife stress test
+  - PLUG                           # green-hydrogen collapse (~-95%) — extreme left tail
+  # ── Growth / tech / mega-cap breadth adds (50 names) ──
+  # Large-cap software / SaaS
+  - ADBE
+  - CRM
+  - NOW
+  - INTU
+  - SAP
+  - WDAY
+  - SNOW
+  - DDOG
+  - NET
+  - MDB
+  - ZS
+  - FTNT
+  - TEAM
+  - OKTA
+  - TWLO
+  - HUBS
+  - SNPS
+  - CDNS
+  # Semiconductors / hardware / AI infra
+  - QCOM
+  - TXN
+  - AMAT
+  - LRCX
+  - KLAC
+  - NXPI
+  - MRVL
+  - ADI
+  - MCHP
+  - "ON"                           # quoted — bare ON is parsed as boolean true in YAML
+  - ARM                            # IPO Sep-2023 — short history
+  - ANET
+  - CSCO
+  - IBM
+  - DELL
+  - SMCI
+  - VRT
+  - APP
+  # Internet / platform / consumer growth
+  - SHOP
+  - UBER
+  - ABNB                           # listed Dec-2020
+  - MELI
+  - SE
+  - SPOT
+  - DASH                           # listed Dec-2020
+  - RBLX                           # listed 2021
+  - PINS
+  - SNAP
+  - TTD
+  - NU                             # listed 2021
+  # Fintech / high-beta growth
+  - HOOD                           # listed 2021
+  - SOFI                           # listed 2021
+
+portfolio:
+  max_position_pct: 0.085         # manual per-name cap (83-name universe)
+  max_total_exposure: 0.90
+  max_new_trades_per_day: 2
+
+signals:
+  min_composite_score: 0.70      # ranker still orders the full universe each day
+
+# ─── ALL-TICKER overrides ─────────────────────────────────────────────────────
+# Every field here applies to ALL tickers unless a ticker_groups entry overrides it.
+risk:
+  stop_loss: 0.15                 # 15% stop, anchored to entry, for every name
+  take_profit: null              # no fixed profit cap — let winners run
+  trailing_stop: null             # no trailing stop
+  max_holding_days: 90            # exit after 90 trading days
+  # Anti-falling-knife re-entry gate (trough-based): after a STOP-LOSS exit, track
+  # the name's lowest price since that stop and block re-entry until it bounces
+  # >=10% above that trough. Only fires after stops; it merely UNBLOCKS re-entry.
+  reentry_recover_pct: 0.10
+  # ── Score-conditional exits (new in model_v3) ──
+  stop_loss_score_max: 0.90       # stop-loss fires only when current composite score < 0.90
+  max_hold_score_max: 0.80        # max-hold suppressed until composite score < 0.80
+  # ── Persistence rules (consecutive-day score conditions) ──
+  # Score-decay sell DISABLED: the sensitivity sweep showed the 0.50 setting was the
+  # worst cell — it dumped names that then recovered (off → +466% vs +361%, lower DD,
+  # higher PF). Left here, commented, for reference.
+  # score_exit_below: 0.50
+  # score_exit_days: 3
+  score_entry_above: 0.90         # BUY if composite score > 0.90 for score_entry_days in a row (raised 0.85→0.90 per sweep)
+  score_entry_days: 3
+  fund_by_rotation: true          # if cash is short for a persistence buy, sell the lowest 3-day-avg holding
+  # ── Volatility targeting (new in model_v4; Barroso) ──
+  target_vol: 0.35                # scale gross exposure by clip(0.35 / forecast_vol, floor, cap)
+  vol_lookback_days: 126          # trailing window for the realized-vol forecast (Barroso: ~6 months)
+  vol_exposure_floor: 0.3         # never de-risk below 30% of the base budget
+  vol_exposure_cap: 1.0           # de-risk only — no leverage above the base budget
+
+# Per-ticker overrides layer ON TOP of the all-ticker `risk:` block above.
+# Leave commented to apply the uniform rule to everyone. Example for one name:
+#   msft:
+#     tickers: [MSFT]
+#     stop_loss: 0.075
+#     trailing_stop: 0.10
+# ticker_groups:

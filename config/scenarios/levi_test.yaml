@@ -1,0 +1,135 @@
+# ─── Scenario: model_v2 ─────────────────────────────────────────────────────
+# Full 21-name universe with a single ALL-TICKER exit override (see `risk:` below).
+#
+# How overrides layer (engine resolution order, per ticker, per exit field):
+#   1. a matching `ticker_groups` entry that sets the field   (per-ticker override)
+#   2. else the scenario `risk:` value                        (ALL-TICKER override)
+#   3. else the base config/strategy.yaml default
+# So `risk:` is the "applies to every ticker" layer; add `ticker_groups` entries
+# only when you want to override specific names on top of it.
+
+name: levi_test
+description: >
+  Full 21-name universe with one uniform exit rule applied to every ticker
+  (stop 15%, no take-profit, no trailing stop, 60-day max hold) plus the
+  trough-based anti-falling-knife re-entry gate. Composite ranking drives entries.
+
+tickers:
+  - CRWD
+  - ORCL
+  - COIN
+  - NFLX
+  - PANW
+  - GOOGL
+  - BAC
+  - MSFT
+  - AVGO
+  - AMZN
+  - COST
+  - ASML
+  - AAPL
+  - JPM
+  - TSM
+  - GS
+  - META
+  - TSLA
+  - MU
+  - AMD
+  - NVDA
+  # ── Dispersion / diversification adds (uncorrelated sectors + momentum leaders) ──
+  - LLY                            # healthcare megatrend — near-zero tech correlation
+  - VST                            # AI-power utility — momentum, new sector (listed 2021)
+  - AXON                           # defense/public-safety tech — persistent uptrend
+  - GE                             # industrials turnaround — low tech beta
+  - PLTR                           # high-octane momentum (high vol, fat right tail)
+  - OXY                            # energy diversifier — anti-correlated to tech
+  # ── Adversarial / anti-survivorship laggards (test ranker discrimination) ──
+  - INTC                           # semis loser vs NVDA/AMD — down ~60%, dividend cut
+  - BA                             # industrials loser vs GE — door-plug + strike decline
+  - PFE                            # healthcare loser vs LLY — post-COVID downtrend
+  - PYPL                           # broken-growth fintech — long laggard off 2021 peak
+  - SEDG                           # solar collapse (~-95%) — falling-knife stress test
+  - PLUG                           # green-hydrogen collapse (~-95%) — extreme left tail
+  # ── Growth / tech / mega-cap breadth adds (50 names) ──
+  # Large-cap software / SaaS
+  - ADBE
+  - CRM
+  - NOW
+  - INTU
+  - SAP
+  - WDAY
+  - SNOW
+  - DDOG
+  - NET
+  - MDB
+  - ZS
+  - FTNT
+  - TEAM
+  - OKTA
+  - TWLO
+  - HUBS
+  - SNPS
+  - CDNS
+  # Semiconductors / hardware / AI infra
+  - QCOM
+  - TXN
+  - AMAT
+  - LRCX
+  - KLAC
+  - NXPI
+  - MRVL
+  - ADI
+  - MCHP
+  - "ON"                           # quoted — bare ON is parsed as boolean true in YAML
+  - ARM                            # IPO Sep-2023 — short history
+  - ANET
+  - CSCO
+  - IBM
+  - DELL
+  - SMCI
+  - VRT
+  - APP
+  # Internet / platform / consumer growth
+  - SHOP
+  - UBER
+  - ABNB                           # listed Dec-2020
+  - MELI
+  - SE
+  - SPOT
+  - DASH                           # listed Dec-2020
+  - RBLX                           # listed 2021
+  - PINS
+  - SNAP
+  - TTD
+  - NU                             # listed 2021
+  # Fintech / high-beta growth
+  - HOOD                           # listed 2021
+  - SOFI                           # listed 2021
+
+portfolio:
+  max_position_pct: 0.085         # manual per-name cap (83-name universe)
+  max_total_exposure: 0.90
+  max_new_trades_per_day: 2
+
+signals:
+  min_composite_score: 0.70      # ranker still orders the full universe each day
+
+# ─── ALL-TICKER overrides ─────────────────────────────────────────────────────
+# Every field here applies to ALL tickers unless a ticker_groups entry overrides it.
+risk:
+  stop_loss: 0.20                 # 15% stop, anchored to entry, for every name
+  take_profit: null              # no fixed profit cap — let winners run
+  trailing_stop: null             # no trailing stop
+  max_holding_days: 60            # exit after 60 trading days
+  # Anti-falling-knife re-entry gate (trough-based): after a STOP-LOSS exit, track
+  # the name's lowest price since that stop and block re-entry until it bounces
+  # >=5% above that trough. Only fires after stops; it merely UNBLOCKS re-entry.
+  reentry_recover_pct: 0.10
+
+# Per-ticker overrides layer ON TOP of the all-ticker `risk:` block above.
+# Leave commented to apply the uniform rule to everyone. Example for one name:
+#   msft:
+#     tickers: [MSFT]
+#     stop_loss: 0.075
+#     trailing_stop: 0.10
+# ticker_groups:

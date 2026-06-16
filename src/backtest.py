@@ -33,6 +33,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 import yaml
 # yfinance is imported lazily inside fetch_backtest_data — it is slow to import
@@ -157,6 +158,43 @@ def fetch_backtest_data(
         data.columns = pd.MultiIndex.from_product([data.columns, all_tickers[:1]])
 
     log.info("Downloaded %d bars", len(data))
+    data = _apply_price_overrides(data, Path(__file__).parent.parent / "config" / "price_overrides.csv")
+    return data
+
+
+def _apply_price_overrides(data: pd.DataFrame, overrides_path: Path) -> pd.DataFrame:
+    """Patch ONLY missing (NaN) Close cells from a manual override file, so transient
+    feed gaps can be filled by hand without ever clobbering real data.
+
+    File: config/price_overrides.csv with columns `date,ticker,close`. A row is applied
+    only when that (date, ticker) Close is currently NaN — if the real price is present
+    (now or once the feed backfills), the override is ignored. Missing file → no-op.
+    """
+    if not overrides_path.exists() or "Close" not in set(data.columns.get_level_values(0)):
+        return data
+    try:
+        ov = pd.read_csv(overrides_path)
+    except Exception as exc:                       # never let overrides break a run
+        log.warning("Could not read price overrides (%s) — skipping", exc)
+        return data
+    filled = 0
+    for _, r in ov.iterrows():
+        try:
+            ts = pd.Timestamp(r["date"]).normalize()
+            col = ("Close", str(r["ticker"]).strip())
+            px = float(r["close"])
+        except Exception:
+            continue
+        if col not in data.columns:
+            continue
+        match = data.index[data.index.normalize() == ts]
+        if len(match) == 0:
+            continue
+        if pd.isna(data.loc[match[0], col]):       # fill gaps only; real data always wins
+            data.loc[match[0], col] = px
+            filled += 1
+    if filled:
+        log.info("Applied %d price override(s) to NaN cells from %s", filled, overrides_path.name)
     return data
 
 
@@ -172,6 +210,10 @@ def _evaluate_backtest_exits(
     slippage: float,
     trailing_stop: Optional[float] = None,
     ticker_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
+    scores: Optional[Dict[str, float]] = None,
+    stop_loss_score_max: Optional[float] = None,
+    max_hold_score_max: Optional[float] = None,
+    score_decay_tickers: Optional[set] = None,
 ) -> Tuple[List[Dict[str, Any]], pd.DataFrame]:
     """
     Scan open positions for exit conditions.
@@ -185,8 +227,18 @@ def _evaluate_backtest_exits(
     ticker_overrides supplies per-ticker stop_loss/take_profit/trailing_stop/
     max_holding_days that replace the globals for that ticker only. The exit record
     carries entry_price, highest_price (MFE) and lowest_price (MAE) for diagnostics.
+
+    Score-conditional exits (when `scores` and the thresholds are supplied):
+      * stop_loss_score_max: a stop-loss only fires if the name's CURRENT composite
+        score is below this (a still-strong name is given room — its stop is suppressed).
+      * max_hold_score_max: a max-holding exit is suppressed until the score falls
+        below this (let a still-strong name keep running past the hold cap).
+    A suppressed condition simply doesn't trigger; take-profit and trailing-stop are
+    never score-gated. If a name's score is unknown, gating does not suppress (the
+    protective exit fires normally).
     """
     overrides = ticker_overrides or {}
+    scores = scores or {}
     exit_trades: List[Dict[str, Any]] = []
     keep: List[bool] = []
 
@@ -204,16 +256,23 @@ def _evaluate_backtest_exits(
         t_tp = ov.get("take_profit", take_profit)
         t_trail = ov.get("trailing_stop", trailing_stop)
         t_hold = ov.get("max_holding_days", max_holding_days)
+        sc = scores.get(ticker)                     # current composite score (None if unknown)
 
         triggered = []
         if stop_loss_triggered(entry_price, current_price, t_stop):
-            triggered.append("stop_loss")
+            # suppress the stop only if the name is still strong (score >= threshold)
+            if not (stop_loss_score_max is not None and sc is not None and sc >= stop_loss_score_max):
+                triggered.append("stop_loss")
         if take_profit_triggered(entry_price, current_price, t_tp):
             triggered.append("take_profit")
         if trailing_stop_triggered(highest_price, current_price, t_trail):
             triggered.append("trailing_stop")
         if holding_period_exceeded(entry_date, today, t_hold):
-            triggered.append("max_holding_period")
+            # suppress max-hold until the score drops below the threshold
+            if not (max_hold_score_max is not None and sc is not None and sc >= max_hold_score_max):
+                triggered.append("max_holding_period")
+        if score_decay_tickers and ticker in score_decay_tickers:
+            triggered.append("score_decay")
 
         if triggered:
             sell_price = apply_slippage(current_price, "sell", slippage)
@@ -257,6 +316,7 @@ def _queue_entries(
     portfolio_value: float,
     cash: float,
     config: Dict[str, Any],
+    exposure_mult: float = 1.0,
 ) -> List[Dict[str, Any]]:
     """
     Determine which tickers to buy tomorrow based on today's signals.
@@ -264,11 +324,14 @@ def _queue_entries(
     Orders are QUEUED here (not filled). They fill at tomorrow's close price.
     Sizing uses today's close as an estimate; overnight moves cause minor drift.
 
+    exposure_mult scales the gross-exposure cap and per-position size (Barroso-style
+    volatility targeting: <1 shrinks the risk budget when forecast vol is high).
+
     Returns a list of order dicts: {ticker, shares, signal_price, reason}.
     """
     max_new = config["portfolio"]["max_new_trades_per_day"]
-    max_pct = resolve_max_position_pct(config)
-    max_exp = config["portfolio"]["max_total_exposure"]
+    max_pct = resolve_max_position_pct(config) * exposure_mult
+    max_exp = config["portfolio"]["max_total_exposure"] * exposure_mult
 
     # Optional score-weighted sizing: position size scales linearly with the
     # ticker's composite_score (in [0,1]) between min_position_pct and max_pct.
@@ -516,6 +579,43 @@ def run_backtest(
     cooldown_days = config.get("risk", {}).get("stop_cooldown_days")    # int N or None
     reclaim_ma = config.get("risk", {}).get("reentry_reclaim_ma")       # require price>SMA(N) to re-enter after a stop
     recover_pct = config.get("risk", {}).get("reentry_recover_pct")     # require price up this % above its LOWEST price since the stop, to re-enter
+    # Score-conditional exits (default off): a stop-loss only fires if score < stop_loss_score_max;
+    # max-hold is suppressed until score < max_hold_score_max (let still-strong names run).
+    stop_loss_score_max = config.get("risk", {}).get("stop_loss_score_max")
+    max_hold_score_max = config.get("risk", {}).get("max_hold_score_max")
+    # Barroso-style volatility targeting (default off): scale gross exposure by
+    # clip(target_vol / forecast_vol, floor, cap), where forecast_vol = the portfolio's
+    # own trailing realized vol (annualized). Shrinks the risk budget when vol is high.
+    target_vol = config.get("risk", {}).get("target_vol")               # annualized, e.g. 0.20
+    vol_lookback = int(config.get("risk", {}).get("vol_lookback_days", 126))  # Barroso: 6 months
+    vol_floor = float(config.get("risk", {}).get("vol_exposure_floor", 0.3))
+    vol_cap = float(config.get("risk", {}).get("vol_exposure_cap", 1.0))
+    port_values: List[float] = []        # running portfolio value series → daily-return vol
+    # Persistence rules (default off):
+    #   score_exit_below for score_exit_days consecutive days  -> SELL (score decay).
+    #   score_entry_above for score_entry_days consecutive days -> BUY (persistence entry);
+    #   if cash is short and fund_by_rotation, sell the lowest 3-day-avg-score holding to fund it.
+    score_exit_below = config.get("risk", {}).get("score_exit_below")
+    score_exit_days = int(config.get("risk", {}).get("score_exit_days", 3))
+    score_entry_above = config.get("risk", {}).get("score_entry_above")
+    score_entry_days = int(config.get("risk", {}).get("score_entry_days", 3))
+    fund_by_rotation = bool(config.get("risk", {}).get("fund_by_rotation", False))
+    need_scores = (stop_loss_score_max is not None or max_hold_score_max is not None
+                   or score_exit_below is not None or score_entry_above is not None)
+    score_hist: Dict[str, List[Optional[float]]] = {}     # ticker -> recent composite scores
+    _hist_len = max(3, score_exit_days, score_entry_days)
+
+    def _streak_below(t, thr, days):
+        h = score_hist.get(t, [])
+        return len(h) >= days and all(x is not None and x < thr for x in h[-days:])
+
+    def _streak_above(t, thr, days):
+        h = score_hist.get(t, [])
+        return len(h) >= days and all(x is not None and x > thr for x in h[-days:])
+
+    def _avg3(t):
+        vals = [x for x in score_hist.get(t, [])[-3:] if x is not None]
+        return (sum(vals) / len(vals)) if vals else None
 
     ticker_overrides = _build_ticker_overrides(config)   # per-ticker exit/sizing
     ticker_weights = _build_ticker_weights(config) or None  # per-group signal weights
@@ -615,10 +715,36 @@ def run_backtest(
             positions["highest_price"] = positions[["highest_price", "current_price"]].max(axis=1)
             positions["lowest_price"] = positions[["lowest_price", "current_price"]].min(axis=1)
 
+        # ── 2b. Current composite scores (when any score-based rule is on) ──────
+        #    Score as of today's close (data ≤ bar_idx) — same window the entry
+        #    ranking uses, so it's "the score at that same time"; no look-ahead.
+        current_scores = None
+        if need_scores or fund_by_rotation:
+            sl_now = price_data.iloc[max(0, bar_idx + 1 - _SIGNAL_WINDOW): bar_idx + 1]
+            sig_now = calculate_signals(sl_now, tickers)
+            if not sig_now.empty:
+                rnk_now = rank_candidates(sig_now, top_n=len(sig_now),
+                                          weights=weights, ticker_weights=ticker_weights)
+                current_scores = dict(zip(rnk_now["ticker"], rnk_now["composite_score"]))
+            # roll the per-ticker score history (None breaks a streak)
+            for t in tickers:
+                h = score_hist.setdefault(t, [])
+                h.append(current_scores.get(t) if current_scores else None)
+                if len(h) > _hist_len:
+                    h.pop(0)
+
+        # Score-decay sells: held names below `score_exit_below` for N consecutive days.
+        score_decay_tickers = None
+        if score_exit_below is not None and not positions.empty:
+            score_decay_tickers = {t for t in positions["ticker"]
+                                   if _streak_below(t, score_exit_below, score_exit_days)}
+
         # ── 3. Evaluate exits against today's close ───────────────────────────
         exit_trades, positions = _evaluate_backtest_exits(
             positions, bar_date, stop_loss, take_profit, max_holding, slippage,
             trailing_stop=trailing_stop, ticker_overrides=ticker_overrides,
+            scores=current_scores, stop_loss_score_max=stop_loss_score_max,
+            max_hold_score_max=max_hold_score_max, score_decay_tickers=score_decay_tickers,
         )
         for e in exit_trades:
             cash += e["trade_value"]
@@ -639,6 +765,18 @@ def run_backtest(
             else 0.0
         )
         portfolio_value = cash + equity
+        port_values.append(portfolio_value)
+
+        # Volatility-targeting multiplier (Barroso): scale exposure by target/forecast vol,
+        # forecast = annualized std of the portfolio's trailing daily returns (no look-ahead).
+        exposure_mult = 1.0
+        if target_vol and len(port_values) > vol_lookback // 4:
+            vals = np.asarray(port_values[-(vol_lookback + 1):], dtype=float)
+            rets = vals[1:] / vals[:-1] - 1.0
+            sd = float(np.std(rets, ddof=1)) if rets.size >= 2 else 0.0
+            fcast = sd * (252.0 ** 0.5)
+            if fcast > 0:
+                exposure_mult = min(vol_cap, max(vol_floor, target_vol / fcast))
 
         # ── 5. Compute signals (no look-ahead) and queue entries for tomorrow ─
         if bar_idx + 1 < n_timestamps:
@@ -701,8 +839,56 @@ def run_backtest(
                 if regime_ma and qqq_arr is not None and bar_idx >= regime_ma:
                     qqq_ma = float(qqq_arr[bar_idx - regime_ma + 1: bar_idx + 1].mean())
                     regime_ok = float(qqq_arr[bar_idx]) > qqq_ma
+                # Persistence buys (+ optional rotation funding): names whose composite
+                # score has been above `score_entry_above` for N consecutive days are forced
+                # onto the candidate list (priority, bypassing the entry gates). If cash is
+                # short and fund_by_rotation is on, sell the lowest 3-day-avg-score holding(s)
+                # at today's close to fund them.
+                if score_entry_above is not None and current_scores:
+                    held_now = set(positions["ticker"]) if not positions.empty else set()
+                    persist = [t for t in current_scores
+                               if t not in held_now and t in today_prices.index
+                               and _streak_above(t, score_entry_above, score_entry_days)]
+                    persist.sort(key=lambda t: current_scores.get(t, 0.0), reverse=True)
+                    if persist:
+                        max_pos = resolve_max_position_pct(config)
+                        need_per = portfolio_value * max_pos
+                        n_want = min(len(persist), int(config["portfolio"]["max_new_trades_per_day"]))
+                        if fund_by_rotation and not positions.empty and need_per > 0:
+                            sold = 0
+                            while sold < n_want and cash < need_per * n_want and not positions.empty:
+                                cands = [(t, _avg3(t) if _avg3(t) is not None else 9e9)
+                                         for t in positions["ticker"]]
+                                weakest = min(cands, key=lambda x: x[1])[0]
+                                prow = positions[positions["ticker"] == weakest].iloc[0]
+                                px = float(prow["current_price"]); shrs = int(prow["shares"])
+                                sell_px = apply_slippage(px, "sell", slippage)
+                                tv = round(sell_px * shrs, 2)
+                                pnl = round((sell_px - float(prow["entry_price"])) * shrs, 2)
+                                hd = round((bar_date - prow["entry_date"]).days * 5 / 7, 1)
+                                all_trades.append({
+                                    "date": bar_date.isoformat(), "action": "SELL", "ticker": weakest,
+                                    "shares": shrs, "price": sell_px, "trade_value": tv,
+                                    "reason": "rotation_funded", "realized_pnl": pnl, "holding_days": hd,
+                                    "entry_price": float(prow["entry_price"]),
+                                    "highest_price": float(prow.get("highest_price", px)),
+                                    "lowest_price": float(prow.get("lowest_price", px)),
+                                })
+                                cash += tv; realized_pnl += pnl
+                                positions = positions[positions["ticker"] != weakest].reset_index(drop=True)
+                                sold += 1
+                            equity = (float((positions["shares"] * positions["current_price"]).sum())
+                                      if not positions.empty else 0.0)
+                            portfolio_value = cash + equity
+                        prows = pd.DataFrame([{"ticker": t, "price": float(today_prices[t]),
+                                               "composite_score": float(current_scores.get(t, 0.0))}
+                                              for t in persist])
+                        ranked = pd.concat([prows, ranked], ignore_index=True).drop_duplicates(
+                            subset="ticker", keep="first").reset_index(drop=True)
+
                 pending_orders = (
-                    _queue_entries(ranked, positions, portfolio_value, cash, config)
+                    _queue_entries(ranked, positions, portfolio_value, cash, config,
+                                   exposure_mult=exposure_mult)
                     if regime_ok else []
                 )
                 if signal_sink is not None:
@@ -1343,6 +1529,14 @@ def generate_backtest_report(
     p = config["portfolio"]
     r = config["risk"]
     tickers = config["tickers"]
+    # Descriptions for the optional persistence rules (shown in the params table).
+    _decay_desc = ("none" if r.get("score_exit_below") is None
+                   else f"< {r['score_exit_below']} for {r.get('score_exit_days', 3)}d")
+    _persist_desc = ("none" if r.get("score_entry_above") is None
+                     else f"> {r['score_entry_above']} for {r.get('score_entry_days', 3)}d"
+                     + ("  (rotate-funded)" if r.get("fund_by_rotation") else ""))
+    _voltarget_desc = ("off" if r.get("target_vol") is None
+                       else f"{r['target_vol']:.0%} — scale exposure by target/forecast vol")
 
     lines: List[str] = [
         "# AI Paper Trader — Backtest Report",
@@ -1431,6 +1625,11 @@ def generate_backtest_report(
         f"| Take Profit | {_pct_or_none(r.get('take_profit'))} |",
         f"| Trailing Stop | {_pct_or_none(r.get('trailing_stop'))} |",
         f"| Max Holding Period | {r.get('max_holding_days')} trading days |",
+        f"| Stop-loss only if score < | {('none' if r.get('stop_loss_score_max') is None else r['stop_loss_score_max'])} |",
+        f"| Max-hold only if score < | {('none' if r.get('max_hold_score_max') is None else r['max_hold_score_max'])} |",
+        f"| Score-decay sell | {_decay_desc} |",
+        f"| Persistence buy | {_persist_desc} |",
+        f"| Vol target (annualized) | {_voltarget_desc} |",
         f"| Slippage | {r.get('slippage', 0) * 100:.2f}% per fill |",
         "",
     ]
