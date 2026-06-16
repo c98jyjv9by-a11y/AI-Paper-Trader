@@ -229,9 +229,23 @@ def _mdd(vals: List[float]) -> float:
     return dd
 
 
+def _seed_from_first_page(pf: Paper, spec: Dict[str, Any]) -> None:
+    """Initialize the paper book to the model's held book shown on the first page, so the
+    agent starts level with the model instead of flat (it would otherwise permanently miss
+    positions opened before the packet began). Cost basis = entry price; cash is reduced by
+    the entry value, mirroring the capital the model had already deployed."""
+    for h in spec.get("holdings") or []:
+        sh, entry = int(h["shares"]), float(h["entry"])
+        pf.pos[h["ticker"]] = {"shares": sh, "cost": entry}
+        pf.cash -= sh * entry
+
+
 def _simulate(setting: str, specs: List[Dict[str, Any]], close: pd.DataFrame,
-              *, decide: Callable, start_cash: float, slippage: float) -> Dict[str, Any]:
+              *, decide: Callable, start_cash: float, slippage: float,
+              seed_first_book: bool = True) -> Dict[str, Any]:
     pf = Paper(start_cash)
+    if seed_first_book and specs:
+        _seed_from_first_page(pf, specs[0])
     equity: List[tuple] = []
     trades: List[Dict[str, Any]] = []
     divergences: List[Dict[str, Any]] = []
@@ -273,7 +287,7 @@ def _simulate(setting: str, specs: List[Dict[str, Any]], close: pd.DataFrame,
 # ── Orchestration ──────────────────────────────────────────────────────────────
 def run(scenario: str, start: date, end: date, *,
         settings=SETTINGS, model: str = DEFAULT_MODEL, no_llm: bool = False,
-        start_cash: float = 100_000.0, slippage: float = 0.001,
+        start_cash: float = 100_000.0, slippage: float = 0.001, seed_first_book: bool = True,
         workers: Optional[int] = None, out: Optional[Path] = None) -> Dict[str, Any]:
     from scenarios import build_config, load_scenario
     from backtest import load_config, fetch_backtest_data, run_backtest
@@ -304,8 +318,9 @@ def run(scenario: str, start: date, end: date, *,
             return _rule_actions(setting, spec, pf, prices)
         return _llm_actions(client, model, setting, spec, pf, prices, cfg["tickers"])
 
-    results = {s: _simulate(s, specs, close, decide=decide,
-                            start_cash=start_cash, slippage=slippage) for s in settings}
+    results = {s: _simulate(s, specs, close, decide=decide, start_cash=start_cash,
+                            slippage=slippage, seed_first_book=seed_first_book)
+               for s in settings}
 
     # 3) Benchmarks over the same page window.
     d0, d1 = specs[0]["mark"].isoformat(), specs[-1]["mark"].isoformat()
@@ -320,17 +335,20 @@ def run(scenario: str, start: date, end: date, *,
 
     out = Path(out) if out else (root / "reports" /
           f"agent_backtest_{scenario}_{start.isoformat()}_{end.isoformat()}.md")
-    out.write_text(_report(scenario, d0, d1, results, bench, model, no_llm, series["pdf"]))
+    out.write_text(_report(scenario, d0, d1, results, bench, model, no_llm, series["pdf"],
+                           seed_first_book))
     return {"report": str(out), "pdf": series["pdf"], "results": results, "bench": bench}
 
 
-def _report(scenario, d0, d1, results, bench, model, no_llm, pdf) -> str:
+def _report(scenario, d0, d1, results, bench, model, no_llm, pdf, seeded=True) -> str:
     strict_ret = results.get("strict", {}).get("ret")
     L = [f"# Agent backtest — {scenario}",
          f"**Window:** {d0} → {d1}  |  **Decider:** {'deterministic rules (--no-llm)' if no_llm else model}  "
          f"|  **Packet:** `{Path(pdf).name}`", "",
          "_The agent reads one daily page at a time (no look-ahead) and emits structured trades; "
-         "the harness owns all fills (next-open, with slippage) and accounting._", "",
+         "the harness owns all fills (next-open, with slippage) and accounting._",
+         f"_Start: {'seeded with the first page held book (level with the model)' if seeded else 'flat (100% cash)'}._",
+         "",
          "## Scorecard", "",
          "| Setting | Final | Return | Max DD | Trades | Divergences | vs Model |",
          "|---------|------:|------:|------:|------:|-----------:|--------:|"]
@@ -380,13 +398,15 @@ def main(argv=None):
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--no-llm", action="store_true",
                     help="use deterministic rule stand-ins instead of the LLM (offline)")
+    ap.add_argument("--no-seed", action="store_true",
+                    help="start the agent flat instead of seeding it with the first page's held book")
     ap.add_argument("--workers", type=int)
     ap.add_argument("--out")
     a = ap.parse_args(argv)
     res = run(a.scenario, date.fromisoformat(a.start), date.fromisoformat(a.end),
               settings=tuple(s.strip() for s in a.settings.split(",") if s.strip()),
-              model=a.model, no_llm=a.no_llm, workers=a.workers,
-              out=Path(a.out) if a.out else None)
+              model=a.model, no_llm=a.no_llm, seed_first_book=not a.no_seed,
+              workers=a.workers, out=Path(a.out) if a.out else None)
     print(f"Wrote {res['report']}")
     for s, r in res["results"].items():
         print(f"  {s:14s} final {_money(r['final'])}  return {_pct(r['ret'])}  "
