@@ -44,4 +44,4 @@ date,action,ticker,shares,price,trade_value,reason,realized_pnl,holding_days,ent
 2026-06-02,SELL,QCOM,56,239.7137,13423.97,rotation_funded,1187.85,17.9,218.5021,250.0963,194.8902
 2026-06-03,BUY,OKTA,114,124.7747,14224.32,momentum_score=0.9084,,0.0,,,
 2026-06-15,SELL,SEDG,192,60.1298,11544.92,rotation_funded,930.16,20.0,55.2852,78.51,54.53
-2026-06-16,BUY,KLAC,56,248.7785,13931.6,momentum_score=0.9361,,0.0,,,
+2026-06-16,BUY,KLAC,57,244.4692,13934.74,momentum_score=0.9307,,0.0,,,

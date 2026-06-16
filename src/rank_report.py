@@ -41,7 +41,7 @@ def _pct(v: Optional[float], d: str = "—") -> str:
 #   ET 09:30 → CT 08:30 (open) · ET 11:30 → CT 10:30 · ET 13:30 → CT 12:30 · ET 15:30 → CT 14:30
 _CHECKPOINTS = [("09:30", "8:30 CT (open)"), ("11:30", "10:30 CT"),
                 ("13:30", "12:30 CT"), ("15:30", "14:30 CT")]
-_CLOSE_LABEL = "Close (15:00 CT)"
+_CLOSE_LABEL = "Latest (≈15:00 CT close)"
 
 
 def intraday_returns(tickers, day, prior_close: Dict[str, float]) -> Optional[Dict[str, Dict[str, float]]]:
@@ -78,6 +78,40 @@ def _win_ret(series: pd.Series, anchor: pd.Timestamp) -> Optional[float]:
         return None
     a = float(s.iloc[-1])
     return float(series.iloc[-1]) / a - 1 if a else None
+
+
+def _ranking_snapshot_path(root: Path, scenario: str, d) -> Path:
+    """backtests/rankings_<scenario>_<YYYY-MM-DD>.csv — the authoritative ranking AS OF
+    that close. Each run writes its current ranking here; the next day's report reads the
+    matching snapshot for its prior-close column instead of recomputing (immune to feed gaps)."""
+    tag = d.isoformat() if hasattr(d, "isoformat") else str(d)
+    return root / "backtests" / f"rankings_{scenario}_{tag}.csv"
+
+
+def _load_ranking_snapshot(root: Path, scenario: str, d) -> Optional[List[Dict[str, Any]]]:
+    p = _ranking_snapshot_path(root, scenario, d)
+    if not p.exists():
+        return None
+    try:
+        df = pd.read_csv(p)
+    except Exception:
+        return None
+    out = []
+    for _, r in df.iterrows():
+        try:
+            out.append({"rank": int(r["rank"]), "ticker": str(r["ticker"]).strip(),
+                        "score": float(r["score"]),
+                        "gate": str(r.get("gate", "")).strip().lower() in ("yes", "true", "1", "y")})
+        except Exception:
+            continue
+    return out or None
+
+
+def _write_ranking_snapshot(root: Path, scenario: str, d, ranked_rows) -> None:
+    p = _ranking_snapshot_path(root, scenario, d)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([{"rank": x["rank"], "ticker": x["ticker"], "score": round(x["score"], 4),
+                   "gate": "yes" if x["clears_gate"] else "no"} for x in ranked_rows]).to_csv(p, index=False)
 
 
 def build_report(scenario: str, start: date, end: date, top_n: int = 10,
@@ -122,16 +156,29 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
     cash = float(eq["cash"].iloc[-1])
     starting = float(cfg["portfolio"]["starting_value"])
 
-    rows = []
-    for i, r in rf.iterrows():
-        t = r["ticker"]
-        rows.append({
-            "rank": i + 1, "ticker": t, "score": float(r["composite_score"]),
-            "clears_gate": (min_score is None or r["composite_score"] >= min_score),
-            "rank_close_px": float(close.loc[rank_close, t]) if t in close.columns else None,
-            "mark_px": float(close.loc[mark, t]) if t in close.columns else None,
-            "return": ret(t), "held": t in held,
-        })
+    def _px(t, ts):
+        return float(close.loc[ts, t]) if (t in close.columns and not pd.isna(close.loc[ts, t])) else None
+
+    # Prior-close ranking (Section A). Prefer a saved snapshot for that date (authoritative —
+    # what was actually produced, immune to later feed gaps); else recompute from data.
+    snap = _load_ranking_snapshot(root, scenario, rank_close.date())
+    snapshot_used = bool(snap)
+    if snap:
+        rows = [{
+            "rank": s["rank"], "ticker": s["ticker"], "score": s["score"], "clears_gate": s["gate"],
+            "rank_close_px": _px(s["ticker"], rank_close), "mark_px": _px(s["ticker"], mark),
+            "return": ret(s["ticker"]), "held": s["ticker"] in held,
+        } for s in sorted(snap, key=lambda x: x["rank"])]
+    else:
+        rows = []
+        for i, r in rf.iterrows():
+            t = r["ticker"]
+            rows.append({
+                "rank": i + 1, "ticker": t, "score": float(r["composite_score"]),
+                "clears_gate": (min_score is None or r["composite_score"] >= min_score),
+                "rank_close_px": _px(t, rank_close), "mark_px": _px(t, mark),
+                "return": ret(t), "held": t in held,
+            })
     # current-price ranking rows (no forward return — this is the standing right now)
     rows_cur = []
     for i, r in rf_cur.iterrows():
@@ -139,9 +186,14 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
         rows_cur.append({
             "rank": i + 1, "ticker": t, "score": float(r["composite_score"]),
             "clears_gate": (min_score is None or r["composite_score"] >= min_score),
-            "price": float(close.loc[mark, t]) if t in close.columns else None,
-            "held": t in held,
+            "price": _px(t, mark), "held": t in held,
         })
+    # Persist the current ranking as the snapshot for `mark`'s date (becomes the next
+    # session's authoritative prior-close ranking).
+    try:
+        _write_ranking_snapshot(root, scenario, mark.date(), rows_cur)
+    except Exception as exc:
+        log.warning("Could not write ranking snapshot: %s", exc)
     # rank movement vs the prior-close ranking (for context)
     prior_rank = {x["ticker"]: x["rank"] for x in rows}
     for x in rows_cur:
@@ -158,14 +210,19 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
         log.warning("Intraday checkpoints skipped: %s", exc)
         intraday = None
 
-    n = len(rows)
-    rets = [x["return"] for x in rows if x["return"] is not None]
+    # Universe-level stats over ALL names (price-based, so they stay correct even when the
+    # prior-close ranking comes from a partial snapshot).
+    uni_rets = [ret(t) for t in uni if ret(t) is not None]
+    n = sum(1 for t in uni if t in close.columns)
+    rets = uni_rets
     held_rets = [ret(t) for t in held if ret(t) is not None]
-    advancers = sum(1 for r in rets if r > 0)
-    top_avg = (sum(x["return"] for x in rows[:top_n] if x["return"] is not None) / top_n) if n else None
-    bot_avg = (sum(x["return"] for x in rows[-top_n:] if x["return"] is not None) / top_n) if n else None
+    advancers = sum(1 for r in uni_rets if r > 0)
+    _tret = [x["return"] for x in rows[:top_n] if x["return"] is not None]
+    _bret = [x["return"] for x in rows[-top_n:] if x["return"] is not None]
+    top_avg = (sum(_tret) / len(_tret)) if _tret else None
+    bot_avg = (sum(_bret) / len(_bret)) if _bret else None
     signal_strength = (top_avg - bot_avg) if (top_avg is not None and bot_avg is not None) else None
-    n_gate = sum(1 for x in rows if x["clears_gate"])
+    n_gate = sum(1 for _, r in rf.iterrows() if (min_score is None or r["composite_score"] >= min_score))
     # dollar-weighted held-book return over the session
     dw_num = sum(p["shares"] * close.loc[rank_close, p["ticker"]] * (ret(p["ticker"]) or 0.0)
                  for _, p in positions.iterrows() if p["ticker"] in close.columns)
@@ -189,6 +246,7 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
     return {
         "scenario": scenario, "rank_close": rank_close.date(), "mark": mark.date(),
         "min_score": min_score, "rows": rows, "n": n, "top_n": top_n,
+        "snapshot_used": snapshot_used,
         "univ_avg": (sum(rets) / len(rets)) if rets else None,
         "top_avg": top_avg, "bot_avg": bot_avg, "signal_strength": signal_strength,
         "advancers": advancers, "n_gate": n_gate,
@@ -233,23 +291,29 @@ def render_md(d: Dict[str, Any]) -> str:
     ]
 
     # ── (A) ranking scored on the PRIOR CLOSE, marked forward to the latest price ──
+    def _px2(v):
+        return "—" if v is None else f"{v:.2f}"
+
     def tbl_prior(title, rows, avg):
         out = [f"### {title}", "",
-               f"| # | Ticker | Score | Gate | {d['rank_close']} px | {d['mark']} px | Return | Held |",
+               f"| # | Ticker | Score | Gate | {d['rank_close']} close | {d['mark']} latest | Return | Held |",
                "|---|--------|------:|:----:|------:|------:|-------:|:----:|"]
         for r in rows:
             out.append(
                 f"| {r['rank']} | {r['ticker']} | {r['score']:.3f} | {'✓' if r['clears_gate'] else '—'} "
-                f"| {r['rank_close_px']:.2f} | {r['mark_px']:.2f} | {_pct(r['return'])} "
+                f"| {_px2(r['rank_close_px'])} | {_px2(r['mark_px'])} | {_pct(r['return'])} "
                 f"| {'HELD' if r['held'] else ''} |")
         out += [f"| | | | | | | **AVG {_pct(avg)}** | |", ""]
         return out
 
     rows = d["rows"]
+    _snap_note = (" — _scores loaded from saved ranking snapshot (authoritative for that date)_"
+                  if d.get("snapshot_used") else "")
     L += [f"## A) Ranking at PRIOR CLOSE ({d['rank_close']}) — scores fixed at that close, "
-          f"marked to latest ({d['mark']})", "",
+          f"marked to the latest price ({d['mark']}, may be intraday){_snap_note}", "",
           "_These are the scores that set up the most recent session; `Return` shows how each "
-          "did from the prior close to the latest price._", ""]
+          "did from the prior close to the latest price (the latest bar may be a provisional "
+          "intraday price, not an official close)._", ""]
     L += tbl_prior(f"Top {tn} (highest buy scores @ prior close)", rows[:tn], d["top_avg"])
     L += tbl_prior(f"Bottom {tn} (lowest buy scores @ prior close)", rows[-tn:], d["bot_avg"])
 
