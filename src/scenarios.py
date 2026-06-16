@@ -358,7 +358,8 @@ def run_scenario(name: str, start_date: date, end_date: date, charts: bool = Tru
         try:
             import rank_report
             d = rank_report.build_report(name, start_date, end_date,
-                                         cfg=cfg, pdata=price_data, eq=equity, positions=positions)
+                                         cfg=cfg, pdata=price_data, eq=equity,
+                                         positions=positions, trades=trades)
             status_md = reports_dir / f"status_{tag}.md"
             status_md.write_text(rank_report.render_md(d))
             rank_report.ranking_csv(d).to_csv(backtests_dir / f"status_{tag}.csv", index=False)

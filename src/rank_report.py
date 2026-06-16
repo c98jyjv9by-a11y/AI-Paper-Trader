@@ -108,6 +108,21 @@ def _load_ranking_snapshot(root: Path, scenario: str, d) -> Optional[List[Dict[s
     return out or None
 
 
+def _today_trades(trades: Optional[pd.DataFrame], day_iso: str) -> List[Dict[str, Any]]:
+    """Transactions executed on `day_iso` (buys filled, exits, vol-trim sells)."""
+    if trades is None or trades.empty or "date" not in trades.columns:
+        return []
+    td = trades[trades["date"].astype(str) == day_iso]
+    out = []
+    for _, r in td.iterrows():
+        pnl = r.get("realized_pnl")
+        out.append({"action": str(r["action"]), "ticker": str(r["ticker"]),
+                    "shares": int(r["shares"]), "price": float(r["price"]),
+                    "reason": str(r.get("reason", "")),
+                    "pnl": (None if pd.isna(pnl) else float(pnl))})
+    return out
+
+
 def _write_ranking_snapshot(root: Path, scenario: str, d, ranked_rows) -> None:
     p = _ranking_snapshot_path(root, scenario, d)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -117,7 +132,8 @@ def _write_ranking_snapshot(root: Path, scenario: str, d, ranked_rows) -> None:
 
 def build_report(scenario: str, start: date, end: date, top_n: int = 10,
                  *, cfg: Optional[Dict[str, Any]] = None, pdata: Optional[pd.DataFrame] = None,
-                 eq: Optional[pd.DataFrame] = None, positions: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
+                 eq: Optional[pd.DataFrame] = None, positions: Optional[pd.DataFrame] = None,
+                 trades: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
     """Build the rank/status snapshot. The scenario run can pass its already-computed
     cfg/pdata/eq/positions to avoid re-fetching and re-running the backtest."""
     root = Path(__file__).parent.parent
@@ -151,7 +167,9 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
 
     # current held book + portfolio stats (reuse the scenario run's results if given)
     if eq is None or positions is None:
-        _, eq, positions = run_backtest(cfg, pdata, start, end)
+        _t, eq, positions = run_backtest(cfg, pdata, start, end)
+        if trades is None:
+            trades = _t
     held = set(positions["ticker"]) if not positions.empty else set()
     pv = float(eq["total_portfolio_value"].iloc[-1])
     cash = float(eq["cash"].iloc[-1])
@@ -250,6 +268,13 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
         "scenario": scenario, "rank_close": rank_close.date(), "mark": mark.date(),
         "min_score": min_score, "rows": rows, "n": n, "top_n": top_n,
         "snapshot_used": snapshot_used,
+        # vol-targeting risk budget (latest bar): forecast vol + exposure multiplier
+        "today_trades": _today_trades(trades, mark.date().isoformat()),
+        "target_vol": cfg.get("risk", {}).get("target_vol"),
+        "forecast_vol": (float(eq["forecast_vol"].dropna().iloc[-1])
+                         if "forecast_vol" in eq.columns and eq["forecast_vol"].notna().any() else None),
+        "exposure_mult": (float(eq["exposure_mult"].iloc[-1])
+                          if "exposure_mult" in eq.columns else None),
         "univ_avg": (sum(rets) / len(rets)) if rets else None,
         "top_avg": top_avg, "bot_avg": bot_avg, "signal_strength": signal_strength,
         "advancers": advancers, "n_gate": n_gate,
@@ -292,6 +317,40 @@ def render_md(d: Dict[str, Any]) -> str:
         "(momentum signal working). One session is mostly market beta; read the spread, not the level._",
         "",
     ]
+
+    # ── Risk budget (volatility targeting) ──
+    fv, em, tv = d.get("forecast_vol"), d.get("exposure_mult"), d.get("target_vol")
+    if fv is not None or tv is not None:
+        L += ["## Risk budget (volatility targeting)", "",
+              "| Metric | Value |", "|--------|-------|",
+              f"| Forecast volatility (annualized, 126d) | {_pct(fv)} |",
+              f"| Vol target | {('off' if tv is None else _pct(tv))} |",
+              f"| Exposure multiplier | {('—' if em is None else f'{em:.2f}×')} |",
+              f"| Effective vs base exposure | {('100% (targeting off)' if tv is None else f'{(em or 1)*100:.0f}% of budget')} |",
+              ""]
+        if tv is not None:
+            state = ("at full risk budget (calm — forecast ≤ target)" if (em or 1) >= 0.999
+                     else f"de-risked to {(em or 1)*100:.0f}% (forecast vol above the {_pct(tv)} target)")
+            L += [f"_Scales gross exposure by clip(target / forecast vol, floor, cap); currently **{state}**. "
+                  "Affects position sizing only — not the composite scores._", ""]
+        else:
+            L += ["_Forecast vol shown for context; this scenario has no vol target, so exposure is unscaled. "
+                  "(Sizing-only knob — it never changes the composite scores.)_", ""]
+
+    # ── Today's transactions ──
+    tt = d.get("today_trades") or []
+    L += [f"## Today's transactions ({d['mark']})", ""]
+    if not tt:
+        L += ["_No transactions today._", ""]
+    else:
+        L += ["| Action | Ticker | Shares | Price | Reason | Realized P&L |",
+              "|--------|--------|------:|------:|--------|------:|"]
+        for x in tt:
+            pnl = "—" if x["pnl"] is None else f"${x['pnl']:,.0f}"
+            L.append(f"| {x['action']} | {x['ticker']} | {x['shares']} | {x['price']:.2f} "
+                     f"| {x['reason']} | {pnl} |")
+        L += ["", "_Buys fill at the latest close; exits / vol-trims fill same day. "
+              "`vol_trim` = volatility-governor de-risk sale (if enabled)._", ""]
 
     # ── (A) ranking scored on the PRIOR CLOSE, marked forward to the latest price ──
     def _px2(v):
