@@ -344,7 +344,7 @@ def _cover_spec(d: Dict[str, Any], comm: Dict[str, List[str]]) -> Dict[str, Any]
     one_d = (d.get("stats") or {}).get("1D", {})
     return {
         "scenario": d["scenario"], "mark": d["mark"], "rank_close": d["rank_close"],
-        "pv": d.get("pv"), "port_1d": one_d.get("port"),
+        "pv": d.get("pv"), "cash": d.get("cash"), "port_1d": one_d.get("port"),
         "signal_strength": d.get("signal_strength"), "exposure_mult": d.get("exposure_mult"),
         "next_session": d.get("next_session") or {},
         "observations": comm["observations"], "recommendations": comm["recommendations"],
@@ -357,9 +357,10 @@ def _render_cover(pdf, spec: Dict[str, Any], page: int = 1):
     _banner(ax, spec["scenario"], spec["mark"], spec["rank_close"],
             "Systematic momentum portfolio · daily update")
 
-    pv, port_1d, em = spec.get("pv"), spec.get("port_1d"), spec.get("exposure_mult")
+    pv, cash, port_1d, em = spec.get("pv"), spec.get("cash"), spec.get("port_1d"), spec.get("exposure_mult")
     y = _cards(ax, 0.905, [
         ("Portfolio value", _money(pv), NAVY),
+        ("Cash balance", _money(cash), NAVY),
         ("Session return", _pct(port_1d), _ret_color(port_1d)),
         ("Signal spread", _pct(spec.get("signal_strength")), _ret_color(spec.get("signal_strength"))),
         ("Exposure", (f"{em:.2f}×" if em is not None else "—"),
