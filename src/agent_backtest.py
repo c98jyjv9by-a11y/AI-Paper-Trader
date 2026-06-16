@@ -284,6 +284,22 @@ def _simulate(setting: str, specs: List[Dict[str, Any]], close: pd.DataFrame,
             "n_trades": len(trades), "n_divergences": len(divergences)}
 
 
+def _load_api_key(root: Path) -> Optional[str]:
+    """Anthropic key from the environment, falling back to the gitignored repo .env
+    (KEY=VALUE lines). Keeps the secret out of git history while staying convenient."""
+    import os
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if key:
+        return key
+    env = root / ".env"
+    if env.exists():
+        for line in env.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("ANTHROPIC_API_KEY=") and not line.startswith("#"):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    return None
+
+
 # ── Orchestration ──────────────────────────────────────────────────────────────
 def run(scenario: str, start: date, end: date, *,
         settings=SETTINGS, model: str = DEFAULT_MODEL, no_llm: bool = False,
@@ -309,7 +325,7 @@ def run(scenario: str, start: date, end: date, *,
     client = None
     if not no_llm and any(s != "strict" for s in settings):
         import anthropic                            # lazy: only when an LLM setting runs
-        client = anthropic.Anthropic()
+        client = anthropic.Anthropic(api_key=_load_api_key(root))
 
     def decide(setting, spec, pf, prices):
         if setting == "strict":
