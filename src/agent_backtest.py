@@ -176,6 +176,12 @@ def _spec_to_text(spec: Dict[str, Any], pf: Paper, prices: Dict[str, float]) -> 
         L.append(f"  NO TRADES. {ns.get('buy_reason','')} {ns.get('sell_reason','')}".rstrip())
     L += ["", "COMMENTARY:"] + [f"  - {o}" for o in (spec.get("observations") or [])]
     L += ["", "RECOMMENDATIONS:"] + [f"  - {r}" for r in (spec.get("recommendations") or [])]
+    rk = spec.get("rankings") or []
+    if rk:
+        L += ["", "FULL COMPOSITE RANKING (current prices — sets up next session; "
+              "✓ = clears buy gate, H = currently held by the model):"]
+        L += [f"  {r['rank']:>2}. {r['ticker']:<6} {r['score']:.3f} "
+              f"{'✓' if r['gate'] else ' '} {'H' if r['held'] else ' '}" for r in rk]
     L += ["", "YOUR CURRENT PAPER PORTFOLIO:",
           f"  cash {_money(pf.cash)}, total value {_money(pf.value(prices))}"]
     for t, p in sorted(pf.pos.items()):

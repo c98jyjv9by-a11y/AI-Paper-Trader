@@ -355,11 +355,14 @@ def _cover_spec(d: Dict[str, Any], comm: Dict[str, List[str]]) -> Dict[str, Any]
                 "unreal": float(p["current_price"] / p["entry_price"] - 1),
                 "session": (retfn(p["ticker"]) if retfn else None),
             })
+    rankings = [{"rank": r["rank"], "ticker": r["ticker"], "score": round(float(r["score"]), 3),
+                 "gate": bool(r["clears_gate"]), "held": bool(r["held"])}
+                for r in (d.get("rows_cur") or [])]
     return {
         "scenario": d["scenario"], "mark": d["mark"], "rank_close": d["rank_close"],
         "pv": d.get("pv"), "cash": d.get("cash"), "port_1d": one_d.get("port"),
         "signal_strength": d.get("signal_strength"), "exposure_mult": d.get("exposure_mult"),
-        "next_session": d.get("next_session") or {}, "holdings": holdings,
+        "next_session": d.get("next_session") or {}, "holdings": holdings, "rankings": rankings,
         "observations": comm["observations"], "recommendations": comm["recommendations"],
     }
 
