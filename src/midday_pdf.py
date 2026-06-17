@@ -126,7 +126,7 @@ def _intraday_table(ax, y, title, tickers, intra, cps, retf):
     rows.append(avg)
     aln = ["left"] + ["right"] * (len(cols) - 1)
     return P._table(ax, y, cols, rows, cw, align=aln, row_h=0.0162, fontsize=6.8,
-                    header_fontsize=6.6,
+                    header_fontsize=6.6, emph_rows={len(rows) - 1},
                     text_color=lambda r, c, v: (P._ret_color(P._parse_pct(v)) if c >= 1 else "#1f2a3a"))
 
 
@@ -250,26 +250,56 @@ def _page2(pdf, d, cfg):
                      [0.13, 0.13, 0.12, 0.14, 0.30, 0.18],
                      align=["left", "left", "right", "right", "left", "right"], fontsize=7.6)
 
-    # Signal scoreboard — are the top-ranked names working today?
-    y = P._section(ax, y - 0.012, "Signal scoreboard — are the top-ranked names working today?")
-    univ = d.get("univ_avg") or 0.0
-    rows_cur = d.get("rows_cur") or []
-    today_ret = {r["ticker"]: r.get("return") for r in (d.get("rows") or [])}
+    # Signal scoreboard — prior (EOD) ranking vs latest (live) ranking, and is the signal holding?
+    tn = d["top_n"]
+    rows = d.get("rows") or []                 # prior EOD ranking
+    rows_cur = d.get("rows_cur") or []         # ranking recomputed on latest price
+    prior_rank = {r["ticker"]: r["rank"] for r in rows}
+    prior_score = {r["ticker"]: r["score"] for r in rows}
+    latest_rank = {r["ticker"]: r["rank"] for r in rows_cur}
+    latest_score = {r["ticker"]: r["score"] for r in rows_cur}
+    today_ret = {r["ticker"]: r.get("return") for r in rows}
+    big = max(latest_rank.values()) + 1 if latest_rank else 999
+
+    prior_top = [r["ticker"] for r in rows[:tn]]
+    held_top = sum(1 for t in prior_top if latest_rank.get(t, big) <= tn)
+    frac = held_top / tn if tn else 0
+    if frac >= 0.7:
+        verdict, vcol = "WORKING — prior leaders are holding the top of the live ranking (momentum persisting)", P.GREEN
+    elif frac >= 0.4:
+        verdict, vcol = "MIXED — about half the prior leaders are slipping in the live ranking", "#b8860b"
+    else:
+        verdict, vcol = "BREAKING DOWN — prior leaders are rotating OUT of the live top (signal not holding)", P.RED
+
+    y = P._section(ax, y - 0.012, "Signal scoreboard — prior (EOD) ranking → latest (live) ranking")
+    ax.text(0.075, y, f"● Signal {verdict}.  ({held_top}/{tn} prior top-{tn} still in the live top-{tn}.)",
+            color=vcol, fontsize=8.4, fontweight="bold", va="top")
+    y -= 0.024
     srows = []
-    for r in rows_cur[: d["top_n"]]:
-        tr = today_ret.get(r["ticker"])
-        flag = "—" if tr is None else ("✓ working" if tr >= univ else "✗ lagging")
-        srows.append([str(r["rank"]), r["ticker"], f"{r['score']:.3f}", P._pct(tr),
-                      ("HELD" if r["held"] else ""), flag])
-    y = P._table(ax, y, ["#", "Ticker", "Score", "Today %", "Held", "vs universe"], srows,
-                 [0.08, 0.18, 0.15, 0.18, 0.16, 0.25],
-                 align=["center", "left", "right", "right", "center", "left"],
-                 row_h=0.022, fontsize=7.6, header_fontsize=7.2,
-                 text_color=lambda r, c, v: (P._ret_color(P._parse_pct(v)) if c == 3 else
-                                             (P.GREEN if (c == 5 and v.startswith("✓")) else
-                                              (P.RED if (c == 5 and v.startswith("✗")) else "#1f2a3a"))))
-    ax.text(0.06, y - 0.008, "✓ = beating the universe today (signal working on that name); "
-            "✗ = lagging it (not behaving).", color=P.MIDGREY, fontsize=7.2, va="top", style="italic")
+    for t in prior_top:
+        pr, lr = prior_rank.get(t), latest_rank.get(t, None)
+        d_rank = (pr - lr) if (pr is not None and lr is not None) else None
+        drk = "—" if d_rank is None else ("•" if d_rank == 0 else (f"▲{d_rank}" if d_rank > 0 else f"▼{-d_rank}"))
+        sc = f"{prior_score.get(t, 0):.3f}→{latest_score.get(t):.3f}" if t in latest_score else f"{prior_score.get(t, 0):.3f}→—"
+        status = ("✓ holding" if (lr is not None and lr <= tn) else
+                  ("◦ slipping" if (lr is not None and lr <= 2 * tn) else "✗ dropped"))
+        srows.append([t, str(pr), ("—" if lr is None else str(lr)), drk, sc, P._pct(today_ret.get(t)), status])
+
+    def scol(r, c, v):
+        if c == 3:
+            return P.GREEN if v.startswith("▲") else (P.RED if v.startswith("▼") else P.MIDGREY)
+        if c == 5:
+            return P._ret_color(P._parse_pct(v))
+        if c == 6:
+            return P.GREEN if v.startswith("✓") else (P.RED if v.startswith("✗") else "#b8860b")
+        return "#1f2a3a"
+    y = P._table(ax, y, ["Ticker", "Prior #", "Live #", "Δrank", "Score then→now", "Today %", "Signal"],
+                 srows, [0.13, 0.11, 0.11, 0.11, 0.24, 0.12, 0.18],
+                 align=["left", "center", "center", "center", "right", "right", "left"],
+                 row_h=0.022, fontsize=7.6, header_fontsize=7.2, text_color=scol)
+    ax.text(0.06, y - 0.008, f"Prior rank = {d['rank_close']} EOD ranking; Live rank = recomputed on the "
+            "latest price. ✓ holding = still in live top-10; ◦ slipping = 11–20; ✗ dropped = out of top 20.",
+            color=P.MIDGREY, fontsize=7.0, va="top", style="italic")
 
     _footer(ax, 2)
     pdf.savefig(fig); P.plt.close(fig)

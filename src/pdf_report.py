@@ -173,9 +173,11 @@ def _table(ax, y: float, col_labels: List[str], rows: List[List[str]],
            row_h: float = 0.0235, fontsize: float = 8.0,
            align: Optional[List[str]] = None,
            text_color: Optional[Callable[[int, int, str], str]] = None,
-           header_fontsize: float = 7.8) -> float:
-    """Lightweight banded table drawn with primitives (full control over colours)."""
+           header_fontsize: float = 7.8, emph_rows: Optional[set] = None) -> float:
+    """Lightweight banded table drawn with primitives (full control over colours).
+    `emph_rows` (row indices) are shaded with an accent tint and bolded — e.g. an AVG row."""
     width = x1 - x0
+    emph = emph_rows or set()
     xs = [x0]
     for cw in col_widths:
         xs.append(xs[-1] + cw * width)
@@ -191,13 +193,16 @@ def _table(ax, y: float, col_labels: List[str], rows: List[List[str]],
     y -= row_h
 
     for r, row in enumerate(rows):
-        if r % 2 == 0:
+        if r in emph:
+            ax.add_patch(plt.Rectangle((x0, y - row_h), width, row_h, transform=ax.transAxes,
+                                       facecolor="#cdd8e6", edgecolor="none", zorder=0))
+        elif r % 2 == 0:
             ax.add_patch(plt.Rectangle((x0, y - row_h), width, row_h, transform=ax.transAxes,
                                        facecolor=LIGHT, edgecolor="none", zorder=0))
         for c, val in enumerate(row):
             cx, a = _cell_x(xs, c, align)
             col = text_color(r, c, val) if text_color else "#1f2a3a"
-            fw = "bold" if c == 0 else "normal"
+            fw = "bold" if (c == 0 or r in emph) else "normal"
             ax.text(cx, y - row_h / 2, val, color=col, fontsize=fontsize,
                     va="center", ha=a, fontweight=fw, zorder=2)
         y -= row_h
