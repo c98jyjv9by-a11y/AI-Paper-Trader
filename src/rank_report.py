@@ -320,6 +320,14 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
     for x in rows_cur:
         x["rank_chg"] = (prior_rank.get(x["ticker"]) - x["rank"]) if x["ticker"] in prior_rank else None
 
+    # prior-DAY rank movement: how each prior-close (rank_close) name moved vs the day before
+    # (the trading day before rank_close), from that day's saved snapshot. Attached to `rows`.
+    prev_day = close.index[-3].date() if len(close.index) >= 3 else None
+    prev_snap = _load_ranking_snapshot(root, scenario, prev_day) if (prev_day and not fast) else None
+    prev_rank_map = {s["ticker"]: s["rank"] for s in prev_snap} if prev_snap else {}
+    for x in rows:
+        x["prior_rank_chg"] = (prev_rank_map.get(x["ticker"]) - x["rank"]) if x["ticker"] in prev_rank_map else None
+
     # intraday return progression (vs prior close) for the top/bottom-N prior-close names
     intraday = None
     if not fast:

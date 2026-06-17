@@ -23,6 +23,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import pandas as pd
+
 import matplotlib
 matplotlib.use("Agg")
 from matplotlib.backends.backend_pdf import PdfPages
@@ -42,6 +44,19 @@ def _footer(ax, page):
 # 5-level "Signal Today" classification: a name's return today vs the universe average.
 _SIG_COLORS = {"Very Good": "#157a37", "Moderate Good": "#3f9c5e", "Mixed": P.MIDGREY,
                "Moderate Bad": "#d0663f", "Very Bad": "#c0392b", "—": P.MIDGREY}
+
+
+def _rk_icon(chg):
+    """Rank-change icon: ▲ up / ▼ down / • flat / — unknown."""
+    if chg is None:
+        return "—"
+    if chg == 0:
+        return "•"
+    return f"▲{chg}" if chg > 0 else f"▼{-chg}"
+
+
+def _rk_color(v):
+    return P.GREEN if v.startswith("▲") else (P.RED if v.startswith("▼") else P.MIDGREY)
 
 
 def _signal_today(ret, univ):
@@ -246,16 +261,29 @@ def _page2(pdf, d, cfg):
     retf = d.get("ret")
     pos = d.get("positions")
 
+    # Rank maps: prior (EOD) ranking, live ranking, prior-DAY rank move (attached to rows).
+    rows_prior = d.get("rows") or []
+    rows_live = d.get("rows_cur") or []
+    prior_rank = {r["ticker"]: r["rank"] for r in rows_prior}
+    prior_score = {r["ticker"]: r["score"] for r in rows_prior}
+    live_rank = {r["ticker"]: r["rank"] for r in rows_live}
+    live_score = {r["ticker"]: r["score"] for r in rows_live}
+    prior_chg = {r["ticker"]: r.get("prior_rank_chg") for r in rows_prior}
+    mark = d["mark"]
+
+    def _score_then_now(t):
+        ps, ls = prior_score.get(t), live_score.get(t)
+        if ps is not None and ls is not None:
+            return f"{ps:.3f}→{ls:.3f}"
+        return (f"—→{ls:.3f}" if ls is not None else (f"{ps:.3f}→—" if ps is not None else "—"))
+
     # Current book — today's moves (worst first)
     y = P._section(ax, y, f"Current book — today's moves (worst first)  ·  {0 if pos is None else len(pos)} positions")
     if pos is None or pos.empty:
         ax.text(0.075, y, "No open positions.", color=P.MIDGREY, fontsize=8.6, va="top"); y -= 0.03
     else:
-        recs = []
-        for _, p in pos.iterrows():
-            t = p["ticker"]
-            recs.append((retf(t) if retf else None, t, p))
-        recs.sort(key=lambda x: (x[0] if x[0] is not None else 0))
+        recs = sorted(((retf(p["ticker"]) if retf else None, p["ticker"], p) for _, p in pos.iterrows()),
+                      key=lambda x: (x[0] if x[0] is not None else 0))
         univ = d.get("univ_avg")
         nav = d.get("pv") or 0.0
         hrows = []
@@ -265,19 +293,36 @@ def _page2(pdf, d, cfg):
             tot_now += val; tot_cost += float(p["entry_price"]) * sh
             u = now_px / p["entry_price"] - 1
             navpct = (val / nav) if nav else None
-            hrows.append([t, (f"{cur.get(t):.3f}" if t in cur else "—"), str(sh),
-                          P._money(p["entry_price"], 2), P._money(now_px, 2), P._pct(navpct),
-                          P._pct(u), P._pct(today), _signal_today(today, univ)])
+            pr, lv = prior_rank.get(t), live_rank.get(t)
+            d_today = (pr - lv) if (pr is not None and lv is not None) else None
+            try:
+                dh = max(0, round((mark - pd.Timestamp(p["entry_date"]).date()).days * 5 / 7))
+            except Exception:
+                dh = None
+            hrows.append([t, ("—" if pr is None else str(pr)), ("—" if lv is None else str(lv)),
+                          _rk_icon(d_today), _rk_icon(prior_chg.get(t)), _score_then_now(t),
+                          ("—" if dh is None else str(dh)), P._money(p["entry_price"], 2),
+                          P._money(now_px, 2), P._pct(navpct), P._pct(u), P._pct(today),
+                          _signal_today(today, univ)])
         book_unreal = (tot_now / tot_cost - 1) if tot_cost else None
-        hrows.append(["TOTAL", "", "", "", "", P._pct((tot_now / nav) if nav else None),
+        hrows.append(["TOTAL", "", "", "", "", "", "", "", "", P._pct((tot_now / nav) if nav else None),
                       P._pct(book_unreal), P._pct(d.get("held_dw")), ""])
-        cols = ["Ticker", "Score", "Shares", "Entry", "Now", "% NAV", "Unreal %", "Today %", "Signal Today"]
-        y = P._table(ax, y, cols, hrows,
-                     [0.10, 0.085, 0.085, 0.10, 0.10, 0.09, 0.105, 0.10, 0.235],
-                     align=["left", "right", "right", "right", "right", "right", "right", "right", "left"],
-                     row_h=0.0205, fontsize=7.2, header_fontsize=6.9, emph_rows={len(hrows) - 1},
-                     text_color=lambda r, c, v: (P._ret_color(P._parse_pct(v)) if c in (6, 7)
-                                                 else (_SIG_COLORS.get(v, "#1f2a3a") if c == 8 else "#1f2a3a")))
+        cols = ["Ticker", "Prior #", "Live #", "Δ today", "Δ prior", "Score then→now", "Days",
+                "Entry", "Now", "% NAV", "Unreal %", "Today %", "Signal Today"]
+        widths = [0.075, 0.045, 0.045, 0.05, 0.05, 0.135, 0.045, 0.08, 0.08, 0.065, 0.07, 0.07, 0.19]
+        align = ["left", "center", "center", "center", "center", "right", "right",
+                 "right", "right", "right", "right", "right", "left"]
+
+        def cb(r, c, v):
+            if c in (3, 4):
+                return _rk_color(v)
+            if c in (10, 11):
+                return P._ret_color(P._parse_pct(v))
+            if c == 12:
+                return _SIG_COLORS.get(v, "#1f2a3a")
+            return "#1f2a3a"
+        y = P._table(ax, y, cols, hrows, widths, align=align, row_h=0.018, fontsize=6.0,
+                     header_fontsize=5.9, emph_rows={len(hrows) - 1}, text_color=cb)
 
     # Today's transactions so far
     tt = d.get("today_trades") or []
@@ -320,27 +365,26 @@ def _page2(pdf, d, cfg):
     srows = []
     for t in prior_top:
         pr, lr = prior_rank.get(t), latest_rank.get(t, None)
-        d_rank = (pr - lr) if (pr is not None and lr is not None) else None
-        drk = "—" if d_rank is None else ("•" if d_rank == 0 else (f"▲{d_rank}" if d_rank > 0 else f"▼{-d_rank}"))
-        sc = f"{prior_score.get(t, 0):.3f}→{latest_score.get(t):.3f}" if t in latest_score else f"{prior_score.get(t, 0):.3f}→—"
-        srows.append([t, str(pr), ("—" if lr is None else str(lr)), drk, sc,
+        d_today = (pr - lr) if (pr is not None and lr is not None) else None
+        srows.append([t, str(pr), ("—" if lr is None else str(lr)), _rk_icon(d_today),
+                      _rk_icon(prior_chg.get(t)), _score_then_now(t),
                       P._pct(today_ret.get(t)), _signal_today(today_ret.get(t), univ)])
 
     def scol(r, c, v):
-        if c == 3:
-            return P.GREEN if v.startswith("▲") else (P.RED if v.startswith("▼") else P.MIDGREY)
-        if c == 5:
-            return P._ret_color(P._parse_pct(v))
+        if c in (3, 4):
+            return _rk_color(v)
         if c == 6:
+            return P._ret_color(P._parse_pct(v))
+        if c == 7:
             return _SIG_COLORS.get(v, "#1f2a3a")
         return "#1f2a3a"
-    y = P._table(ax, y, ["Ticker", "Prior #", "Live #", "Δrank", "Score then→now", "Today %", "Signal Today"],
-                 srows, [0.12, 0.10, 0.10, 0.10, 0.22, 0.12, 0.24],
-                 align=["left", "center", "center", "center", "right", "right", "left"],
+    y = P._table(ax, y, ["Ticker", "Prior #", "Live #", "Δ today", "Δ prior", "Score then→now", "Today %", "Signal Today"],
+                 srows, [0.11, 0.085, 0.085, 0.075, 0.075, 0.20, 0.11, 0.26],
+                 align=["left", "center", "center", "center", "center", "right", "right", "left"],
                  row_h=0.022, fontsize=7.6, header_fontsize=7.2, text_color=scol)
-    ax.text(0.06, y - 0.008, f"Prior rank = {d['rank_close']} EOD ranking; Live rank = recomputed on the "
-            "latest price. Signal Today = today's return vs the universe avg (excess ≥+2% Very Good, "
-            "≥+0.5% Moderate Good, ±0.5% Mixed, ≤−0.5% Moderate Bad, ≤−2% Very Bad).",
+    ax.text(0.06, y - 0.008, f"Δ today = rank move at the live price (vs {d['rank_close']} EOD); "
+            f"Δ prior = rank move on the prior day (vs the day before). Signal Today = today's return "
+            "vs the universe avg (≥+2% Very Good · ≥+0.5% Moderate Good · ±0.5% Mixed · ≤−2% Very Bad).",
             color=P.MIDGREY, fontsize=7.0, va="top", style="italic")
 
     _footer(ax, 2)
