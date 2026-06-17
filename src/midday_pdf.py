@@ -39,6 +39,27 @@ def _footer(ax, page):
             va="center", ha="right")
 
 
+# 5-level "Signal Today" classification: a name's return today vs the universe average.
+_SIG_COLORS = {"Very Good": "#157a37", "Moderate Good": "#3f9c5e", "Mixed": P.MIDGREY,
+               "Moderate Bad": "#d0663f", "Very Bad": "#c0392b", "—": P.MIDGREY}
+
+
+def _signal_today(ret, univ):
+    """Classify today's move vs the universe avg: excess = ret − univ."""
+    if ret is None or univ is None:
+        return "—"
+    ex = ret - univ
+    if ex >= 0.02:
+        return "Very Good"
+    if ex >= 0.005:
+        return "Moderate Good"
+    if ex > -0.005:
+        return "Mixed"
+    if ex > -0.02:
+        return "Moderate Bad"
+    return "Very Bad"
+
+
 def _banner(ax, scenario, mark, rank_close):
     ax.add_patch(P.plt.Rectangle((0, 0.93), 1, 0.07, transform=ax.transAxes,
                                  facecolor=P.NAVY, edgecolor="none"))
@@ -226,17 +247,19 @@ def _page2(pdf, d, cfg):
             t = p["ticker"]
             recs.append((retf(t) if retf else None, t, p))
         recs.sort(key=lambda x: (x[0] if x[0] is not None else 0))
+        univ = d.get("univ_avg")
         hrows = []
         for today, t, p in recs:
             u = p["current_price"] / p["entry_price"] - 1
             hrows.append([t, (f"{cur.get(t):.3f}" if t in cur else "—"), str(int(p["shares"])),
                           P._money(p["entry_price"], 2), P._money(p["current_price"], 2),
-                          P._pct(u), P._pct(today)])
-        y = P._table(ax, y, ["Ticker", "Score", "Shares", "Entry", "Now", "Unreal %", "Today %"], hrows,
-                     [0.16, 0.13, 0.12, 0.15, 0.15, 0.145, 0.145],
-                     align=["left", "right", "right", "right", "right", "right", "right"],
+                          P._pct(u), P._pct(today), _signal_today(today, univ)])
+        y = P._table(ax, y, ["Ticker", "Score", "Shares", "Entry", "Now", "Unreal %", "Today %", "Signal Today"],
+                     hrows, [0.12, 0.10, 0.10, 0.13, 0.13, 0.12, 0.11, 0.19],
+                     align=["left", "right", "right", "right", "right", "right", "right", "left"],
                      row_h=0.022, fontsize=7.6, header_fontsize=7.2,
-                     text_color=lambda r, c, v: (P._ret_color(P._parse_pct(v)) if c in (5, 6) else "#1f2a3a"))
+                     text_color=lambda r, c, v: (P._ret_color(P._parse_pct(v)) if c in (5, 6)
+                                                 else (_SIG_COLORS.get(v, "#1f2a3a") if c == 7 else "#1f2a3a")))
 
     # Today's transactions so far
     tt = d.get("today_trades") or []
@@ -275,15 +298,15 @@ def _page2(pdf, d, cfg):
     ax.text(0.075, y, f"● Signal {verdict}.  ({held_top}/{tn} prior top-{tn} still in the live top-{tn}.)",
             color=vcol, fontsize=8.4, fontweight="bold", va="top")
     y -= 0.024
+    univ = d.get("univ_avg")
     srows = []
     for t in prior_top:
         pr, lr = prior_rank.get(t), latest_rank.get(t, None)
         d_rank = (pr - lr) if (pr is not None and lr is not None) else None
         drk = "—" if d_rank is None else ("•" if d_rank == 0 else (f"▲{d_rank}" if d_rank > 0 else f"▼{-d_rank}"))
         sc = f"{prior_score.get(t, 0):.3f}→{latest_score.get(t):.3f}" if t in latest_score else f"{prior_score.get(t, 0):.3f}→—"
-        status = ("✓ holding" if (lr is not None and lr <= tn) else
-                  ("◦ slipping" if (lr is not None and lr <= 2 * tn) else "✗ dropped"))
-        srows.append([t, str(pr), ("—" if lr is None else str(lr)), drk, sc, P._pct(today_ret.get(t)), status])
+        srows.append([t, str(pr), ("—" if lr is None else str(lr)), drk, sc,
+                      P._pct(today_ret.get(t)), _signal_today(today_ret.get(t), univ)])
 
     def scol(r, c, v):
         if c == 3:
@@ -291,14 +314,15 @@ def _page2(pdf, d, cfg):
         if c == 5:
             return P._ret_color(P._parse_pct(v))
         if c == 6:
-            return P.GREEN if v.startswith("✓") else (P.RED if v.startswith("✗") else "#b8860b")
+            return _SIG_COLORS.get(v, "#1f2a3a")
         return "#1f2a3a"
-    y = P._table(ax, y, ["Ticker", "Prior #", "Live #", "Δrank", "Score then→now", "Today %", "Signal"],
-                 srows, [0.13, 0.11, 0.11, 0.11, 0.24, 0.12, 0.18],
+    y = P._table(ax, y, ["Ticker", "Prior #", "Live #", "Δrank", "Score then→now", "Today %", "Signal Today"],
+                 srows, [0.12, 0.10, 0.10, 0.10, 0.22, 0.12, 0.24],
                  align=["left", "center", "center", "center", "right", "right", "left"],
                  row_h=0.022, fontsize=7.6, header_fontsize=7.2, text_color=scol)
     ax.text(0.06, y - 0.008, f"Prior rank = {d['rank_close']} EOD ranking; Live rank = recomputed on the "
-            "latest price. ✓ holding = still in live top-10; ◦ slipping = 11–20; ✗ dropped = out of top 20.",
+            "latest price. Signal Today = today's return vs the universe avg (excess ≥+2% Very Good, "
+            "≥+0.5% Moderate Good, ±0.5% Mixed, ≤−0.5% Moderate Bad, ≤−2% Very Bad).",
             color=P.MIDGREY, fontsize=7.0, va="top", style="italic")
 
     _footer(ax, 2)
