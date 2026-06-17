@@ -18,20 +18,19 @@ Read-only w.r.t. data/.
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
-import pandas as pd
 
 import matplotlib
 matplotlib.use("Agg")
 from matplotlib.backends.backend_pdf import PdfPages
 
 sys.path.insert(0, str(Path(__file__).parent))
-import pdf_report as P            # shared palette + _section/_table/_bullets/_cards/_new_page/etc.
+import pdf_report as P            # shared palette + table/cell helpers + render_current_book
+# Shared signal/rank cell helpers live in pdf_report (single source of truth for both reports).
+from pdf_report import _SIG_COLORS, _signal_today, _rk_icon, _rk_color, _score_trend_color
 
 
 def _footer(ax, page):
@@ -40,53 +39,6 @@ def _footer(ax, page):
             "prices; figures settle at the close.", color=P.MIDGREY, fontsize=6.5, va="center")
     ax.text(0.94, 0.022, f"midday-pulse · p.{page}", color=P.MIDGREY, fontsize=6.5,
             va="center", ha="right")
-
-
-# 5-level "Signal Today" classification: a name's return today vs the universe average.
-_SIG_COLORS = {"Very Good": "#157a37", "Moderate Good": "#3f9c5e", "Mixed": P.MIDGREY,
-               "Moderate Bad": "#d0663f", "Very Bad": "#c0392b", "—": P.MIDGREY}
-
-
-def _rk_icon(chg):
-    """Rank-change icon: ▲ up / ▼ down / • flat / — unknown."""
-    if chg is None:
-        return "—"
-    if chg == 0:
-        return "•"
-    return f"▲{chg}" if chg > 0 else f"▼{-chg}"
-
-
-def _rk_color(v):
-    return P.GREEN if v.startswith("▲") else (P.RED if v.startswith("▼") else P.MIDGREY)
-
-
-def _score_trend_color(s):
-    """Color a score-transition cell (e.g. '0.72→0.79→0.81') by last-vs-first direction."""
-    nums = re.findall(r"[01]\.\d+", s)
-    if len(nums) < 2:
-        return "#1f2a3a"
-    a, b = float(nums[0]), float(nums[-1])
-    if b > a + 0.005:
-        return P.GREEN
-    if b < a - 0.005:
-        return P.RED
-    return P.MIDGREY
-
-
-def _signal_today(ret, univ):
-    """Classify today's move vs the universe avg: excess = ret − univ."""
-    if ret is None or univ is None:
-        return "—"
-    ex = ret - univ
-    if ex >= 0.02:
-        return "Very Good"
-    if ex >= 0.005:
-        return "Moderate Good"
-    if ex > -0.005:
-        return "Mixed"
-    if ex > -0.02:
-        return "Moderate Bad"
-    return "Very Bad"
 
 
 def _banner(ax, scenario, mark, rank_close):
@@ -275,7 +227,7 @@ def _page2(pdf, d, cfg):
     retf = d.get("ret")
     pos = d.get("positions")
 
-    # Rank maps: prior (EOD) ranking, live ranking, prior-DAY rank move (attached to rows).
+    # Rank maps for the scoreboard (prior EOD ranking, live ranking, prior-day move).
     rows_prior = d.get("rows") or []
     rows_live = d.get("rows_cur") or []
     prior_rank = {r["ticker"]: r["rank"] for r in rows_prior}
@@ -283,69 +235,19 @@ def _page2(pdf, d, cfg):
     live_rank = {r["ticker"]: r["rank"] for r in rows_live}
     live_score = {r["ticker"]: r["score"] for r in rows_live}
     prior_chg = {r["ticker"]: r.get("prior_rank_chg") for r in rows_prior}
-    entry_score = d.get("entry_scores") or {}
-    mark = d["mark"]
-
-    def _s2(x):
-        return f"{x:.2f}" if x is not None else "—"
 
     def _score_then_now(t):                       # scoreboard: yesterday → today (2 scores)
         ps, ls = prior_score.get(t), live_score.get(t)
         if ps is None and ls is None:
             return "—"
-        return f"{_s2(ps)}→{_s2(ls)}"
+        s2 = lambda x: f"{x:.2f}" if x is not None else "—"
+        return f"{s2(ps)}→{s2(ls)}"
 
-    def _score_path(t):                           # held book: entry → yesterday → today (3 scores)
-        return f"{_s2(entry_score.get(t))}→{_s2(prior_score.get(t))}→{_s2(live_score.get(t))}"
-
-    # Current book — today's moves (worst first)
-    y = P._section(ax, y, f"Current book — today's moves (worst first)  ·  {0 if pos is None else len(pos)} positions")
-    if pos is None or pos.empty:
-        ax.text(0.075, y, "No open positions.", color=P.MIDGREY, fontsize=8.6, va="top"); y -= 0.03
-    else:
-        recs = sorted(((retf(p["ticker"]) if retf else None, p["ticker"], p) for _, p in pos.iterrows()),
-                      key=lambda x: (x[0] if x[0] is not None else 0))
-        univ = d.get("univ_avg")
-        nav = d.get("pv") or 0.0
-        hrows = []
-        tot_now = tot_cost = 0.0
-        for today, t, p in recs:
-            sh = int(p["shares"]); now_px = float(p["current_price"]); val = now_px * sh
-            tot_now += val; tot_cost += float(p["entry_price"]) * sh
-            u = now_px / p["entry_price"] - 1
-            navpct = (val / nav) if nav else None
-            pr, lv = prior_rank.get(t), live_rank.get(t)
-            d_today = (pr - lv) if (pr is not None and lv is not None) else None
-            try:
-                dh = max(0, round((mark - pd.Timestamp(p["entry_date"]).date()).days * 5 / 7))
-            except Exception:
-                dh = None
-            hrows.append([t, ("—" if pr is None else str(pr)), ("—" if lv is None else str(lv)),
-                          _rk_icon(d_today), _rk_icon(prior_chg.get(t)), _score_path(t),
-                          ("—" if dh is None else str(dh)), P._money(p["entry_price"], 2),
-                          P._money(now_px, 2), P._pct(navpct), P._pct(u), P._pct(today),
-                          _signal_today(today, univ)])
-        book_unreal = (tot_now / tot_cost - 1) if tot_cost else None
-        hrows.append(["TOTAL", "", "", "", "", "", "", "", "", P._pct((tot_now / nav) if nav else None),
-                      P._pct(book_unreal), P._pct(d.get("held_dw")), ""])
-        cols = ["Ticker", "Prior #", "Live #", "Δ today", "Δ prior", "Score E→Y→T", "Days",
-                "Entry", "Now", "% NAV", "Unreal %", "Today %", "Signal Today"]
-        widths = [0.07, 0.04, 0.04, 0.048, 0.048, 0.155, 0.042, 0.078, 0.078, 0.062, 0.068, 0.068, 0.183]
-        align = ["left", "center", "center", "center", "center", "right", "right",
-                 "right", "right", "right", "right", "right", "left"]
-
-        def cb(r, c, v):
-            if c in (3, 4):
-                return _rk_color(v)
-            if c == 5:
-                return _score_trend_color(v)
-            if c in (10, 11):
-                return P._ret_color(P._parse_pct(v))
-            if c == 12:
-                return _SIG_COLORS.get(v, "#1f2a3a")
-            return "#1f2a3a"
-        y = P._table(ax, y, cols, hrows, widths, align=align, row_h=0.018, fontsize=6.0,
-                     header_fontsize=5.9, emph_rows={len(hrows) - 1}, text_color=cb)
+    # Current book — the shared rich table (identical to the EOD report's held book).
+    y = P.render_current_book(ax, y, P.enrich_holdings(d),
+                              npos=(0 if pos is None or pos.empty else len(pos)),
+                              pv=d.get("pv"), cash=d.get("cash"), univ=d.get("univ_avg"),
+                              held_dw=d.get("held_dw"))
 
     # Today's transactions so far
     tt = d.get("today_trades") or []

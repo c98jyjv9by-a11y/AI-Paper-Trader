@@ -28,6 +28,7 @@ from typing import Any, Callable, Dict, List, Optional
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import pandas as pd
 from matplotlib.backends.backend_pdf import PdfPages
 
 # Treat "$" literally — dollar amounts must not be parsed as TeX math (mathtext).
@@ -62,6 +63,54 @@ def _ret_color(x: Optional[float]) -> str:
     if x is None:
         return MIDGREY
     return GREEN if x > 0 else (RED if x < 0 else MIDGREY)
+
+
+# ── Shared signal/rank cell helpers (used by both the EOD and midday reports) ─────
+_SIG_COLORS = {"Very Good": "#157a37", "Moderate Good": "#3f9c5e", "Mixed": MIDGREY,
+               "Moderate Bad": "#d0663f", "Very Bad": "#c0392b", "—": MIDGREY}
+
+
+def _signal_today(ret, univ):
+    """Classify today's move vs the universe avg: excess = ret − univ."""
+    if ret is None or univ is None:
+        return "—"
+    ex = ret - univ
+    if ex >= 0.02:
+        return "Very Good"
+    if ex >= 0.005:
+        return "Moderate Good"
+    if ex > -0.005:
+        return "Mixed"
+    if ex > -0.02:
+        return "Moderate Bad"
+    return "Very Bad"
+
+
+def _rk_icon(chg):
+    """Rank-change icon: ▲ up / ▼ down / • flat / — unknown."""
+    if chg is None:
+        return "—"
+    if chg == 0:
+        return "•"
+    return f"▲{chg}" if chg > 0 else f"▼{-chg}"
+
+
+def _rk_color(v):
+    return GREEN if v.startswith("▲") else (RED if v.startswith("▼") else MIDGREY)
+
+
+def _score_trend_color(s):
+    """Color a score-transition cell (e.g. '0.72→0.79→0.81') by last-vs-first direction."""
+    import re
+    nums = re.findall(r"[01]\.\d+", s)
+    if len(nums) < 2:
+        return "#1f2a3a"
+    a, b = float(nums[0]), float(nums[-1])
+    if b > a + 0.005:
+        return GREEN
+    if b < a - 0.005:
+        return RED
+    return MIDGREY
 
 
 # ── Page scaffolding ─────────────────────────────────────────────────────────────
@@ -220,6 +269,91 @@ def _cell_x(xs, c, align):
     return xs[c + 1] - pad, "right"
 
 
+# ── Shared "current book" (held positions) table — used by EOD cover & midday report ──
+def enrich_holdings(d: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Per-holding rich fields (rank moves, score path, days, %NAV, today) computed from a
+    build_report dict. Picklable plain values, so the cover-series can carry them too."""
+    pos = d.get("positions")
+    if pos is None or pos.empty:
+        return []
+    rows_prior = d.get("rows") or []
+    rows_live = d.get("rows_cur") or []
+    prior_rank = {r["ticker"]: r["rank"] for r in rows_prior}
+    prior_score = {r["ticker"]: r["score"] for r in rows_prior}
+    prior_chg = {r["ticker"]: r.get("prior_rank_chg") for r in rows_prior}
+    live_rank = {r["ticker"]: r["rank"] for r in rows_live}
+    live_score = {r["ticker"]: r["score"] for r in rows_live}
+    entry_score = d.get("entry_scores") or {}
+    retf, mark, nav = d.get("ret"), d.get("mark"), (d.get("pv") or 0.0)
+    out = []
+    for _, p in pos.iterrows():
+        t = p["ticker"]
+        sh = int(p["shares"]); now_px = float(p["current_price"]); val = now_px * sh
+        try:
+            days = max(0, round((mark - pd.Timestamp(p["entry_date"]).date()).days * 5 / 7))
+        except Exception:
+            days = None
+        pr, lv = prior_rank.get(t), live_rank.get(t)
+        out.append({
+            "ticker": t, "shares": sh, "entry": float(p["entry_price"]), "now": now_px,
+            "value": val, "navpct": (val / nav) if nav else None, "days": days,
+            "unreal": now_px / float(p["entry_price"]) - 1,
+            "today": (retf(t) if retf else None),
+            "prior_rank": pr, "live_rank": lv,
+            "d_today": (pr - lv) if (pr is not None and lv is not None) else None,
+            "d_prior": prior_chg.get(t),
+            "entry_score": entry_score.get(t), "prior_score": prior_score.get(t),
+            "live_score": live_score.get(t),
+        })
+    out.sort(key=lambda h: (h["today"] if h["today"] is not None else 0))
+    return out
+
+
+def render_current_book(ax, y, holdings, *, npos, pv, cash, univ, held_dw):
+    """Render the rich held-positions table (Prior/Live rank, Δ today, Δ prior, entry→
+    yesterday→today score path, days, entry, now, %NAV, unreal, today, Signal Today) + TOTAL."""
+    y = _section(ax, y, f"Current book — today's moves (worst first)  ·  {npos} positions  "
+                        f"(portfolio {_money(pv)}, cash {_money(cash)})")
+    if not holdings:
+        ax.text(0.075, y, "No open positions.", color=MIDGREY, fontsize=8.0, va="top")
+        return y - 0.024
+
+    def s2(x):
+        return f"{x:.2f}" if x is not None else "—"
+
+    hrows, tot_now, tot_cost = [], 0.0, 0.0
+    for h in holdings:
+        tot_now += h["value"]; tot_cost += h["entry"] * h["shares"]
+        path = f"{s2(h['entry_score'])}→{s2(h['prior_score'])}→{s2(h['live_score'])}"
+        hrows.append([h["ticker"], ("—" if h["prior_rank"] is None else str(h["prior_rank"])),
+                      ("—" if h["live_rank"] is None else str(h["live_rank"])),
+                      _rk_icon(h["d_today"]), _rk_icon(h["d_prior"]), path,
+                      ("—" if h["days"] is None else str(h["days"])),
+                      _money(h["entry"], 2), _money(h["now"], 2), _pct(h["navpct"]),
+                      _pct(h["unreal"]), _pct(h["today"]), _signal_today(h["today"], univ)])
+    book_unreal = (tot_now / tot_cost - 1) if tot_cost else None
+    hrows.append(["TOTAL", "", "", "", "", "", "", "", "", _pct((tot_now / pv) if pv else None),
+                  _pct(book_unreal), _pct(held_dw), ""])
+    cols = ["Ticker", "Prior #", "Live #", "Δ today", "Δ prior", "Score E→Y→T", "Days",
+            "Entry", "Now", "% NAV", "Unreal %", "Today %", "Signal Today"]
+    widths = [0.07, 0.04, 0.04, 0.048, 0.048, 0.155, 0.042, 0.078, 0.078, 0.062, 0.068, 0.068, 0.203]
+    align = ["left", "center", "center", "center", "center", "right", "right",
+             "right", "right", "right", "right", "right", "left"]
+
+    def cb(r, c, v):
+        if c in (3, 4):
+            return _rk_color(v)
+        if c == 5:
+            return _score_trend_color(v)
+        if c in (10, 11):
+            return _ret_color(_parse_pct(v))
+        if c == 12:
+            return _SIG_COLORS.get(v, "#1f2a3a")
+        return "#1f2a3a"
+    return _table(ax, y, cols, hrows, widths, align=align, row_h=0.018, fontsize=6.0,
+                  header_fontsize=5.9, emph_rows={len(hrows) - 1}, text_color=cb)
+
+
 # ── Commentary generation (derived from the data) ─────────────────────────────────
 def _commentary(d: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, List[str]]:
     risk = cfg.get("risk", {})
@@ -349,17 +483,7 @@ def _cover_spec(d: Dict[str, Any], comm: Dict[str, List[str]]) -> Dict[str, Any]
     cover-series harness — closures/DataFrames in `d` are not picklable)."""
     one_d = (d.get("stats") or {}).get("1D", {})
     pos = d.get("positions")
-    retfn = d.get("ret")
-    holdings = []
-    if pos is not None and not pos.empty:
-        for _, p in pos.sort_values("ticker").iterrows():
-            holdings.append({
-                "ticker": str(p["ticker"]), "shares": int(p["shares"]),
-                "entry": float(p["entry_price"]), "now": float(p["current_price"]),
-                "value": float(p["current_price"]) * int(p["shares"]),
-                "unreal": float(p["current_price"] / p["entry_price"] - 1),
-                "session": (retfn(p["ticker"]) if retfn else None),
-            })
+    holdings = enrich_holdings(d)                 # rich per-holding fields (picklable)
     rankings = [{"rank": r["rank"], "ticker": r["ticker"], "score": round(float(r["score"]), 3),
                  "gate": bool(r["clears_gate"]), "held": bool(r["held"])}
                 for r in (d.get("rows_cur") or [])]
@@ -367,6 +491,8 @@ def _cover_spec(d: Dict[str, Any], comm: Dict[str, List[str]]) -> Dict[str, Any]
         "scenario": d["scenario"], "mark": d["mark"], "rank_close": d["rank_close"],
         "pv": d.get("pv"), "cash": d.get("cash"), "port_1d": one_d.get("port"),
         "signal_strength": d.get("signal_strength"), "exposure_mult": d.get("exposure_mult"),
+        "univ_avg": d.get("univ_avg"), "held_dw": d.get("held_dw"),
+        "n_positions": 0 if (pos is None or pos.empty) else len(pos),
         "next_session": d.get("next_session") or {}, "holdings": holdings, "rankings": rankings,
         "observations": comm["observations"], "recommendations": comm["recommendations"],
     }
@@ -388,20 +514,10 @@ def _render_cover(pdf, spec: Dict[str, Any], page: int = 1):
          (RED if (em or 1) < 0.999 else GREEN)),
     ])
 
-    # Held book (moved onto the cover so the page is self-contained for the agent harness)
-    hold = spec.get("holdings") or []
-    y = _section(ax, y - 0.004,
-                 f"Held book — {len(hold)} positions  (portfolio {_money(pv)}, cash {_money(cash)})")
-    if not hold:
-        ax.text(0.075, y, "No open positions.", color=MIDGREY, fontsize=8.0, va="top"); y -= 0.024
-    else:
-        hrows = [[h["ticker"], str(h["shares"]), _money(h["entry"], 2), _money(h["now"], 2),
-                  _money(h.get("value")), _pct(h["unreal"]), _pct(h["session"])] for h in hold]
-        y = _table(ax, y, ["Ticker", "Shares", "Entry", "Now", "Value", "Unreal %", "Session"], hrows,
-                   [0.15, 0.12, 0.15, 0.15, 0.16, 0.135, 0.135],
-                   align=["left", "right", "right", "right", "right", "right", "right"],
-                   row_h=0.0188, fontsize=7.4, header_fontsize=7.0,
-                   text_color=lambda r, c, v: (_ret_color(_parse_pct(v)) if c in (5, 6) else "#1f2a3a"))
+    # Held book — same rich table as the midday report (single source of truth)
+    y = render_current_book(ax, y - 0.004, spec.get("holdings") or [],
+                            npos=spec.get("n_positions", 0), pv=pv, cash=cash,
+                            univ=spec.get("univ_avg"), held_dw=spec.get("held_dw"))
 
     # Queued decision for next session (decide at today's close → fill next open)
     y = _section(ax, y - 0.006, "Queued for next session  (after today's close → next open)")
