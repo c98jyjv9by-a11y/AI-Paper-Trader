@@ -594,46 +594,57 @@ def _page_rankings(pdf, d):
     y = 0.90
     rows_cur = d.get("rows_cur") or []
     tn = d["top_n"]
+    # Trend measures, mirroring the midday report: score then→now, prior-day rank move, Signal Today.
+    rows_prior = d.get("rows") or []
+    prior_score = {r["ticker"]: r["score"] for r in rows_prior}
+    prior_chg = {r["ticker"]: r.get("prior_rank_chg") for r in rows_prior}
+    today_ret = {r["ticker"]: r.get("return") for r in rows_prior}
+    univ = d.get("univ_avg")
 
-    def chg(r):
-        c = r.get("rank_chg")
-        if c is None:
-            return "new"
-        if c == 0:
-            return "•"
-        return (f"▲{c}" if c > 0 else f"▼{abs(c)}")
+    def _s2(x):
+        return f"{x:.2f}" if x is not None else "—"
 
     def mk(rows):
         out = []
         for r in rows:
-            out.append([str(r["rank"]), r["ticker"], f"{r['score']:.3f}",
-                        ("✓" if r["clears_gate"] else "—"),
+            t = r["ticker"]
+            then_now = f"{_s2(prior_score.get(t))}→{_s2(r['score'])}"
+            out.append([str(r["rank"]), t, then_now, ("✓" if r["clears_gate"] else "—"),
                         (_money(r["price"], 2) if r.get("price") is not None else "—"),
-                        chg(r), ("HELD" if r["held"] else "")])
+                        _rk_icon(r.get("rank_chg")), _rk_icon(prior_chg.get(t)),
+                        _signal_today(today_ret.get(t), univ), ("HELD" if r["held"] else "")])
         return out
 
     def rk_color(r, c, v):
-        if c == 5:  # rank change
-            return GREEN if v.startswith("▲") else (RED if v.startswith("▼") else MIDGREY)
-        if c == 6 and v == "HELD":
-            return ACCENT
+        if c == 2:
+            return _score_trend_color(v)
         if c == 3:
             return GREEN if v == "✓" else MIDGREY
+        if c in (5, 6):
+            return _rk_color(v)
+        if c == 7:
+            return _SIG_COLORS.get(v, "#1f2a3a")
+        if c == 8 and v == "HELD":
+            return ACCENT
         return "#1f2a3a"
 
-    cols = ["#", "Ticker", "Score", "Gate", f"Px @ {d['mark']}", "Δrank", "Held"]
-    cw = [0.07, 0.20, 0.15, 0.10, 0.22, 0.13, 0.13]
-    aln = ["center", "left", "right", "center", "right", "center", "center"]
+    cols = ["#", "Ticker", "Score then→now", "Gate", f"Px @ {d['mark']}",
+            "Δ today", "Δ prior", "Signal Today", "Held"]
+    cw = [0.05, 0.11, 0.16, 0.06, 0.135, 0.075, 0.075, 0.185, 0.15]
+    aln = ["center", "left", "right", "center", "right", "center", "center", "left", "center"]
 
     y = _section(ax, y, f"Top {tn} — highest buy scores")
-    y = _table(ax, y, cols, mk(rows_cur[:tn]), cw, align=aln, text_color=rk_color)
+    y = _table(ax, y, cols, mk(rows_cur[:tn]), cw, align=aln, fontsize=7.0, header_fontsize=6.8,
+               text_color=rk_color)
 
     y = _section(ax, y - 0.015, f"Bottom {tn} — lowest buy scores")
-    y = _table(ax, y, cols, mk(rows_cur[-tn:]), cw, align=aln, text_color=rk_color)
+    y = _table(ax, y, cols, mk(rows_cur[-tn:]), cw, align=aln, fontsize=7.0, header_fontsize=6.8,
+               text_color=rk_color)
 
-    ax.text(0.06, y - 0.01, f"{d.get('n_gate_cur')}/{d['n']} names clear the buy gate on current prices. "
-            "Δrank vs the prior-close ranking (▲ = higher now).",
-            color=MIDGREY, fontsize=7.5, va="top", style="italic")
+    ax.text(0.06, y - 0.01, f"{d.get('n_gate_cur')}/{d['n']} clear the buy gate now. Score then→now = "
+            f"{d['rank_close']}→live (green up / red down). Δ today = rank move at the live price; "
+            "Δ prior = rank move on the prior day. Signal Today = return vs universe avg.",
+            color=MIDGREY, fontsize=7.0, va="top", style="italic")
 
     _footer(ax, 3)
     pdf.savefig(fig); plt.close(fig)
