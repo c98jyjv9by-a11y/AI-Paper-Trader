@@ -15,23 +15,23 @@ RECOMMENDED config. model_v3 (83-name universe, score-conditional exits, persist
 
 | Metric | Strategy | SPY | QQQ | Equal-Wt Hold |
 |--------|----------|-----|-----|-----|
-| Ending Balance | $174,399.01 | $110,099.80 | $119,701.60 | $124,524.10 |
-| Total Return | +74.40% | +10.10% | +19.70% | +24.52% |
+| Ending Balance | $175,066.91 | $109,992.60 | $119,597.00 | $124,646.00 |
+| Total Return | +75.07% | +9.99% | +19.60% | +24.65% |
 | Max Drawdown | -14.09% | -8.88% | -11.72% | -16.42% |
-| Excess vs SPY | +64.30% | — | — | — |
-| Excess vs QQQ | +54.70% | — | — | — |
-| Excess vs Equal-Wt | +49.87% | — | — | — |
+| Excess vs SPY | +65.07% | — | — | — |
+| Excess vs QQQ | +55.47% | — | — | — |
+| Excess vs Equal-Wt | +50.42% | — | — | — |
 
 _Benchmarks: **SPY** and **QQQ** are buy-and-hold of those ETFs. **Equal-Wt Hold** is a synthetic equal-weight buy-and-hold of the strategy's own universe (not the unrelated EWH ETF)._
 
 | Metric | Value |
 |--------|-------|
 | Starting Value | $100,000.00 |
-| Ending Value | $174,399.01 |
-| **IRR (annualized, money-weighted)** | **+293.11%** |
-| Total Return (on full $ portfolio) | +74.40% |
+| Ending Value | $175,066.91 |
+| **IRR (annualized, money-weighted)** | **+296.73%** |
+| Total Return (on full $ portfolio) | +75.07% |
 | Total Capital Deployed (all entries) | $240,242.93 |
-| Avg Capital Deployed (snapshot) | $109,123.91 (+109.12% of portfolio) |
+| Avg Capital Deployed (snapshot) | $109,129.72 (+109.13% of portfolio) |
 | Peak Capital Deployed (snapshot) | $165,041.85 (+165.04% of portfolio) |
 | Time Invested | +99.13% of trading days |
 | Trading Days | 115 |
@@ -101,16 +101,16 @@ _**IRR** is the annualized money-weighted (internal) rate of return on the capit
 
 | Ticker | Shares | Entry Price | Final Price | Unrealized P&L | Entry Date |
 |--------|--------|------------|------------|----------------|------------|
-| DELL | 62 | $153.23 | $423.61 | $16,763.29 | 2026-03-02 |
-| MRVL | 75 | $131.43 | $294.92 | $12,261.64 | 2026-04-13 |
-| ARM | 46 | $216.10 | $423.71 | $9,550.48 | 2026-04-27 |
-| INTC | 123 | $94.84 | $121.83 | $3,319.19 | 2026-04-29 |
-| QCOM | 56 | $218.50 | $218.94 | $24.52 | 2026-05-08 |
-| DDOG | 59 | $200.14 | $232.58 | $1,913.97 | 2026-05-12 |
-| PANW | 46 | $247.80 | $280.74 | $1,515.35 | 2026-05-18 |
-| SEDG | 183 | $55.29 | $58.37 | $563.60 | 2026-05-18 |
-| CRWD | 18 | $617.50 | $687.75 | $1,264.56 | 2026-05-19 |
-| FTNT | 89 | $130.13 | $144.42 | $1,271.81 | 2026-05-20 |
+| DELL | 62 | $153.23 | $425.52 | $16,882.33 | 2026-03-02 |
+| MRVL | 75 | $131.43 | $296.66 | $12,392.15 | 2026-04-13 |
+| ARM | 46 | $216.10 | $427.25 | $9,713.09 | 2026-04-27 |
+| INTC | 123 | $94.84 | $122.18 | $3,362.24 | 2026-04-29 |
+| QCOM | 56 | $218.50 | $218.04 | $-25.88 | 2026-05-08 |
+| DDOG | 59 | $200.14 | $232.50 | $1,909.25 | 2026-05-12 |
+| PANW | 46 | $247.80 | $283.48 | $1,641.16 | 2026-05-18 |
+| SEDG | 183 | $55.29 | $58.58 | $602.95 | 2026-05-18 |
+| CRWD | 18 | $617.50 | $688.86 | $1,284.45 | 2026-05-19 |
+| FTNT | 89 | $130.13 | $145.35 | $1,354.58 | 2026-05-20 |
 
 ## Equity Curve (first and last 5 days)
 
@@ -125,7 +125,7 @@ _**IRR** is the annualized money-weighted (internal) rate of return on the capit
 | 2026-06-12 | $169,792.60 | +2.11% | +69.79% | +8.87% | +17.80% | +21.55% |
 | 2026-06-15 | $175,960.64 | +3.63% | +75.96% | +10.79% | +21.50% | +25.56% |
 | 2026-06-16 | $169,584.81 | -3.62% | +69.58% | +10.13% | +19.19% | +22.35% |
-| 2026-06-17 | $174,399.01 | +2.84% | +74.40% | +10.10% | +19.70% | +24.52% |
+| 2026-06-17 | $175,066.91 | +3.23% | +75.07% | +9.99% | +19.60% | +24.65% |
 
 
 ## Signal Predictiveness
@@ -145,9 +145,9 @@ _Cross-section of 9,462 (date, ticker) signal observations. Correlations are Pea
 
 | Quintile | N | Avg fwd 5d | Win 5d | Avg fwd 10d | Win 10d | Avg fwd 20d | Win 20d |
 |----------|---|-----------|--------|-------------|---------|-------------|---------|
-| Q1 | 1938 | +0.56% | +49.52% | +0.81% | +48.52% | +2.45% | +51.83% |
-| Q2 | 1824 | +0.61% | +51.48% | +0.78% | +50.48% | +1.79% | +50.66% |
-| Q3 | 1938 | +0.08% | +47.81% | +0.59% | +46.78% | +1.91% | +46.75% |
+| Q1 | 1938 | +0.56% | +49.52% | +0.80% | +48.52% | +2.45% | +51.83% |
+| Q2 | 1824 | +0.61% | +51.48% | +0.78% | +50.48% | +1.79% | +50.72% |
+| Q3 | 1938 | +0.08% | +47.81% | +0.59% | +46.78% | +1.91% | +46.81% |
 | Q4 | 1824 | +0.49% | +49.03% | +1.69% | +49.35% | +4.18% | +51.71% |
 | Q5 | 1938 | +1.75% | +54.22% | +3.38% | +55.18% | +7.59% | +56.22% |
 
@@ -160,11 +160,11 @@ _Buy the top 2 ranked names each day, hold a fixed period, **no** stop-loss / ta
 | Hold period | Raw avg return / trade | Raw win rate | N trades |
 |-------------|------------------------|--------------|----------|
 | 5d | +2.36% | +56.42% | 218 |
-| 10d | +4.64% | +60.10% | 208 |
+| 10d | +4.65% | +60.10% | 208 |
 | 20d | +12.07% | +63.30% | 188 |
-| 30d | +17.87% | +64.88% | 168 |
+| 30d | +17.88% | +64.88% | 168 |
 
-**Full strategy (with exit rules):** total return +74.40%, win rate +73.33%, avg hold 56.76 trading days.
+**Full strategy (with exit rules):** total return +75.07%, win rate +73.33%, avg hold 56.76 trading days.
 
 The raw signal (buy top names, hold fixed, no stops) is **positive across holding periods** (avg +9.24% per trade, 61% win rate). That points to genuine signal quality — higher-ranked names tend to rise even without exit rules.
 
@@ -174,10 +174,10 @@ The raw signal (buy top names, hold fixed, no stops) is **positive across holdin
 
 | Ticker | P&L |
 |--------|-----|
-| DELL | $16,763.29 |
-| MRVL | $12,261.64 |
+| DELL | $16,882.33 |
+| MRVL | $12,392.15 |
 | MU | $10,701.71 |
-| ARM | $9,550.48 |
+| ARM | $9,713.09 |
 | ON | $7,044.21 |
 
 **Worst 5 contributors:**
@@ -187,16 +187,16 @@ The raw signal (buy top names, hold fixed, no stops) is **positive across holdin
 | ZS | $-3,145.06 |
 | SNPS | $-1,540.54 |
 | TXN | $-1,359.70 |
-| SEDG | $-1,004.54 |
-| QCOM | $24.52 |
+| SEDG | $-965.19 |
+| QCOM | $-25.88 |
 
 **P&L by asset group:**
 
 | Group | P&L |
 |-------|-----|
-| semiconductors | $20,252.19 |
-| software_cybersecurity | $2,779.91 |
-| _(ungrouped)_ | $51,366.90 |
+| semiconductors | $20,414.80 |
+| software_cybersecurity | $2,925.61 |
+| _(ungrouped)_ | $51,726.49 |
 
 ## Turnover and Re-entry Diagnostics
 
@@ -217,10 +217,10 @@ The raw signal (buy top names, hold fixed, no stops) is **positive across holdin
 | Max exposure | +97.61% |
 | Avg cash (drag) | +10.71% |
 | Correlation to SPY | 0.68 |
-| Correlation to QQQ | 0.77 |
-| Beta to SPY | 2.07 |
+| Correlation to QQQ | 0.76 |
+| Beta to SPY | 2.06 |
 | Beta to QQQ | 1.60 |
-| Up-capture vs QQQ | 2.01 |
+| Up-capture vs QQQ | 2.02 |
 | Down-capture vs QQQ | 1.55 |
 
 _Beta ≈ 1 with high correlation ⇒ performance is mostly market exposure; low beta with a positive quintile spread ⇒ more genuine selection alpha._
@@ -255,7 +255,7 @@ _This report is for research purposes only. No real trades are placed._
 > One parameter is varied at a time; everything else stays at the scenario's configured values. **Run-wide** params apply to the whole backtest. **Ticker** params overwrite that exit field for *every* `ticker_groups` name at once — a uniform stand-in for the per-ticker mix, with the real heterogeneous config shown as the `as-configured` baseline row.
 > In-sample only — do not pick parameters off these tables; see Robustness Notes.
 
-**Baseline (as configured):** +74.40% return  |  -14.09% max drawdown  |  +73.33% win rate  |  4.41 profit factor
+**Baseline (as configured):** +75.07% return  |  -14.09% max drawdown  |  +73.33% win rate  |  4.41 profit factor
 
 ### Run-wide parameters
 
@@ -263,136 +263,136 @@ _This report is for research purposes only. No real trades are placed._
 
 | Value | Return | vs SPY | vs EqWt | Max DD | Trades | Win Rate | PF |
 |-------|--------|--------|--------|--------|--------|----------|-----|
-| 50% | +41.04% | +30.94% | +16.51% | -11.73% | 24 | +66.67% | 6.63 |
-| 70% | +43.72% | +33.62% | +19.19% | -12.90% | 31 | +63.64% | 5.71 |
-| 90% ◀ baseline | +74.40% | +64.30% | +49.87% | -14.09% | 40 | +73.33% | 4.41 |
-| 100% | +86.26% | +76.16% | +61.74% | -13.48% | 45 | +77.78% | 5.49 |
+| 50% | +41.27% | +31.27% | +16.62% | -11.73% | 24 | +66.67% | 6.63 |
+| 70% | +44.00% | +34.01% | +19.36% | -12.90% | 31 | +63.64% | 5.71 |
+| 90% ◀ baseline | +75.07% | +65.07% | +50.42% | -14.09% | 40 | +73.33% | 4.41 |
+| 100% | +87.00% | +77.01% | +62.35% | -13.48% | 45 | +77.78% | 5.49 |
 
 #### Max Position Size  (baseline: 8.50%)
 
 | Value | Return | vs SPY | vs EqWt | Max DD | Trades | Win Rate | PF |
 |-------|--------|--------|--------|--------|--------|----------|-----|
-| 4.25% | +60.57% | +50.47% | +36.04% | -15.80% | 81 | +48.39% | 2.58 |
-| 8.50% ◀ baseline | +74.40% | +64.30% | +49.87% | -14.09% | 40 | +73.33% | 4.41 |
-| 12.75% | +86.77% | +76.67% | +62.24% | -14.45% | 36 | +80.00% | 4.60 |
-| 17.00% | +69.05% | +58.95% | +44.52% | -12.07% | 43 | +68.42% | 4.42 |
-| 25.50% | +88.51% | +78.41% | +63.98% | -15.88% | 54 | +60.00% | 3.22 |
+| 4.25% | +61.03% | +51.03% | +36.38% | -15.80% | 81 | +48.39% | 2.58 |
+| 8.50% ◀ baseline | +75.07% | +65.07% | +50.42% | -14.09% | 40 | +73.33% | 4.41 |
+| 12.75% | +87.36% | +77.37% | +62.71% | -14.45% | 36 | +80.00% | 4.60 |
+| 17.00% | +69.32% | +59.32% | +44.67% | -12.07% | 43 | +68.42% | 4.42 |
+| 25.50% | +89.15% | +79.16% | +64.51% | -15.88% | 54 | +60.00% | 3.22 |
 
 #### Max New Trades / Day  (baseline: 2)
 
 | Value | Return | vs SPY | vs EqWt | Max DD | Trades | Win Rate | PF |
 |-------|--------|--------|--------|--------|--------|----------|-----|
-| 1 | +80.06% | +69.96% | +55.54% | -15.63% | 41 | +68.75% | 5.58 |
-| 2 ◀ baseline | +74.40% | +64.30% | +49.87% | -14.09% | 40 | +73.33% | 4.41 |
-| 3 | +86.73% | +76.63% | +62.21% | -14.15% | 40 | +66.67% | 4.69 |
-| 5 | +72.55% | +62.45% | +48.03% | -14.65% | 45 | +50.00% | 2.26 |
+| 1 | +80.69% | +70.70% | +56.04% | -15.63% | 41 | +68.75% | 5.58 |
+| 2 ◀ baseline | +75.07% | +65.07% | +50.42% | -14.09% | 40 | +73.33% | 4.41 |
+| 3 | +87.32% | +77.33% | +62.68% | -14.15% | 40 | +66.67% | 4.69 |
+| 5 | +73.00% | +63.00% | +48.35% | -14.65% | 45 | +50.00% | 2.26 |
 
 #### Min Composite Score  (baseline: 0.70)
 
 | Value | Return | vs SPY | vs EqWt | Max DD | Trades | Win Rate | PF |
 |-------|--------|--------|--------|--------|--------|----------|-----|
-| none | +74.40% | +64.30% | +49.87% | -14.09% | 40 | +73.33% | 4.41 |
-| 0.60 | +74.40% | +64.30% | +49.87% | -14.09% | 40 | +73.33% | 4.41 |
-| 0.70 ◀ baseline | +74.40% | +64.30% | +49.87% | -14.09% | 40 | +73.33% | 4.41 |
+| none | +75.07% | +65.07% | +50.42% | -14.09% | 40 | +73.33% | 4.41 |
+| 0.60 | +75.07% | +65.07% | +50.42% | -14.09% | 40 | +73.33% | 4.41 |
+| 0.70 ◀ baseline | +75.07% | +65.07% | +50.42% | -14.09% | 40 | +73.33% | 4.41 |
 
 #### Slippage  (baseline: 0.10%)
 
 | Value | Return | vs SPY | vs EqWt | Max DD | Trades | Win Rate | PF |
 |-------|--------|--------|--------|--------|--------|----------|-----|
-| 0.05% | +72.74% | +62.64% | +48.21% | -14.58% | 43 | +70.59% | 3.36 |
-| 0.10% ◀ baseline | +74.40% | +64.30% | +49.87% | -14.09% | 40 | +73.33% | 4.41 |
-| 0.20% | +73.95% | +63.85% | +49.42% | -14.11% | 40 | +73.33% | 4.34 |
-| 0.50% | +72.51% | +62.41% | +47.98% | -14.10% | 40 | +73.33% | 4.20 |
+| 0.05% | +73.40% | +63.41% | +48.76% | -14.58% | 43 | +70.59% | 3.36 |
+| 0.10% ◀ baseline | +75.07% | +65.07% | +50.42% | -14.09% | 40 | +73.33% | 4.41 |
+| 0.20% | +74.61% | +64.62% | +49.97% | -14.11% | 40 | +73.33% | 4.34 |
+| 0.50% | +73.17% | +63.18% | +48.52% | -14.10% | 40 | +73.33% | 4.20 |
 
 #### Re-entry Recovery Gate  (baseline: 10%)
 
 | Value | Return | vs SPY | vs EqWt | Max DD | Trades | Win Rate | PF |
 |-------|--------|--------|--------|--------|--------|----------|-----|
-| off | +74.40% | +64.30% | +49.87% | -14.09% | 40 | +73.33% | 4.41 |
-| 0% | +74.40% | +64.30% | +49.87% | -14.09% | 40 | +73.33% | 4.41 |
-| 5% | +74.40% | +64.30% | +49.87% | -14.09% | 40 | +73.33% | 4.41 |
-| 10% ◀ baseline | +74.40% | +64.30% | +49.87% | -14.09% | 40 | +73.33% | 4.41 |
+| off | +75.07% | +65.07% | +50.42% | -14.09% | 40 | +73.33% | 4.41 |
+| 0% | +75.07% | +65.07% | +50.42% | -14.09% | 40 | +73.33% | 4.41 |
+| 5% | +75.07% | +65.07% | +50.42% | -14.09% | 40 | +73.33% | 4.41 |
+| 10% ◀ baseline | +75.07% | +65.07% | +50.42% | -14.09% | 40 | +73.33% | 4.41 |
 
 #### Stop-loss only if score <  (baseline: 0.90)
 
 | Value | Return | vs SPY | vs EqWt | Max DD | Trades | Win Rate | PF |
 |-------|--------|--------|--------|--------|--------|----------|-----|
-| off | +74.40% | +64.30% | +49.87% | -14.09% | 40 | +73.33% | 4.41 |
-| 0.85 | +74.40% | +64.30% | +49.87% | -14.09% | 40 | +73.33% | 4.41 |
-| 0.90 ◀ baseline | +74.40% | +64.30% | +49.87% | -14.09% | 40 | +73.33% | 4.41 |
-| 0.95 | +74.40% | +64.30% | +49.87% | -14.09% | 40 | +73.33% | 4.41 |
+| off | +75.07% | +65.07% | +50.42% | -14.09% | 40 | +73.33% | 4.41 |
+| 0.85 | +75.07% | +65.07% | +50.42% | -14.09% | 40 | +73.33% | 4.41 |
+| 0.90 ◀ baseline | +75.07% | +65.07% | +50.42% | -14.09% | 40 | +73.33% | 4.41 |
+| 0.95 | +75.07% | +65.07% | +50.42% | -14.09% | 40 | +73.33% | 4.41 |
 
 #### Max-hold only if score <  (baseline: 0.80)
 
 | Value | Return | vs SPY | vs EqWt | Max DD | Trades | Win Rate | PF |
 |-------|--------|--------|--------|--------|--------|----------|-----|
-| off | +79.53% | +69.43% | +55.01% | -13.57% | 40 | +73.33% | 4.67 |
-| 0.70 | +73.88% | +63.78% | +49.35% | -14.13% | 40 | +73.33% | 4.34 |
-| 0.80 ◀ baseline | +74.40% | +64.30% | +49.87% | -14.09% | 40 | +73.33% | 4.41 |
-| 0.90 | +75.47% | +65.37% | +50.95% | -14.09% | 40 | +73.33% | 4.62 |
+| off | +80.14% | +70.15% | +55.50% | -13.57% | 40 | +73.33% | 4.67 |
+| 0.70 | +74.54% | +64.55% | +49.90% | -14.13% | 40 | +73.33% | 4.34 |
+| 0.80 ◀ baseline | +75.07% | +65.07% | +50.42% | -14.09% | 40 | +73.33% | 4.41 |
+| 0.90 | +76.05% | +66.06% | +51.41% | -14.09% | 40 | +73.33% | 4.62 |
 
 #### Score-decay sell threshold  (baseline: off)
 
 | Value | Return | vs SPY | vs EqWt | Max DD | Trades | Win Rate | PF |
 |-------|--------|--------|--------|--------|--------|----------|-----|
-| off ◀ baseline | +74.40% | +64.30% | +49.87% | -14.09% | 40 | +73.33% | 4.41 |
-| 0.40 | +76.22% | +66.12% | +51.69% | -14.22% | 51 | +63.64% | 2.06 |
-| 0.50 | +56.90% | +46.80% | +32.38% | -15.28% | 94 | +41.86% | 2.10 |
-| 0.60 | +65.69% | +55.59% | +41.17% | -13.66% | 121 | +48.21% | 3.02 |
+| off ◀ baseline | +75.07% | +65.07% | +50.42% | -14.09% | 40 | +73.33% | 4.41 |
+| 0.40 | +76.75% | +66.75% | +52.10% | -14.22% | 51 | +63.64% | 2.06 |
+| 0.50 | +57.57% | +47.58% | +32.92% | -15.28% | 94 | +41.86% | 2.10 |
+| 0.60 | +66.46% | +56.47% | +41.82% | -13.66% | 121 | +48.21% | 3.02 |
 
 #### Persistence-buy threshold  (baseline: 0.90)
 
 | Value | Return | vs SPY | vs EqWt | Max DD | Trades | Win Rate | PF |
 |-------|--------|--------|--------|--------|--------|----------|-----|
-| off | +57.21% | +47.11% | +32.69% | -16.01% | 40 | +60.00% | 4.57 |
-| 0.80 | +75.40% | +65.30% | +50.88% | -15.02% | 113 | +51.92% | 2.94 |
-| 0.85 | +50.15% | +40.05% | +25.62% | -14.37% | 87 | +56.41% | 2.22 |
-| 0.90 ◀ baseline | +74.40% | +64.30% | +49.87% | -14.09% | 40 | +73.33% | 4.41 |
+| off | +57.63% | +47.63% | +32.98% | -16.01% | 40 | +60.00% | 4.57 |
+| 0.80 | +76.04% | +66.05% | +51.39% | -15.02% | 113 | +51.92% | 2.94 |
+| 0.85 | +50.53% | +40.54% | +25.88% | -14.37% | 87 | +56.41% | 2.22 |
+| 0.90 ◀ baseline | +75.07% | +65.07% | +50.42% | -14.09% | 40 | +73.33% | 4.41 |
 
 #### Vol-target (annualized)  (baseline: 35%)
 
 | Value | Return | vs SPY | vs EqWt | Max DD | Trades | Win Rate | PF |
 |-------|--------|--------|--------|--------|--------|----------|-----|
-| off | +72.35% | +62.25% | +47.82% | -14.00% | 46 | +77.78% | 4.83 |
-| 15% | +35.63% | +25.53% | +11.11% | -15.50% | 39 | +64.29% | 5.16 |
-| 20% | +37.55% | +27.45% | +13.02% | -15.50% | 38 | +64.29% | 4.60 |
-| 25% | +46.04% | +35.94% | +21.52% | -15.50% | 37 | +69.23% | 5.23 |
-| 30% | +54.53% | +44.43% | +30.01% | -15.66% | 40 | +60.00% | 2.79 |
-| 35% ◀ baseline | +74.40% | +64.30% | +49.87% | -14.09% | 40 | +73.33% | 4.41 |
+| off | +73.05% | +63.06% | +48.40% | -14.00% | 46 | +77.78% | 4.83 |
+| 15% | +35.88% | +25.89% | +11.24% | -15.50% | 39 | +64.29% | 5.16 |
+| 20% | +37.87% | +27.88% | +13.23% | -15.50% | 38 | +64.29% | 4.60 |
+| 25% | +46.42% | +36.43% | +21.78% | -15.50% | 37 | +69.23% | 5.23 |
+| 30% | +55.05% | +45.06% | +30.41% | -15.66% | 40 | +60.00% | 2.79 |
+| 35% ◀ baseline | +75.07% | +65.07% | +50.42% | -14.09% | 40 | +73.33% | 4.41 |
 
 #### Signal Weight Profile  (baseline: baseline)
 
 | Value | Return | vs SPY | vs EqWt | Max DD | Trades | Win Rate | PF |
 |-------|--------|--------|--------|--------|--------|----------|-----|
-| baseline ◀ baseline | +74.40% | +64.30% | +49.87% | -14.09% | 40 | +73.33% | 4.41 |
-| no_1d | +75.53% | +65.43% | +51.00% | -14.70% | 64 | +64.29% | 3.03 |
-| less_1d | +74.40% | +64.30% | +49.87% | -14.09% | 40 | +73.33% | 4.41 |
-| more_volume | +81.55% | +71.45% | +57.02% | -15.62% | 41 | +60.00% | 4.48 |
+| baseline ◀ baseline | +75.07% | +65.07% | +50.42% | -14.09% | 40 | +73.33% | 4.41 |
+| no_1d | +76.20% | +66.21% | +51.56% | -14.70% | 64 | +64.29% | 3.03 |
+| less_1d | +75.07% | +65.07% | +50.42% | -14.09% | 40 | +73.33% | 4.41 |
+| more_volume | +82.16% | +72.17% | +57.52% | -15.62% | 41 | +60.00% | 4.48 |
 
 ### Best 5 Variants by Total Return
 
 | Rank | Parameter | Value | Return | vs EqWt | Max DD | PF |
 |------|-----------|-------|--------|--------|--------|-----|
-| 1 | max_position_pct | 25.50% | +88.51% | +63.98% | -15.88% | 3.22 |
-| 2 | max_position_pct | 12.75% | +86.77% | +62.24% | -14.45% | 4.60 |
-| 3 | max_new_trades_per_day | 3 | +86.73% | +62.21% | -14.15% | 4.69 |
-| 4 | max_total_exposure | 100% | +86.26% | +61.74% | -13.48% | 5.49 |
-| 5 | signal_weights | more_volume | +81.55% | +57.02% | -15.62% | 4.48 |
+| 1 | max_position_pct | 25.50% | +89.15% | +64.51% | -15.88% | 3.22 |
+| 2 | max_position_pct | 12.75% | +87.36% | +62.71% | -14.45% | 4.60 |
+| 3 | max_new_trades_per_day | 3 | +87.32% | +62.68% | -14.15% | 4.69 |
+| 4 | max_total_exposure | 100% | +87.00% | +62.35% | -13.48% | 5.49 |
+| 5 | signal_weights | more_volume | +82.16% | +57.52% | -15.62% | 4.48 |
 
 ### Worst 5 Variants by Total Return
 
 | Rank | Parameter | Value | Return | vs EqWt | Max DD | PF |
 |------|-----------|-------|--------|--------|--------|-----|
-| 1 | target_vol | 15% | +35.63% | +11.11% | -15.50% | 5.16 |
-| 2 | target_vol | 20% | +37.55% | +13.02% | -15.50% | 4.60 |
-| 3 | max_total_exposure | 50% | +41.04% | +16.51% | -11.73% | 6.63 |
-| 4 | max_total_exposure | 70% | +43.72% | +19.19% | -12.90% | 5.71 |
-| 5 | target_vol | 25% | +46.04% | +21.52% | -15.50% | 5.23 |
+| 1 | target_vol | 15% | +35.88% | +11.24% | -15.50% | 5.16 |
+| 2 | target_vol | 20% | +37.87% | +13.23% | -15.50% | 4.60 |
+| 3 | max_total_exposure | 50% | +41.27% | +16.62% | -11.73% | 6.63 |
+| 4 | max_total_exposure | 70% | +44.00% | +19.36% | -12.90% | 5.71 |
+| 5 | target_vol | 25% | +46.42% | +21.78% | -15.50% | 5.23 |
 
 ### Robustness Notes
 
 The baseline outperforms 78% of all variants. This is broadly consistent across parameter dimensions, suggesting the baseline settings are reasonably competitive in-sample.
 
-The widest in-sample return spread belongs to `max_total_exposure` (45.2 pp range across its variants); `min_composite_score` shows the narrowest spread (0.0 pp), suggesting the strategy is least sensitive to that parameter in this period.
+The widest in-sample return spread belongs to `max_total_exposure` (45.7 pp range across its variants); `min_composite_score` shows the narrowest spread (0.0 pp), suggesting the strategy is least sensitive to that parameter in this period.
 
 Improvements that appear in only one or two variants should be treated with skepticism — isolated peaks are more likely to reflect in-sample noise than genuine edge. Prefer settings that perform consistently across the full sweep.

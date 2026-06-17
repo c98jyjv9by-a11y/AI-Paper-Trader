@@ -207,7 +207,14 @@ def _next_session_block(cfg, pdata, positions, held, pv, cash, em, rows_cur, sta
 
 
 def _write_ranking_snapshot(root: Path, scenario: str, d, ranked_rows) -> None:
+    """Persist the ranking AS OF date `d`. WRITE-ONCE / FROZEN: if a snapshot already exists
+    for that date it is left untouched — a later rerun (e.g. regenerating a report, or with
+    overnight feed-revised prices) must NOT silently rewrite the originally-published ranking.
+    To intentionally refresh one, delete the file first."""
     p = _ranking_snapshot_path(root, scenario, d)
+    if p.exists():
+        log.debug("Ranking snapshot %s already exists — frozen, not overwriting.", p.name)
+        return
     p.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame([{"rank": x["rank"], "ticker": x["ticker"], "score": round(x["score"], 4),
                    "gate": "yes" if x["clears_gate"] else "no"} for x in ranked_rows]).to_csv(p, index=False)
