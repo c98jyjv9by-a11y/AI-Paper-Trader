@@ -58,7 +58,7 @@ def build(matrix_json: Path, out: Path) -> Path:
 
         # Headline reference
         y = P._section(ax, y - 0.004,
-                       f"Sonnet 4.6  —  full window {w0} → {w1}")
+                       f"Sonnet 4.6  —  Year to date  ({w0} → {w1})")
         ax.text(0.075, y, f"Reference  strict = {P._pct(d['strict_ret'])}  "
                 f"(≈ model {P._pct(b['model'])})   |   SPY {P._pct(b['SPY'])}  ·  QQQ {P._pct(b['QQQ'])}"
                 "   —   every agent cell trailed strict.",
@@ -86,23 +86,34 @@ def build(matrix_json: Path, out: Path) -> Path:
             "model, with full market context as a sanity check.'"],
             width=116, lh=0.0150, gap=0.005, fontsize=7.8)
 
+        # Real Sonnet justifications (discretionary), by context source
+        y = P._section(ax, y - 0.006, "How the agent justified deviating  (real Sonnet quotes, discretionary)")
+        y = P._bullets(ax, y, [
+            "Macro · avoided a trade: \"Momentum-inverted selloff (top names down harder); the model's "
+            "ADI/KLAC buys would add semi exposure into a reversal — poor timing, book already semi-heavy.\"",
+            "Macro · different trade: \"SELL ASML — SPY/QQQ below 50d MA, only 29% of names above their MA, "
+            "VIX 25.8; exit to cut risk in a deteriorating tape while the gain holds.\"",
+            "News · avoided a trade: \"The model's queued ADI & KLAC would be buying into a momentum "
+            "washout, not a trend continuation — hold.\"",
+            "News · different trade: \"SELL ASML on negative headlines (US targeting China sales); "
+            "BUY INTC (top-ranked 0.971), funded by the ASML/OXY exits.\""],
+            width=122, lh=0.0142, gap=0.0042, fontsize=7.4)
+
         # Haiku cross-check
-        y = P._section(ax, y - 0.006, "Cross-check  —  Haiku 4.5, short window (January, ~19 days)")
+        y = P._section(ax, y - 0.005, "Cross-check  —  Haiku 4.5, short window (January, ~19 days)")
         y = P._bullets(ax, y, [
             "Weak model + short window = no clear signal: deltas were sub-1pp (within run-to-run noise).",
             "macro HURT Haiku slightly but HELPED Sonnet → a source's value is model-dependent; you "
             "cannot evaluate sources on a weak model.",
             "Autonomy's damage only became obvious over the longer window — short horizons hide it."],
-            width=116, lh=0.0150, gap=0.005, fontsize=7.8)
+            width=122, lh=0.0142, gap=0.0042, fontsize=7.4)
 
         # Bottom line
-        y = P._section(ax, y - 0.006, "Bottom line")
+        y = P._section(ax, y - 0.005, "Bottom line")
         y = P._bullets(ax, y, [
             "Trust the model; use context as a guardrail, not a license to deviate. Macro > news, and a "
-            "capable model (Sonnet ≫ Haiku) is required to use context at all.",
-            "Caveat: one strong-momentum bull window where model_v4 is near-optimal — so 'follow the "
-            "model' winning is expected. Decisive next test: a choppy/selloff OOS window."],
-            width=116, lh=0.0150, gap=0.005, fontsize=7.8)
+            "capable model (Sonnet ≫ Haiku) is required to use context at all."],
+            width=122, lh=0.0142, gap=0.0042, fontsize=7.4)
 
         # Footer
         ax.add_line(P.plt.Line2D([0.06, 0.94], [0.035, 0.035], color=P.RULE, lw=0.8))
