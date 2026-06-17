@@ -11,6 +11,7 @@ cd ai-paper-trader
 pip install -r requirements.txt
 
 python run.py account-freeze --name primary --scenario model_v4 --start … --end …  # freeze a scenario's trades+state over a window into an IMMUTABLE account ledger (accounts/<name>/: trades/equity/positions/rankings + rendered reports + manifest hashes); survives model/config changes & price revisions. account-verify --name <n> checks integrity. Reports read it via build_report(..., account=<n>)
+python run.py account-continue --name primary --end … [--scenario <model>]          # extend a living account forward from its latest state (seeds cash/positions/governor; resets transient streak state at the seam). Appends under continuation/, leaves the frozen core untouched; --scenario defaults to the account base (pass current model to "follow active")
 python run.py agent                                          # live daily agent
 python run.py backtest           --start … --end …           # backtest + diagnostics + sensitivity
 python run.py experiments        --start … --end …           # strategy experiment profiles

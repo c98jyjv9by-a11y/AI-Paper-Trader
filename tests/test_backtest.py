@@ -952,3 +952,35 @@ class TestNextSessionDecision:
         # the baseline by re-running baseline and checking it is unchanged & deterministic
         base2, _e2, _p2 = run_backtest(cfg, data, data.index[0].date(), data.index[-1].date())
         pd.testing.assert_frame_equal(base.reset_index(drop=True), base2.reset_index(drop=True))
+
+
+# ─── Resume-from-state (Phase-2 living continuation) ──────────────────────────
+
+
+class TestResumeFromState:
+    def _flat(self, tickers, n=40, px=100.0):
+        return _make_flat_price_data(tickers + ["SPY", "QQQ"], n_days=n, base_price=px)
+
+    def test_seeded_position_and_cash_carry_forward(self):
+        data = self._flat(["AAA"], n=40)
+        dates = data.index
+        cfg = _make_config(["AAA"], stop_loss=0.9, take_profit=9.0, max_holding=999, max_new=0)
+        seed = pd.DataFrame([{
+            "ticker": "AAA", "shares": 10, "entry_price": 100.0,
+            "entry_date": dates[5].date().isoformat(), "current_price": 100.0,
+            "highest_price": 100.0, "lowest_price": 100.0}])
+        trades, eq, pos = run_backtest(
+            cfg, data, dates[20].date(), dates[-1].date(),
+            initial_cash=5_000.0, initial_positions=seed, initial_equity=[6000.0, 6000.0])
+        # the seeded position is carried (flat prices, no exit trigger, no new buys)
+        assert "AAA" in set(pos["ticker"]) and int(pos.loc[pos.ticker == "AAA", "shares"].iloc[0]) == 10
+        # equity starts from seeded cash + position value (5000 + 10*100), not the $100k default
+        assert abs(float(eq["total_portfolio_value"].iloc[0]) - 6000.0) < 1.0
+        assert abs(float(eq["cash"].iloc[0]) - 5000.0) < 1.0
+
+    def test_no_seed_still_starts_at_starting_value(self):
+        data = self._flat(["AAA"], n=40)
+        dates = data.index
+        cfg = _make_config(["AAA"], max_new=0)
+        _t, eq, _p = run_backtest(cfg, data, dates[20].date(), dates[-1].date())
+        assert abs(float(eq["total_portfolio_value"].iloc[0]) - cfg["portfolio"]["starting_value"]) < 1.0

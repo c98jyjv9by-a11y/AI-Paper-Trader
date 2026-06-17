@@ -29,6 +29,10 @@ python run.py account-freeze --name primary --scenario model_v4 --start 2026-01-
 
 # Verify the frozen files still match their manifest hashes (integrity / drift check):
 python run.py account-verify --name primary
+
+# Extend a living account forward (Phase 2), seeded from its latest state. --scenario
+# defaults to the account's base; pass the CURRENT model to "follow the active model":
+python run.py account-continue --name primary --end 2026-06-30 --scenario model_v4
 ```
 
 ## Reading the frozen account in reports
@@ -43,6 +47,18 @@ regardless of what `model_v4.yaml` says today or how the price feed has been rev
   `manifest.json` hashes + `account-verify` + git detect any drift.
 - **Survives change:** because the *derived* ledger is stored (not re-derived), changing or
   switching the model never alters a frozen account.
-- **Phase 1 = static record:** a frozen account does not trade forward. Forward continuation
-  (a living account that follows the active model from `frozen_through` onward) is a planned
-  Phase 2 and would append to the ledger while leaving the frozen prefix untouched.
+## Living continuation (Phase 2)
+
+`account-continue` extends an account forward from its latest state, trading with the model
+you pass (`--scenario`) — so it **follows the active model** and builds a blended track
+record. It writes only under `continuation/` (trades / equity / positions) and records each
+run in `manifest.json → segments`; the **frozen core is never modified**, so `account-verify`
+still proves the original window is intact. Reads (`build_report(account=...)`) see the
+combined frozen + continuation view automatically.
+
+The resume carries over **cash, open positions (with their real entry dates and trailing
+peaks → max-hold and trailing-stop clocks keep ticking) and the trailing equity (so the vol
+governor stays warm)**. It does *not* carry the engine's transient streak / cooldown /
+re-entry state, which resets at the seam — so a continuation is a faithful *forward* run, not
+bit-identical to a single uninterrupted backtest over the whole span (expect tiny differences
+right after the seam). The locked history is unaffected either way.

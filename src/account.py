@@ -53,15 +53,22 @@ def load_manifest(name: str) -> Dict[str, Any]:
 
 
 def load_ledger(name: str) -> Dict[str, Any]:
-    """Frozen trades / equity / positions DataFrames + manifest for an account."""
+    """Combined account view: the immutable frozen core PLUS any Phase-2 continuation
+    segments (trades/equity appended; positions = the latest live book)."""
     d = _acct_dir(name)
     man = load_manifest(name)
-    return {
-        "manifest": man,
-        "trades": pd.read_csv(d / "trades.csv"),
-        "equity": pd.read_csv(d / "equity.csv"),
-        "positions": pd.read_csv(d / "positions.csv"),
-    }
+    trades = pd.read_csv(d / "trades.csv")
+    equity = pd.read_csv(d / "equity.csv")
+    positions = pd.read_csv(d / "positions.csv")
+    cont = d / "continuation"
+    if (cont / "equity.csv").exists():            # living account — layer continuation on top
+        ct = cont / "trades.csv"
+        if ct.exists() and ct.stat().st_size > 0:
+            trades = pd.concat([trades, pd.read_csv(ct)], ignore_index=True)
+        equity = pd.concat([equity, pd.read_csv(cont / "equity.csv")], ignore_index=True)
+        if (cont / "positions.csv").exists():
+            positions = pd.read_csv(cont / "positions.csv")   # current book replaces frozen
+    return {"manifest": man, "trades": trades, "equity": equity, "positions": positions}
 
 
 def active_account() -> Optional[str]:
@@ -140,6 +147,82 @@ def freeze(name: str, scenario: str, start: date, end: date, *,
     if promote:
         (ACCOUNTS_DIR / "ACTIVE").write_text(name + "\n")
     return manifest
+
+
+# ── Continue (Phase 2: living continuation) ──────────────────────────────────────
+def continue_account(name: str, end: date, *, scenario: Optional[str] = None,
+                     now: Optional[str] = None) -> Dict[str, Any]:
+    """Extend a frozen account forward to `end`, seeded from its latest state, trading with
+    `scenario` (defaults to the account's base — pass the CURRENT model to 'follow active').
+    The frozen core is never modified; new days are appended under continuation/. Returns a
+    summary dict (or {'noop': True} if there's nothing past the current live end)."""
+    import datetime as _dt
+    from scenarios import build_config, load_scenario
+    from backtest import load_config, fetch_backtest_data, run_backtest
+
+    man = load_manifest(name)
+    scenario = scenario or man["scenario"]
+    d_dir = _acct_dir(name)
+    cont = d_dir / "continuation"
+
+    # Integrity gate: the frozen core must be intact before we extend it.
+    chk = verify(name)
+    core_drift = [f for f in (chk["drift"] + chk["missing"]) if not f.startswith("continuation/")]
+    if core_drift:
+        raise RuntimeError(f"Frozen core of '{name}' has drifted ({core_drift}); refusing to continue.")
+
+    led = load_ledger(name)                       # combined latest state
+    eq = led["equity"]
+    last_iso = str(eq["date"].iloc[-1])
+    if end.isoformat() <= last_iso:
+        return {"noop": True, "live_through": last_iso, "requested_end": end.isoformat()}
+    cont_start = date.fromisoformat(last_iso) + _dt.timedelta(days=1)
+
+    seed_cash = float(eq["cash"].iloc[-1])
+    seed_equity = list(eq["total_portfolio_value"].astype(float).iloc[-200:])
+    seed_positions = led["positions"]
+
+    cfg = build_config(load_config(ROOT / "config"), load_scenario(scenario))
+    # Price the continuation universe UNION held names, so seeded positions are always priced
+    # even if the (possibly switched) model's universe no longer lists them.
+    uni = list(dict.fromkeys(list(cfg["tickers"]) + list(seed_positions.get("ticker", []))))
+    pdata = fetch_backtest_data(uni, cont_start, end, warmup_days=150)
+    new_trades, new_eq, new_pos = run_backtest(
+        cfg, pdata, cont_start, end,
+        initial_cash=seed_cash, initial_positions=seed_positions, initial_equity=seed_equity)
+    if new_eq.empty:
+        return {"noop": True, "live_through": last_iso, "requested_end": end.isoformat()}
+
+    cont.mkdir(parents=True, exist_ok=True)
+    _append_csv(cont / "trades.csv", new_trades)
+    _append_csv(cont / "equity.csv", new_eq)
+    new_pos.to_csv(cont / "positions.csv", index=False)     # current book (replaced)
+
+    seg = {"scenario": scenario, "from": cont_start.isoformat(), "to": end.isoformat(),
+           "ran_at": now or _dt.datetime.now().isoformat(timespec="seconds"),
+           "n_trades": int(len(new_trades))}
+    segments = man.get("segments", []) + [seg]
+    man["segments"] = segments
+    man["live_through"] = str(new_eq["date"].iloc[-1])
+    man["live_value"] = float(new_eq["total_portfolio_value"].iloc[-1])
+    man["status"] = "living"
+    # Refresh ONLY the continuation hashes; the frozen-core hashes stay untouched.
+    man.setdefault("hashes", {})
+    for f in sorted(cont.glob("*.csv")):
+        man["hashes"][f"continuation/{f.name}"] = _sha256(f)
+    _manifest_path(name).write_text(json.dumps(man, indent=2))
+    return {"noop": False, **seg, "live_through": man["live_through"],
+            "live_value": man["live_value"], "segments": len(segments)}
+
+
+def _append_csv(path: Path, df: pd.DataFrame) -> None:
+    """Append rows to a CSV (header only when creating it). No-op for an empty frame."""
+    if df is None or df.empty:
+        return
+    if path.exists():
+        df.to_csv(path, mode="a", header=False, index=False)
+    else:
+        df.to_csv(path, index=False)
 
 
 # ── Verify ──────────────────────────────────────────────────────────────────────

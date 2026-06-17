@@ -271,6 +271,13 @@ def build_parser() -> argparse.ArgumentParser:
     av.add_argument("--name", required=True, help="account name")
     av.set_defaults(func=_cmd_account_verify)
 
+    ak = sub.add_parser("account-continue",
+                        help="Extend a frozen account forward (living continuation), seeded from its latest state")
+    ak.add_argument("--name", required=True, help="account name")
+    ak.add_argument("--end", required=True, metavar="YYYY-MM-DD", help="extend the account through this date")
+    ak.add_argument("--scenario", help="model to trade forward with (default: the account's base; pass the current model to 'follow active')")
+    ak.set_defaults(func=_cmd_account_continue)
+
     return parser
 
 
@@ -303,6 +310,22 @@ def _cmd_account_verify(args: argparse.Namespace) -> None:
         for f in r["missing"]:
             print(f"  MISSING: {f}")
         sys.exit(1)
+
+
+def _cmd_account_continue(args: argparse.Namespace) -> None:
+    import account
+    try:
+        r = account.continue_account(args.name, date.fromisoformat(args.end), scenario=args.scenario)
+    except (FileNotFoundError, RuntimeError) as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+    if r.get("noop"):
+        print(f"Nothing to do — '{args.name}' already live through {r['live_through']} "
+              f"(requested {r['requested_end']}).")
+        return
+    print(f"Extended '{args.name}' with {r['scenario']}: {r['from']} → {r['to']}  "
+          f"({r['n_trades']} new trades)")
+    print(f"  live through {r['live_through']}  ·  value {r['live_value']:,.0f}  ·  {r['segments']} segment(s)")
 
 
 def main(argv: Optional[List[str]] = None) -> None:

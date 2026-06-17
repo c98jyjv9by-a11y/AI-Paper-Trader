@@ -569,6 +569,10 @@ def run_backtest(
     start_date: date,
     end_date: date,
     signal_sink: Optional[List[Dict[str, Any]]] = None,
+    *,
+    initial_cash: Optional[float] = None,
+    initial_positions: Optional[pd.DataFrame] = None,
+    initial_equity: Optional[List[float]] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Walk-forward simulation over [start_date, end_date].
@@ -622,7 +626,7 @@ def run_backtest(
     # below the threshold by (1 - exposure_mult) — optionally only when momentum is inverting.
     vol_trim_score_below = config.get("risk", {}).get("vol_trim_score_below")   # None => whole-position mode
     vol_trim_require_spread = bool(config.get("risk", {}).get("vol_trim_require_spread", True))
-    port_values: List[float] = []        # running portfolio value series → daily-return vol
+    port_values: List[float] = list(initial_equity or [])  # running portfolio value series → daily-return vol
     # Persistence rules (default off):
     #   score_exit_below for score_exit_days consecutive days  -> SELL (score decay).
     #   score_entry_above for score_entry_days consecutive days -> BUY (persistence entry);
@@ -679,8 +683,21 @@ def run_backtest(
     n_timestamps = len(all_timestamps)
 
     # ── State ─────────────────────────────────────────────────────────────────
-    cash = float(starting_value)
-    positions = pd.DataFrame(columns=_POS_COLS)
+    # Optionally RESUME from a prior account state (Phase-2 living continuation): seed
+    # cash, open positions (with their real entry dates / trailing peaks → max-hold and
+    # trailing-stop clocks carry forward), and the trailing equity history (so the vol
+    # governor is warm from day one instead of treating it as a fresh $100k book).
+    cash = float(starting_value if initial_cash is None else initial_cash)
+    if initial_positions is not None and not initial_positions.empty:
+        positions = initial_positions.copy().reset_index(drop=True)
+        positions["entry_date"] = pd.to_datetime(positions["entry_date"]).dt.date
+        positions["shares"] = positions["shares"].astype(int)
+        for _c in ("entry_price", "current_price", "highest_price", "lowest_price"):
+            if _c in positions.columns:
+                positions[_c] = positions[_c].astype(float)
+        positions = positions[[c for c in _POS_COLS if c in positions.columns]].reset_index(drop=True)
+    else:
+        positions = pd.DataFrame(columns=_POS_COLS)
     pending_orders: List[Dict[str, Any]] = []
     all_trades: List[Dict[str, Any]] = []
     equity_curve: List[Dict[str, Any]] = []
