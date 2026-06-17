@@ -328,6 +328,21 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
     for x in rows:
         x["prior_rank_chg"] = (prev_rank_map.get(x["ticker"]) - x["rank"]) if x["ticker"] in prev_rank_map else None
 
+    # entry-date composite score for each held name (for the midday score-transition column):
+    # the score the model saw on the day the position was opened. One ranking per unique entry date.
+    entry_scores: Dict[str, Optional[float]] = {}
+    if not fast and not positions.empty and "entry_date" in positions.columns:
+        for ed in pd.Series(positions["entry_date"]).dropna().unique():
+            try:
+                sl = pdata.loc[:pd.Timestamp(ed)].iloc[-_SIGNAL_WINDOW:]
+                rf_e = rank_candidates(calculate_signals(sl, uni), top_n=len(uni),
+                                       weights=weights, ticker_weights=tw)
+                scm = dict(zip(rf_e["ticker"], rf_e["composite_score"]))
+            except Exception:
+                scm = {}
+            for t in positions.loc[positions["entry_date"] == ed, "ticker"]:
+                entry_scores[t] = scm.get(t)
+
     # intraday return progression (vs prior close) for the top/bottom-N prior-close names
     intraday = None
     if not fast:
@@ -395,7 +410,7 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
         "top_avg": top_avg, "bot_avg": bot_avg, "signal_strength": signal_strength,
         "advancers": advancers, "n_gate": n_gate,
         "rows_cur": rows_cur, "n_gate_cur": sum(1 for x in rows_cur if x["clears_gate"]),
-        "intraday": intraday,
+        "intraday": intraday, "entry_scores": entry_scores,
         "held_avg": (sum(held_rets) / len(held_rets)) if held_rets else None,
         "held_dw": held_dw,
         "positions": positions, "pv": pv, "cash": cash, "ret": ret, "stats": stats,

@@ -18,6 +18,7 @@ Read-only w.r.t. data/.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from datetime import date
 from pathlib import Path
@@ -57,6 +58,19 @@ def _rk_icon(chg):
 
 def _rk_color(v):
     return P.GREEN if v.startswith("▲") else (P.RED if v.startswith("▼") else P.MIDGREY)
+
+
+def _score_trend_color(s):
+    """Color a score-transition cell (e.g. '0.72→0.79→0.81') by last-vs-first direction."""
+    nums = re.findall(r"[01]\.\d+", s)
+    if len(nums) < 2:
+        return "#1f2a3a"
+    a, b = float(nums[0]), float(nums[-1])
+    if b > a + 0.005:
+        return P.GREEN
+    if b < a - 0.005:
+        return P.RED
+    return P.MIDGREY
 
 
 def _signal_today(ret, univ):
@@ -269,13 +283,20 @@ def _page2(pdf, d, cfg):
     live_rank = {r["ticker"]: r["rank"] for r in rows_live}
     live_score = {r["ticker"]: r["score"] for r in rows_live}
     prior_chg = {r["ticker"]: r.get("prior_rank_chg") for r in rows_prior}
+    entry_score = d.get("entry_scores") or {}
     mark = d["mark"]
 
-    def _score_then_now(t):
+    def _s2(x):
+        return f"{x:.2f}" if x is not None else "—"
+
+    def _score_then_now(t):                       # scoreboard: yesterday → today (2 scores)
         ps, ls = prior_score.get(t), live_score.get(t)
-        if ps is not None and ls is not None:
-            return f"{ps:.3f}→{ls:.3f}"
-        return (f"—→{ls:.3f}" if ls is not None else (f"{ps:.3f}→—" if ps is not None else "—"))
+        if ps is None and ls is None:
+            return "—"
+        return f"{_s2(ps)}→{_s2(ls)}"
+
+    def _score_path(t):                           # held book: entry → yesterday → today (3 scores)
+        return f"{_s2(entry_score.get(t))}→{_s2(prior_score.get(t))}→{_s2(live_score.get(t))}"
 
     # Current book — today's moves (worst first)
     y = P._section(ax, y, f"Current book — today's moves (worst first)  ·  {0 if pos is None else len(pos)} positions")
@@ -300,22 +321,24 @@ def _page2(pdf, d, cfg):
             except Exception:
                 dh = None
             hrows.append([t, ("—" if pr is None else str(pr)), ("—" if lv is None else str(lv)),
-                          _rk_icon(d_today), _rk_icon(prior_chg.get(t)), _score_then_now(t),
+                          _rk_icon(d_today), _rk_icon(prior_chg.get(t)), _score_path(t),
                           ("—" if dh is None else str(dh)), P._money(p["entry_price"], 2),
                           P._money(now_px, 2), P._pct(navpct), P._pct(u), P._pct(today),
                           _signal_today(today, univ)])
         book_unreal = (tot_now / tot_cost - 1) if tot_cost else None
         hrows.append(["TOTAL", "", "", "", "", "", "", "", "", P._pct((tot_now / nav) if nav else None),
                       P._pct(book_unreal), P._pct(d.get("held_dw")), ""])
-        cols = ["Ticker", "Prior #", "Live #", "Δ today", "Δ prior", "Score then→now", "Days",
+        cols = ["Ticker", "Prior #", "Live #", "Δ today", "Δ prior", "Score E→Y→T", "Days",
                 "Entry", "Now", "% NAV", "Unreal %", "Today %", "Signal Today"]
-        widths = [0.075, 0.045, 0.045, 0.05, 0.05, 0.135, 0.045, 0.08, 0.08, 0.065, 0.07, 0.07, 0.19]
+        widths = [0.07, 0.04, 0.04, 0.048, 0.048, 0.155, 0.042, 0.078, 0.078, 0.062, 0.068, 0.068, 0.183]
         align = ["left", "center", "center", "center", "center", "right", "right",
                  "right", "right", "right", "right", "right", "left"]
 
         def cb(r, c, v):
             if c in (3, 4):
                 return _rk_color(v)
+            if c == 5:
+                return _score_trend_color(v)
             if c in (10, 11):
                 return P._ret_color(P._parse_pct(v))
             if c == 12:
@@ -373,6 +396,8 @@ def _page2(pdf, d, cfg):
     def scol(r, c, v):
         if c in (3, 4):
             return _rk_color(v)
+        if c == 5:
+            return _score_trend_color(v)
         if c == 6:
             return P._ret_color(P._parse_pct(v))
         if c == 7:
