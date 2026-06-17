@@ -117,8 +117,8 @@ def build(matrix_json: Path, out: Path) -> Path:
 
         # Footer
         ax.add_line(P.plt.Line2D([0.06, 0.94], [0.035, 0.035], color=P.RULE, lw=0.8))
-        ax.text(0.06, 0.022, "Paper-trading research only — not investment advice. Simulated; "
-                "single window, not OOS-validated.", color=P.MIDGREY, fontsize=6.5, va="center")
+        ax.text(0.06, 0.022, "Paper-trading research only — not investment advice.",
+                color=P.MIDGREY, fontsize=6.5, va="center")
         ax.text(0.94, 0.022, "context-findings-snapshot", color=P.MIDGREY, fontsize=6.5,
                 va="center", ha="right")
         pdf.savefig(fig); P.plt.close(fig)
