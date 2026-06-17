@@ -1,4 +1,4 @@
-# Agent backtest — model_v4
+is t# Agent backtest — model_v4
 **Window:** 2026-01-05 → 2026-01-30  |  **Decider:** claude-sonnet-4-6  |  **Packet:** `eod_series_model_v4_2026-01-01_2026-01-31.pdf`
 
 _The agent reads one daily page at a time (no look-ahead) and emits structured trades; the harness owns all fills (next-open, with slippage) and accounting._

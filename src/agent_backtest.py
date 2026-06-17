@@ -191,13 +191,21 @@ def _spec_to_text(spec: Dict[str, Any], pf: Paper, prices: Dict[str, float]) -> 
 
 def _llm_actions(client, model: str, setting: str, spec, pf, prices, universe,
                  context_blocks: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    # Stable prefix (identical every call) → system block marked for prompt caching, so
+    # its input tokens are billed ~once across a run instead of per call. Activates only
+    # when the prefix clears Anthropic's min cacheable size (~1024 tokens); otherwise it's
+    # silently ignored (harmless). The per-day variable content stays in the user message.
+    system = [{
+        "type": "text",
+        "text": PLAN + "\n\nTRADEABLE UNIVERSE (only these tickers): " + ", ".join(universe),
+        "cache_control": {"type": "ephemeral"},
+    }]
     extra = ("\n\nADDITIONAL INFORMATION SOURCES:\n" + "\n\n".join(context_blocks)
              if context_blocks else "")
-    prompt = (f"{PLAN}\n\nYOUR SETTING: {setting.upper()}\nTradeable universe: "
-              f"{', '.join(universe)}\n\n{_spec_to_text(spec, pf, prices)}{extra}\n\n"
+    prompt = (f"YOUR SETTING: {setting.upper()}\n\n{_spec_to_text(spec, pf, prices)}{extra}\n\n"
               "Call submit_decisions with your actions for the next open (empty list = hold).")
     resp = client.messages.create(
-        model=model, max_tokens=1500,
+        model=model, max_tokens=1500, system=system,
         tools=[_ACTION_TOOL], tool_choice={"type": "tool", "name": "submit_decisions"},
         messages=[{"role": "user", "content": prompt}],
     )
