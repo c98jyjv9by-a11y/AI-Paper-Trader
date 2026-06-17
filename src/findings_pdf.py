@@ -89,13 +89,13 @@ def build(matrix_json: Path, out: Path) -> Path:
         # Real Sonnet justifications (discretionary), by context source
         y = P._section(ax, y - 0.006, "How the agent justified deviating  (real Sonnet quotes, discretionary)")
         y = P._bullets(ax, y, [
-            "Macro · avoided a trade: \"Momentum-inverted selloff (top names down harder); the model's "
-            "ADI/KLAC buys would add semi exposure into a reversal — poor timing, book already semi-heavy.\"",
-            "Macro · different trade: \"SELL ASML — SPY/QQQ below 50d MA, only 29% of names above their MA, "
-            "VIX 25.8; exit to cut risk in a deteriorating tape while the gain holds.\"",
-            "News · avoided a trade: \"The model's queued ADI & KLAC would be buying into a momentum "
+            "Macro · avoided a trade (2026-01-08): \"Momentum-inverted selloff (top names down harder); the "
+            "model's ADI/KLAC buys would add semi exposure into a reversal — poor timing, book already semi-heavy.\"",
+            "Macro · different trade (2026-04-07): \"SELL ASML — SPY/QQQ below 50d MA, only 29% of names above "
+            "their MA, VIX 25.8; exit to cut risk in a deteriorating tape while the gain holds.\"",
+            "News · avoided a trade (2026-01-08): \"The model's queued ADI & KLAC would be buying into a momentum "
             "washout, not a trend continuation — hold.\"",
-            "News · different trade: \"SELL ASML on negative headlines (US targeting China sales); "
+            "News · different trade (2026-04-07): \"SELL ASML on negative headlines (US targeting China sales); "
             "BUY INTC (top-ranked 0.971), funded by the ASML/OXY exits.\""],
             width=122, lh=0.0142, gap=0.0042, fontsize=7.4)
 
