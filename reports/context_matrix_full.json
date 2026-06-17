@@ -1,0 +1,29 @@
+{
+  "scenario": "model_v4",
+  "window": [
+    "2026-01-05",
+    "2026-06-16"
+  ],
+  "model": "claude-sonnet-4-6",
+  "strict_ret": 0.6983548083057862,
+  "bench": {
+    "model": 0.6961269432694734,
+    "SPY": 0.09401965806276391,
+    "QQQ": 0.18251152521009617
+  },
+  "repeats": 1,
+  "rows": [
+    {
+      "sources": "none",
+      "setting": "balanced",
+      "return": 0.7132265434665528,
+      "ret_std": 0.0,
+      "vs_strict": 0.014871735160766564,
+      "maxDD": -0.13671365378500544,
+      "sharpe": 2.958740553250398,
+      "trades": 38,
+      "divergences": 2,
+      "significant": false
+    }
+  ]
+}

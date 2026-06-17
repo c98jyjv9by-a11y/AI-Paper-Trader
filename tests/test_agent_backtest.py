@@ -156,6 +156,65 @@ def test_llm_actions_prompt_includes_context_blocks(monkeypatch):
 
     spec = _spec(date(2026, 1, 5))
     A._llm_actions(FakeClient(), "m", "discretionary", spec, A.Paper(1000), {},
-                   ["AAA"], context_blocks=["MARKET / MACRO CONTEXT: regime risk-on"])
+                   ["AAA"], context_blocks=["MARKET / MACRO CONTEXT: regime risk-on"],
+                   use_cache=False)
     assert "ADDITIONAL INFORMATION SOURCES" in captured["prompt"]
     assert "regime risk-on" in captured["prompt"]
+
+
+# ── LLM response cache ────────────────────────────────────────────────────────────
+class _Block:
+    type = "tool_use"
+    def __init__(self, actions): self.input = {"actions": actions}
+
+class _Resp:
+    def __init__(self, actions): self.content = [_Block(actions)]
+
+class _FakeClient:
+    def __init__(self, actions): self._actions = actions; self.calls = 0
+    class _M:
+        pass
+    @property
+    def messages(self):
+        outer = self
+        class M:
+            def create(self, **kw):
+                outer.calls += 1
+                return _Resp(outer._actions)
+        return M()
+
+class _BoomClient:
+    @property
+    def messages(self):
+        class M:
+            def create(self, **kw):
+                raise AssertionError("API called on a cache HIT — cache not working")
+        return M()
+
+
+def test_llm_cache_miss_writes_then_hit_replays(tmp_path, monkeypatch):
+    monkeypatch.setattr(A, "_LLM_CACHE_PATH", tmp_path / ".llm_cache.jsonl")
+    monkeypatch.setattr(A, "_LLM_CACHE", None)
+    spec = _spec(date(2026, 1, 5))
+    pf = A.Paper(100000)
+    acts = [{"action": "BUY", "ticker": "MU", "shares": 10, "reason": "x"}]
+
+    fake = _FakeClient(acts)
+    r1 = A._llm_actions(fake, "claude-sonnet-4-6", "discretionary", spec, pf, {}, ["MU"])
+    assert r1 == acts and fake.calls == 1                 # miss → called API
+    assert (tmp_path / ".llm_cache.jsonl").exists()       # persisted
+
+    # identical inputs → cache hit → must NOT call the API (BoomClient raises if it does)
+    r2 = A._llm_actions(_BoomClient(), "claude-sonnet-4-6", "discretionary", spec, pf, {}, ["MU"])
+    assert r2 == acts
+
+
+def test_llm_cache_bypassed_when_disabled(tmp_path, monkeypatch):
+    monkeypatch.setattr(A, "_LLM_CACHE_PATH", tmp_path / ".llm_cache.jsonl")
+    monkeypatch.setattr(A, "_LLM_CACHE", None)
+    spec = _spec(date(2026, 1, 5))
+    acts = [{"action": "SELL", "ticker": "BA", "shares": 2, "reason": "y"}]
+    fake = _FakeClient(acts)
+    A._llm_actions(fake, "m", "balanced", spec, A.Paper(1000), {}, ["BA"], use_cache=False)
+    A._llm_actions(fake, "m", "balanced", spec, A.Paper(1000), {}, ["BA"], use_cache=False)
+    assert fake.calls == 2                                # no caching → both hit the API

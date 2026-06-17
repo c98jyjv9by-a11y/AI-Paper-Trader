@@ -23,8 +23,10 @@ Paper/research only — never touches data/ live state; writes to reports/ only.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
+import threading
 from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -37,6 +39,41 @@ from risk import apply_slippage
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
 SETTINGS = ("strict", "balanced", "discretionary")
+
+# ── Persistent LLM response cache ─────────────────────────────────────────────────
+# Keyed by the EXACT (model, system, prompt) — so re-running an identical backtest replays
+# cached decisions instead of paying the API again, and makes runs reproducible. Disabled
+# for --repeats > 1 (noise measurement needs fresh, non-deterministic samples).
+_LLM_CACHE_PATH = Path(__file__).parent.parent / "reports" / ".llm_cache.jsonl"
+_LLM_CACHE: Optional[Dict[str, Any]] = None
+_LLM_CACHE_LOCK = threading.Lock()
+
+
+def _llm_cache() -> Dict[str, Any]:
+    global _LLM_CACHE
+    if _LLM_CACHE is None:
+        _LLM_CACHE = {}
+        if _LLM_CACHE_PATH.exists():
+            for line in _LLM_CACHE_PATH.read_text().splitlines():
+                if line.strip():
+                    try:
+                        rec = json.loads(line)
+                        _LLM_CACHE[rec["key"]] = rec["actions"]
+                    except (ValueError, KeyError):
+                        pass
+    return _LLM_CACHE
+
+
+def _cache_key(model: str, system: str, prompt: str) -> str:
+    return hashlib.sha256(f"{model}\x00{system}\x00{prompt}".encode()).hexdigest()
+
+
+def _cache_put(key: str, actions: List[Dict[str, Any]]) -> None:
+    with _LLM_CACHE_LOCK:
+        _llm_cache()[key] = actions
+        _LLM_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with _LLM_CACHE_PATH.open("a") as f:
+            f.write(json.dumps({"key": key, "actions": actions}) + "\n")
 
 # The forward plan the agent is asked to follow (per the user's spec).
 PLAN = """You are a disciplined paper-trading agent reading a DAILY packet — one page per
@@ -190,32 +227,42 @@ def _spec_to_text(spec: Dict[str, Any], pf: Paper, prices: Dict[str, float]) -> 
 
 
 def _llm_actions(client, model: str, setting: str, spec, pf, prices, universe,
-                 context_blocks: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+                 context_blocks: Optional[List[str]] = None,
+                 use_cache: bool = True) -> List[Dict[str, Any]]:
     # Stable prefix (identical every call) → system block marked for prompt caching, so
     # its input tokens are billed ~once across a run instead of per call. Activates only
     # when the prefix clears Anthropic's min cacheable size (~1024 tokens); otherwise it's
     # silently ignored (harmless). The per-day variable content stays in the user message.
-    system = [{
-        "type": "text",
-        "text": PLAN + "\n\nTRADEABLE UNIVERSE (only these tickers): " + ", ".join(universe),
-        "cache_control": {"type": "ephemeral"},
-    }]
+    system_text = PLAN + "\n\nTRADEABLE UNIVERSE (only these tickers): " + ", ".join(universe)
     extra = ("\n\nADDITIONAL INFORMATION SOURCES:\n" + "\n\n".join(context_blocks)
              if context_blocks else "")
     prompt = (f"YOUR SETTING: {setting.upper()}\n\n{_spec_to_text(spec, pf, prices)}{extra}\n\n"
               "Call submit_decisions with your actions for the next open (empty list = hold).")
+
+    # Persistent response cache: identical (model, system, prompt) → replay, no API call.
+    key = _cache_key(model, system_text, prompt)
+    if use_cache:
+        hit = _llm_cache().get(key)
+        if hit is not None:
+            return hit
+
     resp = client.messages.create(
-        model=model, max_tokens=1500, system=system,
+        model=model, max_tokens=1500,
+        system=[{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}],
         tools=[_ACTION_TOOL], tool_choice={"type": "tool", "name": "submit_decisions"},
         messages=[{"role": "user", "content": prompt}],
     )
+    actions: List[Dict[str, Any]] = []
     for block in resp.content:
         if getattr(block, "type", None) == "tool_use":
-            acts = block.input.get("actions", [])
-            return [{"action": a["action"], "ticker": str(a["ticker"]).upper(),
-                     "shares": int(a["shares"]), "reason": a.get("reason", "")}
-                    for a in acts if a.get("ticker") and int(a.get("shares", 0)) > 0]
-    return []
+            actions = [{"action": a["action"], "ticker": str(a["ticker"]).upper(),
+                        "shares": int(a["shares"]), "reason": a.get("reason", "")}
+                       for a in block.input.get("actions", [])
+                       if a.get("ticker") and int(a.get("shares", 0)) > 0]
+            break
+    if use_cache:
+        _cache_put(key, actions)
+    return actions
 
 
 # ── Divergence vs the model's queue ───────────────────────────────────────────────
@@ -358,7 +405,7 @@ def prepare_window(scenario: str, start: date, end: date,
             "d0": d0, "d1": d1, "bench": bench}
 
 
-def make_decider(setting_providers, cfg, client, model, no_llm):
+def make_decider(setting_providers, cfg, client, model, no_llm, use_cache=True):
     """Build a decide(setting, spec, pf, prices) closure. `setting_providers` is the list of
     ContextProvider instances active for this arm (empty = baseline / no extra context)."""
     def decide(setting, spec, pf, prices):
@@ -367,7 +414,8 @@ def make_decider(setting_providers, cfg, client, model, no_llm):
         if no_llm:
             return _rule_actions(setting, spec, pf, prices)
         blocks = [p.block(spec["mark"], cfg["tickers"], list(pf.pos)) for p in setting_providers]
-        return _llm_actions(client, model, setting, spec, pf, prices, cfg["tickers"], blocks)
+        return _llm_actions(client, model, setting, spec, pf, prices, cfg["tickers"], blocks,
+                            use_cache=use_cache)
     return decide
 
 

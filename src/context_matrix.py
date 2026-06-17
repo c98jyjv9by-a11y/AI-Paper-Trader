@@ -52,7 +52,9 @@ def run_matrix(scenario: str, start: date, end: date, *,
                repeats: int = 1, max_combo_size: Optional[int] = None,
                oos_window: Optional[Tuple[date, date]] = None,
                start_cash: float = 100_000.0, slippage: float = 0.001,
-               workers: Optional[int] = None, out: Optional[Path] = None) -> Dict[str, Any]:
+               workers: Optional[int] = None, arm_workers: int = 8,
+               out: Optional[Path] = None) -> Dict[str, Any]:
+    import concurrent.futures as cf
     import anthropic
     from context_providers import build_providers
 
@@ -67,16 +69,20 @@ def run_matrix(scenario: str, start: date, end: date, *,
     win = AB.prepare_window(scenario, start, end, workers)
     cfg, specs, close = win["cfg"], win["specs"], win["close"]
     n_days = len(specs)
+    # Short per-call timeout + bounded retries: a single stalled socket must never hang the
+    # whole sweep (the earlier run hung ~15 min on the SDK's 600s default timeout).
+    client = anthropic.Anthropic(api_key=AB._load_api_key(root), timeout=60.0, max_retries=8)
+    aw = max(1, min(arm_workers, n_llm_arms))
     print(f"Matrix: {len(combos)} source combos × {len(settings)} settings × {repeats} repeat(s) "
           f"= {n_llm_arms} LLM arms over {n_days} days ≈ {n_llm_arms * n_days:,} agent calls "
-          f"(+ strict reference, no LLM). Model: {model}.")
+          f"(+ strict reference, no LLM). Model: {model}. Arms run {aw}-way parallel.", flush=True)
 
-    client = anthropic.Anthropic(api_key=AB._load_api_key(root))
     # One provider instance per source, shared across combos (caches reused).
     pool = {s: build_providers([s], cfg["tickers"], start, end, close)[0] for s in sources}
 
+    use_cache = (repeats == 1)        # never cache repeats — they measure run-to-run noise
     def _arm(provider_list, setting):
-        decide = AB.make_decider(provider_list, cfg, client, model, no_llm=False)
+        decide = AB.make_decider(provider_list, cfg, client, model, no_llm=False, use_cache=use_cache)
         return AB._simulate(setting, specs, close, decide=decide,
                             start_cash=start_cash, slippage=slippage, seed_first_book=True)
 
@@ -86,15 +92,39 @@ def run_matrix(scenario: str, start: date, end: date, *,
                           start_cash=start_cash, slippage=slippage, seed_first_book=True)
     strict_ret = strict["ret"]
 
+    # Independent arms (combo × setting × repeat) run concurrently — each is internally
+    # sequential (its book evolves day by day), but arms don't depend on each other.
+    tasks = [(combo, setting, rep) for combo in combos
+             for setting in settings for rep in range(repeats)]
+
+    def _task(t):
+        combo, setting, _ = t
+        try:
+            return (combo, setting, _arm([pool[s] for s in combo], setting))
+        except Exception as exc:                          # one bad arm must not sink the matrix
+            return (combo, setting, {"ret": float("nan"), "mdd": float("nan"), "sharpe": None,
+                                     "n_trades": 0, "n_divergences": 0, "_error": str(exc)})
+
+    cells: Dict[tuple, list] = {}
+    with cf.ThreadPoolExecutor(max_workers=aw) as ex:
+        for combo, setting, r in ex.map(_task, tasks):
+            cells.setdefault((_combo_label(combo), setting), []).append(r)
+    failed = [(k, r.get("_error")) for k, rs in cells.items() for r in rs if "_error" in r]
+    if failed:
+        print(f"WARNING: {len(failed)}/{len(tasks)} arms failed and were dropped:", flush=True)
+        for (lbl, setting), err in failed[:8]:
+            print(f"  {lbl}/{setting}: {err[:140]}", flush=True)
+
     rows = []
     for combo in combos:
-        plist = [pool[s] for s in combo]
         for setting in settings:
-            reps = [_arm(plist, setting) for _ in range(repeats)]
-            rets = [r["ret"] for r in reps]
+            reps = cells[(_combo_label(combo), setting)]
+            rets = [r["ret"] for r in reps if r["ret"] == r["ret"]]   # drop NaN (failed arms)
+            if not rets:
+                continue
             mean = sum(rets) / len(rets)
             std = (sum((x - mean) ** 2 for x in rets) / len(rets)) ** 0.5 if len(rets) > 1 else 0.0
-            best = max(reps, key=lambda r: r["ret"])     # representative rep for the other metrics
+            best = max((r for r in reps if r["ret"] == r["ret"]), key=lambda r: r["ret"])
             rows.append({
                 "sources": _combo_label(combo), "setting": setting,
                 "return": mean, "ret_std": std, "vs_strict": mean - strict_ret,
@@ -129,7 +159,8 @@ def _oos_check(scenario, oos_window, topk, settings, model, sources, repeats,
     o0, o1 = oos_window
     win = AB.prepare_window(scenario, o0, o1, workers)
     cfg, specs, close = win["cfg"], win["specs"], win["close"]
-    client = anthropic.Anthropic(api_key=AB._load_api_key(Path(__file__).parent.parent))
+    client = anthropic.Anthropic(api_key=AB._load_api_key(Path(__file__).parent.parent),
+                                 timeout=60.0, max_retries=8)
     pool = {s: build_providers([s], cfg["tickers"], o0, o1, close)[0] for s in sources}
     strict = AB._simulate("strict", specs, close,
                           decide=AB.make_decider([], cfg, None, model, no_llm=False),
@@ -205,7 +236,8 @@ def main(argv=None):
     ap.add_argument("--repeats", type=int, default=1, help="runs per cell for a noise band")
     ap.add_argument("--max-combo-size", type=int)
     ap.add_argument("--oos-window", help="disjoint window START:END to re-check the top combos")
-    ap.add_argument("--workers", type=int)
+    ap.add_argument("--workers", type=int, help="parallel workers for the cover-series build")
+    ap.add_argument("--arm-workers", type=int, default=8, help="concurrent LLM arms (default 8)")
     ap.add_argument("--out")
     a = ap.parse_args(argv)
     oos = None
@@ -217,7 +249,8 @@ def main(argv=None):
         sources=[s.strip() for s in a.sources.split(",") if s.strip()],
         settings=[s.strip() for s in a.settings.split(",") if s.strip()],
         model=a.model, repeats=a.repeats, max_combo_size=a.max_combo_size,
-        oos_window=oos, workers=a.workers, out=Path(a.out) if a.out else None)
+        oos_window=oos, workers=a.workers, arm_workers=a.arm_workers,
+        out=Path(a.out) if a.out else None)
     print(f"\nWrote {res['report']}")
     print(f"Reference strict: {_pct(res['strict_ret'])}")
     for r in sorted(res["rows"], key=lambda x: -x["vs_strict"])[:6]:
