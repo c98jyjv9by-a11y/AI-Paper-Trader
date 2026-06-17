@@ -256,7 +256,53 @@ def build_parser() -> argparse.ArgumentParser:
     a = sub.add_parser("agent", help="Run the LIVE daily paper-trading agent (mutates data/)")
     a.set_defaults(func=_cmd_agent)
 
+    af = sub.add_parser("account-freeze",
+                        help="Freeze a scenario's trades+state over a window into an immutable account ledger")
+    af.add_argument("--name", required=True, help="account name (e.g. primary)")
+    af.add_argument("--scenario", required=True, help="scenario to freeze (e.g. model_v4)")
+    af.add_argument("--start", required=True, metavar="YYYY-MM-DD")
+    af.add_argument("--end", required=True, metavar="YYYY-MM-DD")
+    af.add_argument("--force", action="store_true", help="re-freeze, overwriting an existing frozen account")
+    af.add_argument("--no-promote", action="store_true", help="don't mark this account as the active/primary one")
+    af.set_defaults(func=_cmd_account_freeze)
+
+    av = sub.add_parser("account-verify",
+                        help="Verify a frozen account's files still match their manifest hashes")
+    av.add_argument("--name", required=True, help="account name")
+    av.set_defaults(func=_cmd_account_verify)
+
     return parser
+
+
+def _cmd_account_freeze(args: argparse.Namespace) -> None:
+    import account
+    try:
+        man = account.freeze(args.name, args.scenario,
+                             date.fromisoformat(args.start), date.fromisoformat(args.end),
+                             force=args.force, promote=not args.no_promote)
+    except FileExistsError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+    print(f"Froze account '{man['name']}' ({man['scenario']}) {man['inception']} → {man['frozen_through']}")
+    print(f"  ending value {man['ending_value']:,.0f}  ·  return {man['total_return']*100:+.2f}%  "
+          f"·  {man['n_trades']} trades  ·  {man['n_positions']} open positions")
+    print(f"  wrote accounts/{man['name']}/ (ledger + reports + {len(man['rankings_copied'])} ranking snapshots)"
+          + ("  ·  promoted to ACTIVE" if not args.no_promote else ""))
+
+
+def _cmd_account_verify(args: argparse.Namespace) -> None:
+    import account
+    r = account.verify(args.name)
+    if r["intact"]:
+        print(f"Account '{r['name']}' INTACT — {len(r['ok'])} files match the manifest "
+              f"(frozen through {r['frozen_through']}).")
+    else:
+        print(f"Account '{r['name']}' DRIFTED:")
+        for f in r["drift"]:
+            print(f"  CHANGED: {f}")
+        for f in r["missing"]:
+            print(f"  MISSING: {f}")
+        sys.exit(1)
 
 
 def main(argv: Optional[List[str]] = None) -> None:

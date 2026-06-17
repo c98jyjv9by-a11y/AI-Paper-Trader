@@ -10,6 +10,7 @@ All runners share one entry point — `python run.py <command>` (see `python run
 cd ai-paper-trader
 pip install -r requirements.txt
 
+python run.py account-freeze --name primary --scenario model_v4 --start … --end …  # freeze a scenario's trades+state over a window into an IMMUTABLE account ledger (accounts/<name>/: trades/equity/positions/rankings + rendered reports + manifest hashes); survives model/config changes & price revisions. account-verify --name <n> checks integrity. Reports read it via build_report(..., account=<n>)
 python run.py agent                                          # live daily agent
 python run.py backtest           --start … --end …           # backtest + diagnostics + sensitivity
 python run.py experiments        --start … --end …           # strategy experiment profiles

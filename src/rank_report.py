@@ -224,7 +224,8 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
                  *, cfg: Optional[Dict[str, Any]] = None, pdata: Optional[pd.DataFrame] = None,
                  eq: Optional[pd.DataFrame] = None, positions: Optional[pd.DataFrame] = None,
                  trades: Optional[pd.DataFrame] = None, fast: bool = False,
-                 write_snapshot: Optional[bool] = None) -> Dict[str, Any]:
+                 write_snapshot: Optional[bool] = None,
+                 account: Optional[str] = None) -> Dict[str, Any]:
     """Build the rank/status snapshot. The scenario run can pass its already-computed
     cfg/pdata/eq/positions to avoid re-fetching and re-running the backtest.
 
@@ -260,6 +261,15 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
     sl_cur = pdata.loc[:mark].iloc[-_SIGNAL_WINDOW:]
     rf_cur = rank_candidates(calculate_signals(sl_cur, uni), top_n=len(uni),
                              weights=weights, ticker_weights=tw).reset_index(drop=True)
+
+    # Account mode: serve the FROZEN ledger (immune to config/model changes & price
+    # revisions) instead of recomputing the book — the locked window stays reproducible.
+    if account and (eq is None or positions is None):
+        from account import load_ledger
+        led = load_ledger(account)
+        eq, positions = led["equity"], led["positions"]
+        if trades is None:
+            trades = led["trades"]
 
     # current held book + portfolio stats (reuse the scenario run's results if given)
     if eq is None or positions is None:

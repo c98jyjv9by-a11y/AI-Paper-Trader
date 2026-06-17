@@ -1,0 +1,48 @@
+# Frozen paper-trading accounts
+
+A **frozen account** is an immutable, version-controlled record of a scenario's trades and
+daily portfolio state over a window. We freeze the **derived ledger** (not the config), so
+the record survives later model/config changes **and** yfinance revising old prices. This
+is what makes a real, stable paper track record.
+
+> Paper-trading research only — no live orders, ever. Accounts live here under `accounts/`
+> and never touch the live-agent files in `data/`.
+
+## Layout — `accounts/<name>/`
+
+| File | What |
+|------|------|
+| `manifest.json` | metadata + SHA-256 of every frozen file (integrity) |
+| `trades.csv` | full BUY/SELL log for the window (authoritative) |
+| `equity.csv` | daily total value / cash / exposure_mult / forecast_vol |
+| `positions.csv` | open book at `frozen_through` |
+| `rankings/` | the daily write-once ranking snapshots in the window |
+| `reports/` | rendered status MD + EOD PDF + backtest report for the window |
+
+`accounts/ACTIVE` names the promoted/primary account.
+
+## Commands
+
+```bash
+# Freeze a window into an immutable account (refuses to overwrite without --force):
+python run.py account-freeze --name primary --scenario model_v4 --start 2026-01-01 --end 2026-06-17
+
+# Verify the frozen files still match their manifest hashes (integrity / drift check):
+python run.py account-verify --name primary
+```
+
+## Reading the frozen account in reports
+
+`rank_report.build_report(..., account="primary")` serves the **frozen** trades / equity /
+positions instead of recomputing — so a report for the locked window is reproducible
+regardless of what `model_v4.yaml` says today or how the price feed has been revised.
+
+## Guarantees & scope
+
+- **Immutable:** `account-freeze` refuses to overwrite an existing account (needs `--force`);
+  `manifest.json` hashes + `account-verify` + git detect any drift.
+- **Survives change:** because the *derived* ledger is stored (not re-derived), changing or
+  switching the model never alters a frozen account.
+- **Phase 1 = static record:** a frozen account does not trade forward. Forward continuation
+  (a living account that follows the active model from `frozen_through` onward) is a planned
+  Phase 2 and would append to the ledger while leaving the frozen prefix untouched.
