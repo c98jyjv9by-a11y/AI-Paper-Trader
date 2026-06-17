@@ -197,8 +197,17 @@ def _page1(pdf, d, cfg):
         ("Signal spread", P._pct(d.get("signal_strength")), P._ret_color(d.get("signal_strength"))),
     ])
 
+    # Market update — portfolio vs benchmark returns across windows
+    y = P._section(ax, y - 0.005, "Market update — returns by window")
+    brows = [[w, P._pct(s.get("port")), P._pct(s.get("spy")), P._pct(s.get("qqq"))]
+             for w, s in (d.get("stats") or {}).items()]
+    y = P._table(ax, y, ["Window", d["scenario"], "SPY", "QQQ"], brows,
+                 [0.34, 0.22, 0.22, 0.22], align=["left", "right", "right", "right"],
+                 row_h=0.021, fontsize=7.8, header_fontsize=7.4,
+                 text_color=lambda r, c, v: (P._ret_color(P._parse_pct(v)) if c >= 1 else "#1f2a3a"))
+
     tn = d["top_n"]
-    y = P._section(ax, y - 0.005, "Is the signal working so far?  (prior-close picks, intraday move)")
+    y = P._section(ax, y - 0.01, "Is the signal working so far?  (prior-close picks, intraday move)")
     spread = d.get("signal_strength")
     verdict = "—" if spread is None else ("WORKING" if spread > 0 else "INVERTED")
     vs_spy = (port - one.get("spy")) if (port is not None and one.get("spy") is not None) else None
@@ -248,18 +257,27 @@ def _page2(pdf, d, cfg):
             recs.append((retf(t) if retf else None, t, p))
         recs.sort(key=lambda x: (x[0] if x[0] is not None else 0))
         univ = d.get("univ_avg")
+        nav = d.get("pv") or 0.0
         hrows = []
+        tot_now = tot_cost = 0.0
         for today, t, p in recs:
-            u = p["current_price"] / p["entry_price"] - 1
-            hrows.append([t, (f"{cur.get(t):.3f}" if t in cur else "—"), str(int(p["shares"])),
-                          P._money(p["entry_price"], 2), P._money(p["current_price"], 2),
+            sh = int(p["shares"]); now_px = float(p["current_price"]); val = now_px * sh
+            tot_now += val; tot_cost += float(p["entry_price"]) * sh
+            u = now_px / p["entry_price"] - 1
+            navpct = (val / nav) if nav else None
+            hrows.append([t, (f"{cur.get(t):.3f}" if t in cur else "—"), str(sh),
+                          P._money(p["entry_price"], 2), P._money(now_px, 2), P._pct(navpct),
                           P._pct(u), P._pct(today), _signal_today(today, univ)])
-        y = P._table(ax, y, ["Ticker", "Score", "Shares", "Entry", "Now", "Unreal %", "Today %", "Signal Today"],
-                     hrows, [0.12, 0.10, 0.10, 0.13, 0.13, 0.12, 0.11, 0.19],
-                     align=["left", "right", "right", "right", "right", "right", "right", "left"],
-                     row_h=0.022, fontsize=7.6, header_fontsize=7.2,
-                     text_color=lambda r, c, v: (P._ret_color(P._parse_pct(v)) if c in (5, 6)
-                                                 else (_SIG_COLORS.get(v, "#1f2a3a") if c == 7 else "#1f2a3a")))
+        book_unreal = (tot_now / tot_cost - 1) if tot_cost else None
+        hrows.append(["TOTAL", "", "", "", "", P._pct((tot_now / nav) if nav else None),
+                      P._pct(book_unreal), P._pct(d.get("held_dw")), ""])
+        cols = ["Ticker", "Score", "Shares", "Entry", "Now", "% NAV", "Unreal %", "Today %", "Signal Today"]
+        y = P._table(ax, y, cols, hrows,
+                     [0.10, 0.085, 0.085, 0.10, 0.10, 0.09, 0.105, 0.10, 0.235],
+                     align=["left", "right", "right", "right", "right", "right", "right", "right", "left"],
+                     row_h=0.0205, fontsize=7.2, header_fontsize=6.9, emph_rows={len(hrows) - 1},
+                     text_color=lambda r, c, v: (P._ret_color(P._parse_pct(v)) if c in (6, 7)
+                                                 else (_SIG_COLORS.get(v, "#1f2a3a") if c == 8 else "#1f2a3a")))
 
     # Today's transactions so far
     tt = d.get("today_trades") or []
