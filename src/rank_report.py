@@ -216,9 +216,15 @@ def _write_ranking_snapshot(root: Path, scenario: str, d, ranked_rows) -> None:
 def build_report(scenario: str, start: date, end: date, top_n: int = 10,
                  *, cfg: Optional[Dict[str, Any]] = None, pdata: Optional[pd.DataFrame] = None,
                  eq: Optional[pd.DataFrame] = None, positions: Optional[pd.DataFrame] = None,
-                 trades: Optional[pd.DataFrame] = None, fast: bool = False) -> Dict[str, Any]:
+                 trades: Optional[pd.DataFrame] = None, fast: bool = False,
+                 write_snapshot: Optional[bool] = None) -> Dict[str, Any]:
     """Build the rank/status snapshot. The scenario run can pass its already-computed
-    cfg/pdata/eq/positions to avoid re-fetching and re-running the backtest."""
+    cfg/pdata/eq/positions to avoid re-fetching and re-running the backtest.
+
+    `fast` (used by the cover-series harness) skips the snapshot read/write + intraday fetch.
+    `write_snapshot` overrides only the WRITE: e.g. a midday run wants to LOAD the prior EOD
+    snapshot and compute intraday (fast=False) but must NOT write a provisional one for the
+    in-progress day (write_snapshot=False)."""
     root = Path(__file__).parent.parent
     if cfg is None:
         cfg = build_config(load_config(root / "config"), load_scenario(scenario))
@@ -294,8 +300,10 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
             "price": _px(t, mark), "held": t in held,
         })
     # Persist the current ranking as the snapshot for `mark`'s date (becomes the next
-    # session's authoritative prior-close ranking). Skipped in fast/series mode.
-    if not fast:
+    # session's authoritative prior-close ranking). Skipped in fast/series mode, and
+    # explicitly suppressible (e.g. a midday run must not write a provisional snapshot).
+    do_write = (not fast) if write_snapshot is None else write_snapshot
+    if do_write:
         try:
             _write_ranking_snapshot(root, scenario, mark.date(), rows_cur)
         except Exception as exc:

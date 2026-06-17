@@ -97,6 +97,73 @@ def _anomalies(d: Dict[str, Any], cfg: Dict[str, Any]) -> List[str]:
     return out
 
 
+def _intraday_table(ax, y, title, tickers, intra, cps, retf):
+    y = P._section(ax, y, title)
+    if not tickers:
+        ax.text(0.075, y, "(none)", color=P.MIDGREY, fontsize=7.2, va="top")
+        return y - 0.018
+    labels = [lbl for _, lbl in cps]
+    cols = ["Ticker"] + labels + ["Latest"]
+    n = len(cps)
+    rem = 1 - 0.13 - 0.13
+    cw = [0.13] + ([rem / n] * n if n else []) + [0.13] if n else [0.5, 0.5]
+    by_cp = {hhmm: [] for hhmm, _ in cps}
+    lat = []
+    rows = []
+    for t in tickers:
+        rec = (intra or {}).get(t, {})
+        latest = retf(t) if retf else None
+        row = [t] + [P._pct(rec.get(hhmm)) for hhmm, _ in cps] + [P._pct(latest)]
+        rows.append(row)
+        for hhmm, _ in cps:
+            v = rec.get(hhmm)
+            if v is not None:
+                by_cp[hhmm].append(v)
+        if latest is not None:
+            lat.append(latest)
+    avg = ["AVG"] + [P._pct(sum(by_cp[h]) / len(by_cp[h]) if by_cp[h] else None) for h, _ in cps] \
+          + [P._pct(sum(lat) / len(lat) if lat else None)]
+    rows.append(avg)
+    aln = ["left"] + ["right"] * (len(cols) - 1)
+    return P._table(ax, y, cols, rows, cw, align=aln, row_h=0.0162, fontsize=6.8,
+                    header_fontsize=6.6,
+                    text_color=lambda r, c, v: (P._ret_color(P._parse_pct(v)) if c >= 1 else "#1f2a3a"))
+
+
+def _page3(pdf, d, cfg):
+    from rank_report import _CHECKPOINTS
+    fig, ax = P._new_page(pdf)
+    _banner(ax, d["scenario"], d["mark"], d["rank_close"])
+    y = 0.90
+    y = P._section(ax, y, "Intraday return paths — 1-hour intervals (vs prior close, Chicago time)")
+    intra = d.get("intraday")
+    rows = d.get("rows") or []
+    tn = d["top_n"]
+    top = [r["ticker"] for r in rows[:tn]]
+    bottom = [r["ticker"] for r in rows[-tn:]]
+    pos = d.get("positions")
+    held = sorted(pos["ticker"]) if (pos is not None and not pos.empty) else []
+    retf = d.get("ret")
+
+    if not intra:
+        ax.text(0.075, y, "Intraday 30-min data unavailable for this session yet "
+                "(run later in the session, or the feed has no intraday bars).",
+                color=P.MIDGREY, fontsize=8.4, va="top")
+        _footer(ax, 3); pdf.savefig(fig); P.plt.close(fig)
+        return
+
+    allt = list(dict.fromkeys(top + bottom + held))
+    cps = [cp for cp in _CHECKPOINTS if any(intra.get(t, {}).get(cp[0]) is not None for t in allt)]
+    ax.text(0.06, y, f"Return vs the {d['rank_close']} close at each elapsed hour; AVG = group mean. "
+            "Prior ranking from the EOD snapshot.", color=P.MIDGREY, fontsize=7.0, va="top", style="italic")
+    y -= 0.02
+    y = _intraday_table(ax, y, f"Prior Top {tn} (by EOD score)", top, intra, cps, retf)
+    y = _intraday_table(ax, y - 0.006, f"Prior Bottom {tn} (by EOD score)", bottom, intra, cps, retf)
+    y = _intraday_table(ax, y - 0.006, f"Currently held ({len(held)})", held, intra, cps, retf)
+    _footer(ax, 3)
+    pdf.savefig(fig); P.plt.close(fig)
+
+
 def _page1(pdf, d, cfg):
     fig, ax = P._new_page(pdf)
     _banner(ax, d["scenario"], d["mark"], d["rank_close"])
@@ -128,7 +195,13 @@ def _page1(pdf, d, cfg):
                  text_color=lambda r, c, v: (P._ret_color(P._parse_pct(v))
                                              if c == 1 and "%" in v and "/" not in v else "#1f2a3a"))
 
-    y = P._section(ax, y - 0.012, "What's NOT behaving as expected")
+    src = (f"EOD snapshot {d['rank_close']}" if d.get("snapshot_used")
+           else f"recomputed from {d['rank_close']} close (no EOD snapshot found)")
+    ax.text(0.06, y - 0.004, f"Prior top/bottom ranking source: {src}.",
+            color=P.MIDGREY, fontsize=7.2, va="top", style="italic")
+    y -= 0.022
+
+    y = P._section(ax, y - 0.008, "What's NOT behaving as expected")
     y = P._bullets(ax, y, _anomalies(d, cfg), width=110, lh=0.0162, gap=0.006, fontsize=8.6)
 
     _footer(ax, 1)
@@ -207,6 +280,7 @@ def build_pdf(d: Dict[str, Any], cfg: Dict[str, Any], out_path: Path) -> Path:
     with PdfPages(out_path) as pdf:
         _page1(pdf, d, cfg)
         _page2(pdf, d, cfg)
+        _page3(pdf, d, cfg)
     return out_path
 
 
@@ -216,7 +290,9 @@ def run(scenario: str, start: date, end: date, output: Optional[Path] = None) ->
     from backtest import load_config as _load_cfg
     root = Path(__file__).parent.parent
     cfg = build_config(_load_cfg(root / "config"), load_scenario(scenario))
-    d = rank_report.build_report(scenario, start, end, cfg=cfg, fast=True)  # fast: no snapshot write / no intraday fetch
+    # Load the prior EOD ranking snapshot (authoritative prior top/bottom + scores) and
+    # compute intraday paths, but DON'T write a provisional snapshot for the in-progress day.
+    d = rank_report.build_report(scenario, start, end, cfg=cfg, write_snapshot=False)
     out = output or (root / "reports" / f"midday_{scenario}_{d['mark'].isoformat()}.pdf")
     return build_pdf(d, cfg, out)
 
