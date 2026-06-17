@@ -238,6 +238,14 @@ def _mdd(vals: List[float]) -> float:
     return dd
 
 
+def _sharpe(vals: List[float]) -> Optional[float]:
+    s = pd.Series(vals, dtype=float)
+    r = s.pct_change().dropna()
+    if len(r) < 2 or r.std() == 0:
+        return None
+    return float(r.mean() / r.std() * (252 ** 0.5))
+
+
 def _seed_from_first_page(pf: Paper, spec: Dict[str, Any]) -> None:
     """Initialize the paper book to the model's held book shown on the first page, so the
     agent starts level with the model instead of flat (it would otherwise permanently miss
@@ -290,7 +298,7 @@ def _simulate(setting: str, specs: List[Dict[str, Any]], close: pd.DataFrame,
     vals = [v for _, v in equity]
     return {"setting": setting, "equity": equity, "trades": trades, "divergences": divergences,
             "final": vals[-1], "ret": vals[-1] / start_cash - 1, "mdd": _mdd(vals),
-            "n_trades": len(trades), "n_divergences": len(divergences)}
+            "sharpe": _sharpe(vals), "n_trades": len(trades), "n_divergences": len(divergences)}
 
 
 def _load_api_key(root: Path) -> Optional[str]:
@@ -310,28 +318,59 @@ def _load_api_key(root: Path) -> Optional[str]:
 
 
 # ── Orchestration ──────────────────────────────────────────────────────────────
-def run(scenario: str, start: date, end: date, *,
-        settings=SETTINGS, model: str = DEFAULT_MODEL, no_llm: bool = False,
-        start_cash: float = 100_000.0, slippage: float = 0.001, seed_first_book: bool = True,
-        context: str = "", workers: Optional[int] = None, out: Optional[Path] = None) -> Dict[str, Any]:
+def prepare_window(scenario: str, start: date, end: date,
+                   workers: Optional[int] = None) -> Dict[str, Any]:
+    """Build everything reusable across arms ONCE: cover-series specs (the daily packet),
+    the price panel, and the model/SPY/QQQ benchmarks. Shared by run() and the matrix sweep."""
     from scenarios import build_config, load_scenario
     from backtest import load_config, fetch_backtest_data, run_backtest
 
     root = Path(__file__).parent.parent
-    # 1) Build the daily packet (PDF + per-date specs the agent reads).
     series = run_cover_series(scenario, start, end, workers=workers)
     specs = series["specs"]
     if not specs:
         raise RuntimeError("No daily pages produced.")
-
-    # 2) Prices for fills/marks + the model & index benchmarks.
     cfg = build_config(load_config(root / "config"), load_scenario(scenario))
     panel = fetch_backtest_data(cfg["tickers"], start, end)
     close = panel["Close"]
     _t, eq, _p = run_backtest(cfg, panel, start, end)
     eq_by = dict(zip(eq["date"].astype(str), eq["total_portfolio_value"].astype(float)))
 
-    # Optional information-source providers injected into the agent context.
+    d0, d1 = specs[0]["mark"].isoformat(), specs[-1]["mark"].isoformat()
+    ts0, ts1 = pd.Timestamp(d0), pd.Timestamp(d1)
+
+    def _bench(sym):
+        try:
+            return float(close.loc[ts1, sym]) / float(close.loc[ts0, sym]) - 1
+        except Exception:
+            return None
+    bench = {"model": (eq_by[d1] / eq_by[d0] - 1) if d0 in eq_by and d1 in eq_by else None,
+             "SPY": _bench("SPY"), "QQQ": _bench("QQQ")}
+    return {"cfg": cfg, "specs": specs, "close": close, "pdf": series["pdf"],
+            "d0": d0, "d1": d1, "bench": bench}
+
+
+def make_decider(setting_providers, cfg, client, model, no_llm):
+    """Build a decide(setting, spec, pf, prices) closure. `setting_providers` is the list of
+    ContextProvider instances active for this arm (empty = baseline / no extra context)."""
+    def decide(setting, spec, pf, prices):
+        if setting == "strict":
+            return _strict_actions(spec)
+        if no_llm:
+            return _rule_actions(setting, spec, pf, prices)
+        blocks = [p.block(spec["mark"], cfg["tickers"], list(pf.pos)) for p in setting_providers]
+        return _llm_actions(client, model, setting, spec, pf, prices, cfg["tickers"], blocks)
+    return decide
+
+
+def run(scenario: str, start: date, end: date, *,
+        settings=SETTINGS, model: str = DEFAULT_MODEL, no_llm: bool = False,
+        start_cash: float = 100_000.0, slippage: float = 0.001, seed_first_book: bool = True,
+        context: str = "", workers: Optional[int] = None, out: Optional[Path] = None) -> Dict[str, Any]:
+    root = Path(__file__).parent.parent
+    win = prepare_window(scenario, start, end, workers)
+    cfg, specs, close, bench = win["cfg"], win["specs"], win["close"], win["bench"]
+
     providers = []
     if context.strip() and not no_llm:
         from context_providers import build_providers
@@ -342,34 +381,17 @@ def run(scenario: str, start: date, end: date, *,
         import anthropic                            # lazy: only when an LLM setting runs
         client = anthropic.Anthropic(api_key=_load_api_key(root))
 
-    def decide(setting, spec, pf, prices):
-        if setting == "strict":
-            return _strict_actions(spec)
-        if no_llm:
-            return _rule_actions(setting, spec, pf, prices)
-        blocks = [p.block(spec["mark"], cfg["tickers"], list(pf.pos)) for p in providers]
-        return _llm_actions(client, model, setting, spec, pf, prices, cfg["tickers"], blocks)
-
+    decide = make_decider(providers, cfg, client, model, no_llm)
     results = {s: _simulate(s, specs, close, decide=decide, start_cash=start_cash,
                             slippage=slippage, seed_first_book=seed_first_book)
                for s in settings}
 
-    # 3) Benchmarks over the same page window.
-    d0, d1 = specs[0]["mark"].isoformat(), specs[-1]["mark"].isoformat()
-    ts0, ts1 = pd.Timestamp(d0), pd.Timestamp(d1)
-    def _bench(sym):
-        try:
-            return float(close.loc[ts1, sym]) / float(close.loc[ts0, sym]) - 1
-        except Exception:
-            return None
-    model_ret = (eq_by[d1] / eq_by[d0] - 1) if d0 in eq_by and d1 in eq_by else None
-    bench = {"model": model_ret, "SPY": _bench("SPY"), "QQQ": _bench("QQQ")}
-
+    d0, d1 = win["d0"], win["d1"]
     out = Path(out) if out else (root / "reports" /
           f"agent_backtest_{scenario}_{start.isoformat()}_{end.isoformat()}.md")
-    out.write_text(_report(scenario, d0, d1, results, bench, model, no_llm, series["pdf"],
+    out.write_text(_report(scenario, d0, d1, results, bench, model, no_llm, win["pdf"],
                            seed_first_book, context))
-    return {"report": str(out), "pdf": series["pdf"], "results": results, "bench": bench}
+    return {"report": str(out), "pdf": win["pdf"], "results": results, "bench": bench}
 
 
 def _report(scenario, d0, d1, results, bench, model, no_llm, pdf, seeded=True, context="") -> str:

@@ -105,6 +105,9 @@ class MacroProvider(ContextProvider):
 
 
 # ── News + sentiment (Finnhub, date-bounded → point-in-time-safe) ─────────────────
+_NEWS_CACHE: Dict[tuple, list] = {}                # (ticker, from, to) -> articles; dedupes across arms
+
+
 class NewsProvider(ContextProvider):
     name = "news"
 
@@ -113,25 +116,30 @@ class NewsProvider(ContextProvider):
         self.max_names = max_names
         self.key = _env_key("FINNHUB_API_KEY")
 
+    def _fetch(self, ticker, frm, to):
+        ckey = (ticker, frm, to)
+        if ckey in _NEWS_CACHE:
+            return _NEWS_CACHE[ckey]
+        try:
+            import requests
+            r = requests.get("https://finnhub.io/api/v1/company-news",
+                             params={"symbol": ticker, "from": frm, "to": to, "token": self.key},
+                             timeout=10)
+            arts = r.json() if r.ok else []
+        except Exception:
+            arts = []
+        _NEWS_CACHE[ckey] = arts
+        return arts
+
     def block(self, day, universe, holdings):
         if not self.key:
             return "NEWS: (no FINNHUB_API_KEY configured — skipped)"
-        try:
-            import requests
-        except ImportError:
-            return "NEWS: (requests not installed — skipped)"
         names = list(dict.fromkeys(list(holdings) + universe))[: self.max_names]
         frm = (day - timedelta(days=self.lookback_days)).isoformat()
         to = day.isoformat()                       # inclusive, <= decision date (no look-ahead)
         out = ["NEWS (last few days, per name):"]
         for t in names:
-            try:
-                r = requests.get("https://finnhub.io/api/v1/company-news",
-                                 params={"symbol": t, "from": frm, "to": to, "token": self.key},
-                                 timeout=10)
-                arts = r.json() if r.ok else []
-            except Exception:
-                arts = []
+            arts = self._fetch(t, frm, to)
             if arts:
                 heads = "; ".join(a.get("headline", "")[:90] for a in arts[:2])
                 out.append(f"  {t}: {heads}")
