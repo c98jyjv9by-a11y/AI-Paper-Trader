@@ -222,9 +222,12 @@ def _table(ax, y: float, col_labels: List[str], rows: List[List[str]],
            row_h: float = 0.0235, fontsize: float = 8.0,
            align: Optional[List[str]] = None,
            text_color: Optional[Callable[[int, int, str], str]] = None,
-           header_fontsize: float = 7.8, emph_rows: Optional[set] = None) -> float:
+           header_fontsize: float = 7.8, emph_rows: Optional[set] = None,
+           glyphs: Optional[Callable[[int, int], Optional[tuple]]] = None) -> float:
     """Lightweight banded table drawn with primitives (full control over colours).
-    `emph_rows` (row indices) are shaded with an accent tint and bolded — e.g. an AVG row."""
+    `emph_rows` (row indices) are shaded with an accent tint and bolded — e.g. an AVG row.
+    `glyphs(r, c) -> (text, color) | None` draws a small LEFT-aligned glyph in a cell with
+    its OWN colour (e.g. a ▲/▼ trend arrow), independent of the right-aligned value's colour."""
     width = x1 - x0
     emph = emph_rows or set()
     xs = [x0]
@@ -252,8 +255,21 @@ def _table(ax, y: float, col_labels: List[str], rows: List[List[str]],
             cx, a = _cell_x(xs, c, align)
             col = text_color(r, c, val) if text_color else "#1f2a3a"
             fw = "bold" if (c == 0 or r in emph) else "normal"
-            ax.text(cx, y - row_h / 2, val, color=col, fontsize=fontsize,
-                    va="center", ha=a, fontweight=fw, zorder=2)
+            tval = ax.text(cx, y - row_h / 2, val, color=col, fontsize=fontsize,
+                           va="center", ha=a, fontweight=fw, zorder=2)
+            g = glyphs(r, c) if glyphs else None
+            if g and g[0]:                                   # trend arrow, own colour, hugging the value
+                gx, gha = xs[c] + 0.006, "left"
+                if a == "right":                             # place just LEFT of the right-aligned value
+                    try:
+                        bb = tval.get_window_extent(renderer=ax.figure.canvas.get_renderer())
+                        inv = ax.transAxes.inverted()
+                        w_ax = inv.transform((bb.x1, 0))[0] - inv.transform((bb.x0, 0))[0]
+                        gx, gha = cx - w_ax - 0.004, "right"
+                    except Exception:
+                        pass
+                ax.text(gx, y - row_h / 2, g[0], color=g[1], fontsize=fontsize,
+                        va="center", ha=gha, fontweight="bold", zorder=2)
         y -= row_h
     ax.add_line(plt.Line2D([x0, x1], [y, y], color=RULE, lw=0.8))
     return y - 0.012

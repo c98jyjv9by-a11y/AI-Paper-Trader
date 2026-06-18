@@ -457,7 +457,7 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
     if do_intraday:
         try:
             need = ([x["ticker"] for x in rows[:top_n]] + [x["ticker"] for x in rows[-top_n:]]
-                    + sorted(held))                          # include held positions too
+                    + sorted(held) + ["SPY", "QQQ"])         # held + benchmarks for the intraday page
             # Anchor each needed ticker to its actual prior close (not just the snapshot rows),
             # so held names outside the top/bottom-N still get intraday checkpoints.
             pc_map = {t: _px(t, rank_close) for t in set(need) if _px(t, rank_close)}
@@ -479,11 +479,16 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
     bot_avg = (sum(_bret) / len(_bret)) if _bret else None
     signal_strength = (top_avg - bot_avg) if (top_avg is not None and bot_avg is not None) else None
     n_gate = sum(1 for _, r in rf.iterrows() if (min_score is None or r["composite_score"] >= min_score))
-    # dollar-weighted held-book return over the session
-    dw_num = sum(p["shares"] * close.loc[rank_close, p["ticker"]] * (ret(p["ticker"]) or 0.0)
-                 for _, p in positions.iterrows() if p["ticker"] in close.columns)
-    dw_den = sum(p["shares"] * close.loc[rank_close, p["ticker"]]
-                 for _, p in positions.iterrows() if p["ticker"] in close.columns)
+    # Dollar-weighted held-book return — weights by CURRENT market value so it equals the
+    # attribution table's Book row exactly: held_dw = Σ wᵢ·retᵢ, wᵢ = sharesᵢ·markᵢ /
+    # Σ(shares·mark), cash-excluded, retᵢ = return vs the prior close. (Single definition of
+    # the book return reused across the midday/EOD reports and the sleeve attribution.)
+    def _mk(t):
+        return close.loc[mark, t] if (t in close.columns and not pd.isna(close.loc[mark, t])) else None
+    dw_num = sum(p["shares"] * _mk(p["ticker"]) * (ret(p["ticker"]) or 0.0)
+                 for _, p in positions.iterrows() if _mk(p["ticker"]) is not None)
+    dw_den = sum(p["shares"] * _mk(p["ticker"])
+                 for _, p in positions.iterrows() if _mk(p["ticker"]) is not None)
     held_dw = (dw_num / dw_den) if dw_den else None
 
     # portfolio vs benchmarks (trailing windows from the run's equity)

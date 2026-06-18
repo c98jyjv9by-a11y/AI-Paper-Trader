@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import textwrap
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -31,6 +32,17 @@ sys.path.insert(0, str(Path(__file__).parent))
 import pdf_report as P            # shared palette + table/cell helpers + render_current_book
 # Shared signal/rank cell helpers live in pdf_report (single source of truth for both reports).
 from pdf_report import _SIG_COLORS, _signal_today, _rk_icon, _rk_color, _score_trend_color
+
+
+def _caption(ax, y, text, *, x=0.06, width=116, fontsize=7.0, color=None,
+             style="italic", weight="normal", lh=0.0145):
+    """Draw a text callout WRAPPED to `width` chars so it never runs off the page; returns
+    the y below the last line. Used for the italic notes and verdict lines."""
+    for line in textwrap.wrap(text, width=width):
+        ax.text(x, y, line, color=(color or P.MIDGREY), fontsize=fontsize, va="top",
+                style=style, fontweight=weight)
+        y -= lh
+    return y
 
 
 def _footer(ax, page):
@@ -100,70 +112,291 @@ def _anomalies(d: Dict[str, Any], cfg: Dict[str, Any]) -> List[str]:
     return out
 
 
+def _arrow(prev, cur):
+    """Trend arrow + colour, cur vs the prior value: ▲ green up / ▼ red down.
+    (FLAT classification disabled for now — re-enable the block below to show a grey – when the
+    move is within ±2%, i.e. cur/prev in 0.98–1.02.)"""
+    # if prev != 0 and 0.98 <= cur / prev <= 1.02:
+    #     return "–", P.MIDGREY                      # FLAT (±2%) — commented out for now
+    return ("▲", P.GREEN) if cur > prev else ("▼", P.RED)
+
+
+def _cell_trends(seq):
+    """Per-cell (arrows, colors) for a value sequence: each entry vs the prior non-empty one.
+    First/empty entries get no arrow and neutral color (nothing to compare)."""
+    arrows, colors, prev = [], [], None
+    for s in seq:
+        if s is None or prev is None:
+            arrows.append(""); colors.append("#1f2a3a")
+        else:
+            ic, col = _arrow(prev, s); arrows.append(ic); colors.append(col)
+        if s is not None:
+            prev = s
+    return arrows, colors
+
+
+def _row(label, seq, *, trend=False):
+    """One series row → (label, cells, value_colors, arrow_glyphs). Value colour = SIGN of the
+    value (green +/red −). With trend=True each cell also carries a ▲/▼ arrow whose direction
+    AND colour come from the change vs the prior cell (green up / red down) — the two encodings
+    are independent: a positive value that ticked down shows green text with a red ▼."""
+    cells = [P._pct(s) for s in seq]
+    vcolors = [P._ret_color(s) for s in seq]
+    if trend:
+        arrows, acolors = _cell_trends(seq)
+        gl = [(arrows[j], acolors[j]) for j in range(len(seq))]
+    else:
+        gl = [None] * len(seq)
+    return label, cells, vcolors, gl
+
+
+def _render_rows(ax, y, cols, cw, specs, emph, *, row_h, fs, hfs, header_rows=frozenset()):
+    """Render row-specs (label, cells, value_colors, arrow_glyphs) via the shared table: value
+    text uses its sign colour; the arrow glyph hugs the value in its own colour. `header_rows`
+    are group sub-headers — their label is drawn in the accent colour (and they're emphasised)."""
+    rows = [[s[0]] + list(s[1]) for s in specs]
+    vcolors = [s[2] for s in specs]
+    glyphs = [s[3] for s in specs]
+
+    def tcol(r, c, v):
+        if c == 0:
+            return P.ACCENT if r in header_rows else "#1f2a3a"
+        vc = vcolors[r]
+        return vc[c - 1] if (c - 1) < len(vc) else "#1f2a3a"
+
+    def gly(r, c):
+        if c == 0:
+            return None
+        g = glyphs[r]
+        return g[c - 1] if (g and (c - 1) < len(g)) else None
+    return P._table(ax, y, cols, rows, cw, align=["left"] + ["right"] * (len(cols) - 1),
+                    row_h=row_h, fontsize=fs, header_fontsize=hfs, emph_rows=emph,
+                    text_color=tcol, glyphs=gly)
+
+
+def _held_sleeves(d):
+    """Held names split into momentum vs decoupled by their PRIOR-CLOSE score rank (held
+    constant — the classification doesn't drift intraday), with current-value weights (so the
+    sleeves sum to held_dw). Returns (holds, mom_wt, dec_wt) where holds=[{t,w,mom}]."""
+    pos, gate = d.get("positions"), (d.get("min_score") or 0.70)
+    pscore = {r["ticker"]: r["score"] for r in (d.get("rows") or [])}   # prior-close score, fixed
+    holds = []
+    if pos is not None and not pos.empty:
+        vals = {p["ticker"]: float(p["shares"]) * float(p["current_price"]) for _, p in pos.iterrows()}
+        tot = sum(vals.values()) or 1.0
+        for t, v in vals.items():
+            sc = pscore.get(t)
+            holds.append({"t": t, "w": v / tot, "mom": (sc is not None and sc >= gate)})
+    return holds, sum(h["w"] for h in holds if h["mom"]), sum(h["w"] for h in holds if not h["mom"])
+
+
+def _attribution_table(ax, y, d, cps, intra, retf, top, bottom):
+    """Step-by-step attribution, read top-down: benchmarks → leaders vs laggards → their spread
+    (the momentum signal) → the held book split into the names still ranked high (Momentum) vs
+    those that have decoupled, summing to Book. Sleeve rows are contributions (weight×return)."""
+    cols = ["Series"] + [lbl for _, lbl in cps] + ["Latest"]
+    n = len(cps)
+    rem = 1 - 0.20 - 0.10
+    cw = ([0.20] + [rem / n] * n + [0.10]) if n else [0.55, 0.45]
+
+    def at(t, h):
+        return (intra or {}).get(t, {}).get(h)
+
+    def avg_seq(names):                               # equal-weight avg-return path for a name set
+        out = []
+        for h, _ in cps:
+            v = [at(t, h) for t in names]; v = [x for x in v if x is not None]
+            out.append(sum(v) / len(v) if v else None)
+        lv = [retf(t) for t in names if retf and retf(t) is not None]
+        out.append(sum(lv) / len(lv) if lv else None)
+        return out
+
+    holds, mom_wt, dec_wt = _held_sleeves(d)
+
+    def _vals(h):                                     # (ticker, return) for held names with data at column h
+        g = (lambda t: retf(t)) if h is None else (lambda t: at(t, h))
+        return [(hd, g(hd["t"])) for hd in holds if (g(hd["t"]) is not None)]
+
+    def ew_contrib(mom):                              # EQUAL-WEIGHT contribution of one pool (each name 1/N)
+        out = []
+        for h in [hh for hh, _ in cps] + [None]:
+            av = _vals(h); n = len(av)
+            s = sum(r for hd, r in av if hd["mom"] == mom)
+            out.append(s / n if n else None)
+        return out
+
+    def dw_path():                                    # dollar-weighted book return (= held_dw at Latest)
+        out = []
+        for h in [hh for hh, _ in cps] + [None]:
+            av = _vals(h)
+            den = sum(hd["w"] for hd, _ in av)
+            out.append(sum(hd["w"] * r for hd, r in av) / den if den else None)
+        return out
+
+    tt, bb = avg_seq(top), avg_seq(bottom)
+    sig = [(tt[j] - bb[j]) if (tt[j] is not None and bb[j] is not None) else None for j in range(len(tt))]
+    spy = [at("SPY", h) for h, _ in cps] + [retf("SPY") if retf else None]
+    qqq = [at("QQQ", h) for h, _ in cps] + [retf("QQQ") if retf else None]
+    ncol = len(cols) - 1
+
+    def hdr(label):                                   # group sub-header row (label only)
+        return (label, [""] * ncol, ["#1f2a3a"] * ncol, [None] * ncol)
+
+    specs, header_rows, emph = [], set(), set()
+
+    def add(spec, *, header=False, emph_row=False):
+        specs.append(spec); i = len(specs) - 1
+        if header:
+            header_rows.add(i); emph.add(i)
+        if emph_row:
+            emph.add(i)
+
+    # — every data row gets the ▲/▼ trend arrow (change vs the prior hour) —
+    add(hdr("MARKET BENCHMARKS"), header=True)
+    add(_row("SPY", spy, trend=True))
+    add(_row("QQQ", qqq, trend=True))
+    add(hdr("TOP / BOTTOM 10 — by prior-close score"), header=True)
+    add(_row(f"Top {len(top)} avg", tt, trend=True))
+    add(_row(f"Bottom {len(bottom)} avg", bb, trend=True))
+    add(hdr("SIGNAL — is the ranking predicting?"), header=True)
+    add(_row("Signal (Spread)", sig, trend=True), emph_row=True)
+    if holds:
+        n_mom = sum(1 for h in holds if h["mom"]); n_dec = len(holds) - n_mom
+        mseq, dseq, dwseq = ew_contrib(True), ew_contrib(False), dw_path()
+        # Sizing effect = the plug from actually dollar-weighting vs the equal-weight pools.
+        siz = [(dwseq[j] - ((mseq[j] or 0.0) + (dseq[j] or 0.0))) if dwseq[j] is not None else None
+               for j in range(len(dwseq))]
+        add(hdr("HELD BOOK — equal-weight pools + sizing plug = Book"), header=True)
+        add(_row(f"  Momentum ({n_mom})", mseq, trend=True))
+        add(_row(f"  Decoupled ({n_dec})", dseq, trend=True))
+        add(_row("  Sizing effect", siz, trend=True))
+        add(_row("Book ($-wt) = Σ", dwseq, trend=True), emph_row=True)
+    return _render_rows(ax, y, cols, cw, specs, emph, row_h=0.0185, fs=7.3, hfs=7.0,
+                        header_rows=header_rows)
+
+
+def _attribution_takeaways(d, retf, top, bottom):
+    """Plain-English bullets summarizing the latest attribution: signal verdict, sleeve split,
+    and the mix effect (Book − Top-N)."""
+    def lat_avg(names):
+        v = [retf(t) for t in names if retf and retf(t) is not None]
+        return sum(v) / len(v) if v else None
+    t, b = lat_avg(top), lat_avg(bottom)
+    sig = (t - b) if (t is not None and b is not None) else None
+    book = d.get("held_dw")
+    out = []
+    if sig is not None:
+        out.append(f"Momentum signal {'WORKING' if sig > 0 else 'INVERTED'} today: "
+                   f"Top-{len(top)} {P._pct(t)} vs Bottom-{len(bottom)} {P._pct(b)} → spread {P._pct(sig)}.")
+    holds, _mw, _dw = _held_sleeves(d)
+    avail = [h for h in holds if retf and retf(h["t"]) is not None]
+    if avail:
+        n = len(avail)
+        mc = sum(retf(h["t"]) for h in avail if h["mom"]) / n          # equal-weight contributions
+        dc = sum(retf(h["t"]) for h in avail if not h["mom"]) / n
+        siz = (book - (mc + dc)) if book is not None else None          # sizing plug
+        out.append(f"Book {P._pct(book)} = Momentum (eq-wt) {P._pct(mc)} + Decoupled {P._pct(dc)} "
+                   f"+ Sizing {P._pct(siz)} — Sizing is what dollar-weighting (letting winners run) "
+                   f"added vs holding the names equal-weight.")
+    if book is not None and t is not None:
+        diff = book - t
+        out.append(f"Mix effect: Book − Top-{len(top)} = {P._pct(diff)} — "
+                   + ("the blend CUSHIONED vs a pure-momentum book today."
+                      if diff > 0 else "the blend gave up some upside vs a pure-momentum book today."))
+    return out or ["(insufficient data for attribution)"]
+
+
 def _intraday_table(ax, y, title, tickers, intra, cps, retf):
     y = P._section(ax, y, title)
     if not tickers:
         ax.text(0.075, y, "(none)", color=P.MIDGREY, fontsize=7.2, va="top")
         return y - 0.018
-    labels = [lbl for _, lbl in cps]
-    cols = ["Ticker"] + labels + ["Latest"]
+    cols = ["Ticker"] + [lbl for _, lbl in cps] + ["Latest"]
     n = len(cps)
     rem = 1 - 0.13 - 0.13
-    cw = [0.13] + ([rem / n] * n if n else []) + [0.13] if n else [0.5, 0.5]
+    cw = ([0.13] + [rem / n] * n + [0.13]) if n else [0.5, 0.5]
     by_cp = {hhmm: [] for hhmm, _ in cps}
     lat = []
-    rows = []
+    specs = []
     for t in tickers:
         rec = (intra or {}).get(t, {})
-        latest = retf(t) if retf else None
-        row = [t] + [P._pct(rec.get(hhmm)) for hhmm, _ in cps] + [P._pct(latest)]
-        rows.append(row)
-        for hhmm, _ in cps:
-            v = rec.get(hhmm)
-            if v is not None:
-                by_cp[hhmm].append(v)
-        if latest is not None:
-            lat.append(latest)
-    avg = ["AVG"] + [P._pct(sum(by_cp[h]) / len(by_cp[h]) if by_cp[h] else None) for h, _ in cps] \
-          + [P._pct(sum(lat) / len(lat) if lat else None)]
-    rows.append(avg)
-    aln = ["left"] + ["right"] * (len(cols) - 1)
-    return P._table(ax, y, cols, rows, cw, align=aln, row_h=0.0162, fontsize=6.8,
-                    header_fontsize=6.6, emph_rows={len(rows) - 1},
-                    text_color=lambda r, c, v: (P._ret_color(P._parse_pct(v)) if c >= 1 else "#1f2a3a"))
+        seq = [rec.get(h) for h, _ in cps] + [retf(t) if retf else None]
+        specs.append(_row(t, seq))                    # value sign-coloured, no arrows
+        for h, _ in cps:
+            if rec.get(h) is not None:
+                by_cp[h].append(rec.get(h))
+        if seq[-1] is not None:
+            lat.append(seq[-1])
+    # AVG row: value sign-coloured + a per-cell ▲/▼/– arrow for change vs the prior checkpoint.
+    avg_seq = [sum(by_cp[h]) / len(by_cp[h]) if by_cp[h] else None for h, _ in cps] \
+        + [sum(lat) / len(lat) if lat else None]
+    specs.append(_row("AVG", avg_seq, trend=True))
+    return _render_rows(ax, y, cols, cw, specs, {len(specs) - 1}, row_h=0.016, fs=6.8, hfs=6.5)
 
 
-def _page3(pdf, d, cfg):
+def _cps_for(d):
     from rank_report import _CHECKPOINTS
-    fig, ax = P._new_page(pdf)
-    _banner(ax, d["scenario"], d["mark"], d["rank_close"], d.get("mark_note"))
-    y = 0.90
-    y = P._section(ax, y, "Intraday return paths — 1-hour intervals (vs prior close, Chicago time)")
-    intra = d.get("intraday")
+    intra = d.get("intraday") or {}
     rows = d.get("rows") or []
     tn = d["top_n"]
     top = [r["ticker"] for r in rows[:tn]]
     bottom = [r["ticker"] for r in rows[-tn:]]
     pos = d.get("positions")
     held = sorted(pos["ticker"]) if (pos is not None and not pos.empty) else []
-    retf = d.get("ret")
+    allt = list(dict.fromkeys(top + bottom + held))
+    cps = [cp for cp in _CHECKPOINTS if any(intra.get(t, {}).get(cp[0]) is not None for t in allt)]
+    return cps, top, bottom, held
 
+
+def _page_attribution(pdf, d, cfg):
+    """Page 3 — the attribution table read top-down, plus the main takeaways."""
+    fig, ax = P._new_page(pdf)
+    _banner(ax, d["scenario"], d["mark"], d["rank_close"], d.get("mark_note"))
+    y = P._section(ax, 0.90, "Attribution — how today's book return breaks down (vs prior close)")
+    cps, top, bottom, _held = _cps_for(d)
+    retf = d.get("ret")
+    y = _caption(ax, y,
+                 "What each row tells you  ·  MARKET: SPY / QQQ.  TOP / BOTTOM 10: avg return of the "
+                 "names scored highest / lowest at the prior close.  SIGNAL (Spread = Top − Bottom): "
+                 "positive means the ranking is predicting well.  HELD BOOK: your names split ONCE by "
+                 "their prior-close score — Momentum (cleared the gate) vs Decoupled (didn't), held "
+                 "constant. Pools are EQUAL-WEIGHT contributions (each name 1/N) that sum to the "
+                 "equal-weight book; Sizing effect = the plug from actually dollar-weighting (winners "
+                 "bigger); Momentum + Decoupled + Sizing = Book ($-wt).  "
+                 "Value colour = +/− ; ▲/▼ beside every number = change vs the prior hour "
+                 "(green up / red down).", width=112)
+    y -= 0.01
+    y = _attribution_table(ax, y, d, cps, d.get("intraday") or {}, retf, top, bottom)
+    y = P._section(ax, y - 0.01, "Main takeaways")
+    P._bullets(ax, y, _attribution_takeaways(d, retf, top, bottom),
+               width=112, lh=0.019, gap=0.007, fontsize=8.8)
+    _footer(ax, 3)
+    pdf.savefig(fig); P.plt.close(fig)
+
+
+def _page_paths(pdf, d, cfg):
+    """Page 4 — the intraday return paths (Top / Bottom / Held), each with an AVG-trend row."""
+    fig, ax = P._new_page(pdf)
+    _banner(ax, d["scenario"], d["mark"], d["rank_close"], d.get("mark_note"))
+    y = P._section(ax, 0.90, "Intraday return paths — 1-hour intervals (vs prior close, Chicago time)")
+    intra = d.get("intraday")
+    tn = d["top_n"]
+    cps, top, bottom, held = _cps_for(d)
+    retf = d.get("ret")
     if not intra:
         ax.text(0.075, y, "Intraday 30-min data unavailable for this session yet "
                 "(run later in the session, or the feed has no intraday bars).",
                 color=P.MIDGREY, fontsize=8.4, va="top")
-        _footer(ax, 3); pdf.savefig(fig); P.plt.close(fig)
+        _footer(ax, 4); pdf.savefig(fig); P.plt.close(fig)
         return
-
-    allt = list(dict.fromkeys(top + bottom + held))
-    cps = [cp for cp in _CHECKPOINTS if any(intra.get(t, {}).get(cp[0]) is not None for t in allt)]
-    ax.text(0.06, y, f"Return vs the {d['rank_close']} close at each elapsed hour; AVG = group mean. "
-            "Prior ranking from the EOD snapshot.", color=P.MIDGREY, fontsize=7.0, va="top", style="italic")
-    y -= 0.02
+    y = _caption(ax, y, "Each holding's path vs the prior close at each elapsed hour. AVG = group "
+                 "mean; value colour = +/− ; ▲/▼ on AVG = change vs the prior hour (green up / "
+                 "red down).", width=112)
+    y -= 0.008
     y = _intraday_table(ax, y, f"Prior Top {tn} (by EOD score)", top, intra, cps, retf)
     y = _intraday_table(ax, y - 0.006, f"Prior Bottom {tn} (by EOD score)", bottom, intra, cps, retf)
     y = _intraday_table(ax, y - 0.006, f"Currently held ({len(held)})", held, intra, cps, retf)
-    _footer(ax, 3)
+    _footer(ax, 4)
     pdf.savefig(fig); P.plt.close(fig)
 
 
@@ -209,9 +442,8 @@ def _page1(pdf, d, cfg):
 
     src = (f"EOD snapshot {d['rank_close']}" if d.get("snapshot_used")
            else f"recomputed from {d['rank_close']} close (no EOD snapshot found)")
-    ax.text(0.06, y - 0.004, f"Prior top/bottom ranking source: {src}.",
-            color=P.MIDGREY, fontsize=7.2, va="top", style="italic")
-    y -= 0.022
+    y = _caption(ax, y - 0.004, f"Prior top/bottom ranking source: {src}.", width=112, fontsize=7.2)
+    y -= 0.008
 
     y = P._section(ax, y - 0.008, "What's NOT behaving as expected")
     y = P._bullets(ax, y, _anomalies(d, cfg), width=110, lh=0.0162, gap=0.006, fontsize=8.6)
@@ -284,9 +516,10 @@ def _page2(pdf, d, cfg):
         verdict, vcol = "BREAKING DOWN — prior leaders are rotating OUT of the live top (signal not holding)", P.RED
 
     y = P._section(ax, y - 0.012, "Signal scoreboard — prior (EOD) ranking → latest (live) ranking")
-    ax.text(0.075, y, f"● Signal {verdict}.  ({held_top}/{tn} prior top-{tn} still in the live top-{tn}.)",
-            color=vcol, fontsize=8.4, fontweight="bold", va="top")
-    y -= 0.024
+    y = _caption(ax, y, f"● Signal {verdict}.  ({held_top}/{tn} prior top-{tn} still in the live "
+                 f"top-{tn}.)", x=0.075, width=96, fontsize=8.4, color=vcol, style="normal",
+                 weight="bold", lh=0.016)
+    y -= 0.008
     univ = d.get("univ_avg")
     srows = []
     for t in prior_top:
@@ -310,10 +543,10 @@ def _page2(pdf, d, cfg):
                  srows, [0.11, 0.085, 0.085, 0.075, 0.075, 0.20, 0.11, 0.26],
                  align=["left", "center", "center", "center", "center", "right", "right", "left"],
                  row_h=0.022, fontsize=7.6, header_fontsize=7.2, text_color=scol)
-    ax.text(0.06, y - 0.008, f"Δ today = rank move at the live price (vs {d['rank_close']} EOD); "
-            f"Δ prior = rank move on the prior day (vs the day before). Signal Today = today's return "
-            "vs the universe avg (≥+2% Very Good · ≥+0.5% Moderate Good · ±0.5% Mixed · ≤−2% Very Bad).",
-            color=P.MIDGREY, fontsize=7.0, va="top", style="italic")
+    _caption(ax, y - 0.008, f"Δ today = rank move at the live price (vs {d['rank_close']} EOD); "
+             f"Δ prior = rank move on the prior day (vs the day before). Signal Today = today's return "
+             "vs the universe avg (≥+2% Very Good · ≥+0.5% Moderate Good · ±0.5% Mixed · ≤−2% Very Bad).",
+             width=112)
 
     _footer(ax, 2)
     pdf.savefig(fig); P.plt.close(fig)
@@ -324,7 +557,8 @@ def build_pdf(d: Dict[str, Any], cfg: Dict[str, Any], out_path: Path) -> Path:
     with PdfPages(out_path) as pdf:
         _page1(pdf, d, cfg)
         _page2(pdf, d, cfg)
-        _page3(pdf, d, cfg)
+        _page_attribution(pdf, d, cfg)
+        _page_paths(pdf, d, cfg)
     return out_path
 
 
