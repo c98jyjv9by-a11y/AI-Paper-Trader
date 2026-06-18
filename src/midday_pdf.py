@@ -327,28 +327,42 @@ def build_pdf(d: Dict[str, Any], cfg: Dict[str, Any], out_path: Path) -> Path:
     return out_path
 
 
-def run(scenario: str, start: date, end: date, output: Optional[Path] = None) -> Path:
+def run(scenario: Optional[str] = None, start: Optional[date] = None, end: Optional[date] = None,
+        output: Optional[Path] = None, account: Optional[str] = None) -> Path:
+    """Midday Pulse PDF. With `account`, the held book / equity come from the frozen+living
+    ledger (as of its last close), marked to `end` (default today) for the intraday pulse;
+    scenario/start default to the account's base/inception. Else a fresh scenario run."""
     import rank_report
     from scenarios import build_config, load_scenario
     from backtest import load_config as _load_cfg
     root = Path(__file__).parent.parent
+    if account:
+        from account import load_manifest
+        man = load_manifest(account)
+        scenario = scenario or man["scenario"]
+        start = start or date.fromisoformat(man["inception"])
+        end = end or date.today()              # mark the locked book to today's provisional price
+    if not scenario:
+        raise ValueError("midday_pdf.run needs --scenario or --account")
     cfg = build_config(_load_cfg(root / "config"), load_scenario(scenario))
-    # Load the prior EOD ranking snapshot (authoritative prior top/bottom + scores) and
-    # compute intraday paths, but DON'T write a provisional snapshot for the in-progress day.
-    d = rank_report.build_report(scenario, start, end, cfg=cfg, write_snapshot=False)
-    out = output or (root / "reports" / f"midday_{scenario}_{d['mark'].isoformat()}.pdf")
+    # Use the prior EOD snapshot + intraday paths; never write a provisional snapshot.
+    d = rank_report.build_report(scenario, start, end, cfg=cfg, write_snapshot=False, account=account)
+    tag = f"{account}_" if account else ""
+    out = output or (root / "reports" / f"midday_{tag}{scenario}_{d['mark'].isoformat()}.pdf")
     return build_pdf(d, cfg, out)
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Midday Pulse PDF for a scenario.")
-    ap.add_argument("--scenario", required=True)
-    ap.add_argument("--start", required=True)
-    ap.add_argument("--end", required=True)
+    ap.add_argument("--scenario")
+    ap.add_argument("--start")
+    ap.add_argument("--end")
+    ap.add_argument("--account", help="render the held book from a frozen/living account ledger")
     ap.add_argument("--out")
     a = ap.parse_args(argv)
-    out = run(a.scenario, date.fromisoformat(a.start), date.fromisoformat(a.end),
-              Path(a.out) if a.out else None)
+    out = run(a.scenario, date.fromisoformat(a.start) if a.start else None,
+              date.fromisoformat(a.end) if a.end else None,
+              Path(a.out) if a.out else None, account=a.account)
     print(f"Wrote {out}")
 
 

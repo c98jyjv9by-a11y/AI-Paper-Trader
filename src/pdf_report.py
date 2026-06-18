@@ -713,17 +713,29 @@ def build_pdf(d: Dict[str, Any], cfg: Dict[str, Any], out_path: Path) -> Path:
     return out_path
 
 
-def run(scenario: str, start: date, end: date, output: Optional[Path] = None) -> Path:
-    """Standalone: build the report dict (re-running the backtest) then render the PDF."""
+def run(scenario: Optional[str] = None, start: Optional[date] = None, end: Optional[date] = None,
+        output: Optional[Path] = None, account: Optional[str] = None) -> Path:
+    """Standalone EOD PDF. With `account`, serve the FROZEN/living ledger (scenario/start/end
+    default to the account's base/inception/live-through); else re-run the scenario backtest."""
     sys.path.insert(0, str(Path(__file__).parent))
     import rank_report
     from scenarios import build_config, load_scenario
     from backtest import load_config as _load_cfg
 
     root = Path(__file__).parent.parent
+    if account:
+        from account import load_manifest
+        man = load_manifest(account)
+        scenario = scenario or man["scenario"]
+        start = start or date.fromisoformat(man["inception"])
+        end = end or date.fromisoformat(man.get("live_through", man["frozen_through"]))
+    if not scenario:
+        raise ValueError("pdf_report.run needs --scenario or --account")
     cfg = build_config(_load_cfg(root / "config"), load_scenario(scenario))
-    d = rank_report.build_report(scenario, start, end, cfg=cfg)
-    out = output or (root / "reports" / f"eod_{scenario}_{d['mark'].isoformat()}.pdf")
+    d = rank_report.build_report(scenario, start, end, cfg=cfg, account=account,
+                                 write_snapshot=False if account else None, with_intraday=False)
+    tag = f"{account}_" if account else ""
+    out = output or (root / "reports" / f"eod_{tag}{scenario}_{d['mark'].isoformat()}.pdf")
     return build_pdf(d, cfg, out)
 
 
@@ -825,16 +837,22 @@ def run_cover_series(scenario: str, start: date, end: date,
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Professional end-of-day PDF report for a scenario.")
-    ap.add_argument("--scenario", required=True)
-    ap.add_argument("--start", required=True)
-    ap.add_argument("--end", required=True)
+    ap.add_argument("--scenario")
+    ap.add_argument("--start")
+    ap.add_argument("--end")
+    ap.add_argument("--account", help="render from a frozen/living account ledger instead of a fresh backtest")
     ap.add_argument("--out")
     ap.add_argument("--series", action="store_true",
                     help="render the COVER page for every date in [start, end] into one combined PDF")
     ap.add_argument("--sim-start", help="backtest warmup inception for --series (default = start)")
     ap.add_argument("--workers", type=int, help="parallel workers for --series")
     a = ap.parse_args(argv)
-    if a.series:
+    if a.account:
+        out = run(a.scenario, date.fromisoformat(a.start) if a.start else None,
+                  date.fromisoformat(a.end) if a.end else None,
+                  Path(a.out) if a.out else None, account=a.account)
+        print(f"Wrote {out}")
+    elif a.series:
         res = run_cover_series(
             a.scenario, date.fromisoformat(a.start), date.fromisoformat(a.end),
             Path(a.out) if a.out else None,

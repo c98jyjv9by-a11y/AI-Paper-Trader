@@ -278,6 +278,22 @@ def build_parser() -> argparse.ArgumentParser:
     ak.add_argument("--scenario", help="model to trade forward with (default: the account's base; pass the current model to 'follow active')")
     ak.set_defaults(func=_cmd_account_continue)
 
+    eo = sub.add_parser("eod", help="Render the end-of-day PDF (from --account ledger, or a fresh --scenario run)")
+    eo.add_argument("--account", help="render from a frozen/living account ledger")
+    eo.add_argument("--scenario", help="scenario (required if no --account)")
+    eo.add_argument("--start", metavar="YYYY-MM-DD")
+    eo.add_argument("--end", metavar="YYYY-MM-DD")
+    eo.add_argument("--out")
+    eo.set_defaults(func=_cmd_eod)
+
+    md = sub.add_parser("midday", help="Render the intraday Midday Pulse PDF (from --account ledger, or a fresh --scenario run)")
+    md.add_argument("--account", help="render the held book from a frozen/living account ledger")
+    md.add_argument("--scenario", help="scenario (required if no --account)")
+    md.add_argument("--start", metavar="YYYY-MM-DD")
+    md.add_argument("--end", metavar="YYYY-MM-DD", help="the in-progress day to mark to (default: today)")
+    md.add_argument("--out")
+    md.set_defaults(func=_cmd_midday)
+
     return parser
 
 
@@ -326,6 +342,30 @@ def _cmd_account_continue(args: argparse.Namespace) -> None:
     print(f"Extended '{args.name}' with {r['scenario']}: {r['from']} → {r['to']}  "
           f"({r['n_trades']} new trades)")
     print(f"  live through {r['live_through']}  ·  value {r['live_value']:,.0f}  ·  {r['segments']} segment(s)")
+
+
+def _cmd_eod(args: argparse.Namespace) -> None:
+    import pdf_report
+    if not args.account and not args.scenario:
+        print("Error: pass --account or --scenario")
+        sys.exit(1)
+    out = pdf_report.run(args.scenario,
+                         date.fromisoformat(args.start) if args.start else None,
+                         date.fromisoformat(args.end) if args.end else None,
+                         Path(args.out) if args.out else None, account=args.account)
+    print(f"Wrote {out}")
+
+
+def _cmd_midday(args: argparse.Namespace) -> None:
+    import midday_pdf
+    if not args.account and not args.scenario:
+        print("Error: pass --account or --scenario")
+        sys.exit(1)
+    out = midday_pdf.run(args.scenario,
+                         date.fromisoformat(args.start) if args.start else None,
+                         date.fromisoformat(args.end) if args.end else None,
+                         Path(args.out) if args.out else None, account=args.account)
+    print(f"Wrote {out}")
 
 
 def main(argv: Optional[List[str]] = None) -> None:

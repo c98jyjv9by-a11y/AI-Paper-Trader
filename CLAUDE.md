@@ -11,7 +11,9 @@ cd ai-paper-trader
 pip install -r requirements.txt
 
 python run.py account-freeze --name primary --scenario model_v4 --start … --end …  # freeze a scenario's trades+state over a window into an IMMUTABLE account ledger (accounts/<name>/: trades/equity/positions/rankings + rendered reports + manifest hashes); survives model/config changes & price revisions. account-verify --name <n> checks integrity. Reports read it via build_report(..., account=<n>)
-python run.py account-continue --name primary --end … [--scenario <model>]          # extend a living account forward from its latest state (seeds cash/positions/governor; resets transient streak state at the seam). Appends under continuation/, leaves the frozen core untouched; --scenario defaults to the account base (pass current model to "follow active")
+python run.py account-continue --name primary --end … [--scenario <model>]          # extend a living account forward from its latest state (seeds cash/positions/governor; resets transient streak state at the seam). Appends under continuation/, leaves the frozen core untouched, AND renders+archives that day's EOD+status reports; --scenario defaults to the account base (pass current model to "follow active")
+python run.py eod  [--account <name> | --scenario <s> --start … --end …]             # render the end-of-day PDF — from a frozen/living account ledger, or a fresh scenario run
+python run.py midday [--account <name> | --scenario <s> --start … --end …]           # render the intraday Midday Pulse PDF — account mode marks the locked book to today's provisional price
 python run.py agent                                          # live daily agent
 python run.py backtest           --start … --end …           # backtest + diagnostics + sensitivity
 python run.py experiments        --start … --end …           # strategy experiment profiles

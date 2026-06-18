@@ -206,13 +206,36 @@ def continue_account(name: str, end: date, *, scenario: Optional[str] = None,
     man["live_through"] = str(new_eq["date"].iloc[-1])
     man["live_value"] = float(new_eq["total_portfolio_value"].iloc[-1])
     man["status"] = "living"
-    # Refresh ONLY the continuation hashes; the frozen-core hashes stay untouched.
+
+    # Render + archive the EOD + status reports for the new live date, FROM the living
+    # ledger (combined frozen + continuation). Reports are a nicety — never fail the update.
+    reports_written = []
+    try:
+        import rank_report
+        import pdf_report
+        end_iso = man["live_through"]
+        d_rep = rank_report.build_report(scenario, date.fromisoformat(man["inception"]),
+                                         date.fromisoformat(end_iso), cfg=cfg, account=name,
+                                         write_snapshot=False, with_intraday=False)
+        (d_dir / "reports").mkdir(exist_ok=True)
+        smd = d_dir / "reports" / f"status_{scenario}_{end_iso}.md"
+        epdf = d_dir / "reports" / f"eod_{scenario}_{end_iso}.pdf"
+        smd.write_text(rank_report.render_md(d_rep))
+        pdf_report.build_pdf(d_rep, cfg, epdf)
+        reports_written = [smd.name, epdf.name]
+    except Exception as exc:
+        seg["report_error"] = str(exc)
+
+    # Refresh continuation + (re-rendered) report hashes; the frozen-core ledger hashes stay.
     man.setdefault("hashes", {})
     for f in sorted(cont.glob("*.csv")):
         man["hashes"][f"continuation/{f.name}"] = _sha256(f)
+    for f in sorted((d_dir / "reports").glob("*")):
+        man["hashes"][f"reports/{f.name}"] = _sha256(f)
     _manifest_path(name).write_text(json.dumps(man, indent=2))
     return {"noop": False, **seg, "live_through": man["live_through"],
-            "live_value": man["live_value"], "segments": len(segments)}
+            "live_value": man["live_value"], "segments": len(segments),
+            "reports": reports_written}
 
 
 def _append_csv(path: Path, df: pd.DataFrame) -> None:

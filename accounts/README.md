@@ -35,6 +35,19 @@ python run.py account-verify --name primary
 python run.py account-continue --name primary --end 2026-06-30 --scenario model_v4
 ```
 
+## Daily rhythm (a living account)
+
+```bash
+# Intraday — a Midday Pulse on the locked book marked to today's provisional price:
+python run.py midday --account primary
+
+# After the close — advance the account one day; this ALSO renders + archives the day's
+# EOD + status reports into accounts/primary/reports/:
+python run.py account-continue --name primary --end <today> --scenario model_v4
+```
+
+You can also render an EOD PDF on demand from the ledger any time: `python run.py eod --account primary`.
+
 ## Reading the frozen account in reports
 
 `rank_report.build_report(..., account="primary")` serves the **frozen** trades / equity /

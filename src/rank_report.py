@@ -224,7 +224,7 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
                  *, cfg: Optional[Dict[str, Any]] = None, pdata: Optional[pd.DataFrame] = None,
                  eq: Optional[pd.DataFrame] = None, positions: Optional[pd.DataFrame] = None,
                  trades: Optional[pd.DataFrame] = None, fast: bool = False,
-                 write_snapshot: Optional[bool] = None,
+                 write_snapshot: Optional[bool] = None, with_intraday: Optional[bool] = None,
                  account: Optional[str] = None) -> Dict[str, Any]:
     """Build the rank/status snapshot. The scenario run can pass its already-computed
     cfg/pdata/eq/positions to avoid re-fetching and re-running the backtest.
@@ -353,9 +353,11 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
             for t in positions.loc[positions["entry_date"] == ed, "ticker"]:
                 entry_scores[t] = scm.get(t)
 
-    # intraday return progression (vs prior close) for the top/bottom-N prior-close names
+    # intraday return progression (vs prior close) for the top/bottom-N prior-close names.
+    # Network fetch — skip it for EOD-style/account renders that don't show intraday paths.
+    do_intraday = (not fast) if with_intraday is None else with_intraday
     intraday = None
-    if not fast:
+    if do_intraday:
         try:
             need = ([x["ticker"] for x in rows[:top_n]] + [x["ticker"] for x in rows[-top_n:]]
                     + sorted(held))                          # include held positions too
