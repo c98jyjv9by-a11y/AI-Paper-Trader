@@ -1,0 +1,174 @@
+# ─── Scenario: model_v5 (model_v4 + shock overlay) ──────────────────────────
+# Identical to model_v4 (83-name universe, score-conditional exits, persistence buy,
+# rotation funding, Barroso volatility targeting) PLUS a fast, event-driven SHOCK
+# OVERLAY on the at-close BUY recommendations.
+#
+# Why: model_v4's only governor is Barroso vol targeting, which reacts on a 126-day
+# (6-month) realized-vol forecast — far too slow to respond to a single highly volatile
+# session. The 2022 stress test showed v4 churning new buys into a high-vol chop
+# (win rate 24%, PF 0.37). The overlay conditions tomorrow's NEW BUYS on TODAY's move:
+#
+#   * Shock day (|equal-weight basket 1d return| > vol_k × trailing σ):
+#       - size new buys DOWN by size_mult   (volatility clustering → tomorrow's vol is high)
+#       - DON'T CHASE the day's top-decile single-day gappers (short-term reversal risk)
+#   * Correlated DOWN-crash (shock + breadth collapsed + momentum INVERTING):
+#       - cut new buys to crash_size_mult (≈ stop adding into a momentum-crash tape)
+#
+# Conditions only the new-buy side; exits stay governed by the existing score-gated
+# logic (we found sell-side vol-trimming hurts). Theory-derived thresholds (vol
+# clustering / short-term reversal / Daniel-Moskowitz momentum crashes), NOT fit to any
+# single year — validate across the regime panel and OOS before trusting magnitudes.
+
+name: model_v6
+description: >
+  model_v4 plus a fast shock overlay: after a highly volatile session, size new buys
+  down and skip the day's blow-off gappers; in a confirmed correlated down-crash (breadth
+  collapse + momentum inversion) stop adding entirely. New-buy-side only; exits unchanged.
+
+tickers:
+  - CRWD
+  - ORCL
+  - COIN
+  - NFLX
+  - PANW
+  - GOOGL
+  - BAC
+  - MSFT
+  - AVGO
+  - AMZN
+  - COST
+  - ASML
+  - AAPL
+  - JPM
+  - TSM
+  - GS
+  - META
+  - TSLA
+  - MU
+  - AMD
+  - NVDA
+  # ── Dispersion / diversification adds (uncorrelated sectors + momentum leaders) ──
+  - LLY
+  - VST
+  - AXON
+  - GE
+  - PLTR
+  - OXY
+  # ── Adversarial / anti-survivorship laggards (test ranker discrimination) ──
+  - INTC
+  - BA
+  - PFE
+  - PYPL
+  - SEDG
+  - PLUG
+  # ── Growth / tech / mega-cap breadth adds ──
+  - ADBE
+  - CRM
+  - NOW
+  - INTU
+  - SAP
+  - WDAY
+  - SNOW
+  - DDOG
+  - NET
+  - MDB
+  - ZS
+  - FTNT
+  - TEAM
+  - OKTA
+  - TWLO
+  - HUBS
+  - SNPS
+  - CDNS
+  - QCOM
+  - TXN
+  - AMAT
+  - LRCX
+  - KLAC
+  - NXPI
+  - MRVL
+  - ADI
+  - MCHP
+  - "ON"
+  - ARM
+  - ANET
+  - CSCO
+  - IBM
+  - DELL
+  - SMCI
+  - VRT
+  - APP
+  - SHOP
+  - UBER
+  - ABNB
+  - MELI
+  - SE
+  - SPOT
+  - DASH
+  - RBLX
+  - PINS
+  - SNAP
+  - TTD
+  - NU
+  - HOOD
+  - SOFI
+
+portfolio:
+  max_position_pct: 0.085
+  max_total_exposure: 0.90
+  max_new_trades_per_day: 2
+
+signals:
+  min_composite_score: 0.70
+
+risk:
+  stop_loss: 0.15
+  take_profit: null
+  trailing_stop: null
+  max_holding_days: 90
+  reentry_recover_pct: 0.10
+  stop_loss_score_max: 0.90
+  max_hold_score_max: 0.80
+  score_entry_above: 0.90
+  score_entry_days: 3
+  fund_by_rotation: true
+  target_vol: 0.35
+  vol_lookback_days: 126
+  vol_exposure_floor: 0.3
+  vol_exposure_cap: 1.0
+  # ── v6 = v5 shock overlay PLUS "re-risk fast" ──────────────────────────────
+  # v5 (down-only shock overlay) is a crash-mitigation variant that protects sharply in
+  # genuine selloffs (2020 COVID -20.5%→-3.2%, 2021 chop +11.7%→+20.9%) but ~halves the
+  # full compound because it sizes down on down-shock days that then V-recover (2024 bull
+  # +85.7%→+72.5%) and dribbles the idle budget back out at full size over many days.
+  # v6 adds a recovery state machine: after a down-shock, watch the next `recover_days`
+  # bars; the first one that confirms recovery (breadth majority-up AND momentum not
+  # inverting AND QQQ back above its 50-DMA) SUSPENDS the de-risk/no-chase and temporarily
+  # lifts max_new, redeploying the idle budget into the bounce.
+  #
+  # REGIME-PANEL FINDING (2018→2026, v4 / v5 / v6): the regime gate is essential — without
+  # it, v6 re-risked into 2020's dead-cat bounces (-3%→-14%). WITH it, v6 is, PER WINDOW,
+  # the best of both: it keeps v5's crash protection everywhere (2020 -3%, 2021 +21%, 2022
+  # -25%) AND cures v5's V-recovery drag (2024 bull +72%→+85%, matching v4). HOWEVER the
+  # full 8.5-yr COMPOUND still lands at ~v5 (+967% vs v4 +1942%) with no max-DD improvement
+  # over v5 — the standalone-window gains don't compound into a full-path win, because the
+  # cumulative cost of sizing down on isolated down-shocks across the quiet years offsets
+  # them. HONEST TAKEAWAY: this book's edge IS being long the high-beta dispersion; every
+  # vol overlay relocates regret rather than adding long-run alpha. Use v6 for the best
+  # drawdown-aware profile; keep v4 to maximize terminal wealth. Validate OOS before trusting.
+  shock_overlay:
+    enabled: true
+    down_only: true      # only size-down / no-chase / crash-mode on DOWN shocks (up-shocks = momentum continuation)
+    vol_k: 2.5           # shock if |basket 1d return| > vol_k × trailing daily σ
+    lookback: 20         # trailing window for the daily-σ estimate
+    size_mult: 0.5       # new-buy size multiplier on a (non-crash) down-shock day
+    no_chase_q: 0.90     # on a shock day, skip new buys for names in the top decile of today's 1d returns
+    crash_breadth: 0.25  # down-shock + advancers below this + momentum inverting → correlated crash
+    crash_size_mult: 0.0 # new-buy multiplier on a confirmed correlated crash (≈ stop adding)
+    # ── NEW in v6: re-risk fast (cure the V-recovery drag that cost v5 the bull years) ──
+    recover_days: 5       # bars after a down-shock to watch for a recovery
+    recover_breadth: 0.55 # recovery confirmed when advancers exceed this AND momentum isn't inverting
+    recover_max_new: 4    # on the recovery bar, temporarily lift max_new (redeploy idle budget into the bounce)
+    recover_regime_ma: 50 # AND require QQQ > its 50-day MA to re-risk — distinguishes a REAL recovery
+                          # (2024: QQQ reclaimed its MA fast → re-risk, +72%→+85%) from a dead-cat bounce
+                          # (2020 COVID: QQQ stayed below its MA → block re-risk, keeps v5's -3% protection).

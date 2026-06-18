@@ -339,6 +339,7 @@ def _queue_entries(
     cash: float,
     config: Dict[str, Any],
     exposure_mult: float = 1.0,
+    max_new_override: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """
     Determine which tickers to buy tomorrow based on today's signals.
@@ -351,7 +352,8 @@ def _queue_entries(
 
     Returns a list of order dicts: {ticker, shares, signal_price, reason}.
     """
-    max_new = config["portfolio"]["max_new_trades_per_day"]
+    max_new = (config["portfolio"]["max_new_trades_per_day"]
+               if max_new_override is None else int(max_new_override))
     max_pct = resolve_max_position_pct(config) * exposure_mult
     max_exp = config["portfolio"]["max_total_exposure"] * exposure_mult
 
@@ -626,6 +628,32 @@ def run_backtest(
     # below the threshold by (1 - exposure_mult) — optionally only when momentum is inverting.
     vol_trim_score_below = config.get("risk", {}).get("vol_trim_score_below")   # None => whole-position mode
     vol_trim_require_spread = bool(config.get("risk", {}).get("vol_trim_require_spread", True))
+    # Shock overlay (default off): a FAST, event-driven condition on the at-close BUY
+    # recommendations after a highly volatile session (the slow Barroso governor reacts on
+    # 6-month vol — far too slow for a single day). On a "shock day" (|basket 1d return| >
+    # vol_k × trailing σ): size new buys down (size_mult; vol clustering → tomorrow's vol is
+    # elevated) and DON'T CHASE the day's top-decile single-day gappers (short-term reversal).
+    # If the shock is a CORRELATED DOWN-crash (breadth collapsed AND momentum inverting), cut
+    # new buys to crash_size_mult (≈ stop adding into a momentum-crash tape). Conditions only
+    # the new-buy side; exits stay governed by the existing score-gated logic.
+    _shock = config.get("risk", {}).get("shock_overlay") or {}
+    shock_on = bool(_shock.get("enabled"))
+    shock_k = float(_shock.get("vol_k", 2.5))
+    shock_lb = int(_shock.get("lookback", 20))
+    shock_size_mult = float(_shock.get("size_mult", 0.5))
+    shock_down_only = bool(_shock.get("down_only", False))  # if set, size-down/no-chase only on DOWN shocks
+    shock_no_chase_q = _shock.get("no_chase_q", 0.90)
+    shock_crash_breadth = float(_shock.get("crash_breadth", 0.25))
+    shock_crash_size_mult = float(_shock.get("crash_size_mult", 0.0))
+    # Re-risk-fast (v6, default off): after a down-shock, watch the next `recover_days` bars;
+    # on the first bar that confirms recovery (breadth majority-up AND momentum not inverting,
+    # and not itself a fresh down-shock) suspend the size-down/no-chase AND temporarily lift
+    # max_new to recover_max_new — so the budget left idle on the shock day is redeployed into
+    # the bounce instead of dribbled out at full size over many days (the V-recovery drag).
+    shock_recover_days = int(_shock.get("recover_days", 0))
+    shock_recover_max_new = int(_shock.get("recover_max_new", 0)) or None
+    shock_recover_breadth = float(_shock.get("recover_breadth", 0.55))
+    shock_recover_regime_ma = int(_shock.get("recover_regime_ma", 0))  # 0=off; else require QQQ > its N-day MA to re-risk
     port_values: List[float] = list(initial_equity or [])  # running portfolio value series → daily-return vol
     # Persistence rules (default off):
     #   score_exit_below for score_exit_days consecutive days  -> SELL (score decay).
@@ -659,6 +687,15 @@ def run_backtest(
     close = price_data["Close"]
     all_timestamps = close.index.tolist()
     qqq_arr = close["QQQ"].to_numpy() if "QQQ" in close.columns else None
+    # Shock-overlay precompute (vectorized, no look-ahead): the equal-weight basket's daily
+    # return, its trailing σ (shifted so "today" is excluded), and daily breadth (% advancers).
+    if shock_on:
+        _uni_cols = [t for t in tickers if t in close.columns]
+        _uni_ret = close[_uni_cols].pct_change()
+        _ew_ret = _uni_ret.mean(axis=1)
+        _ew_sigma = _ew_ret.rolling(shock_lb).std().shift(1)
+        _breadth = (_uni_ret > 0).sum(axis=1) / _uni_ret.notna().sum(axis=1).replace(0, pd.NA)
+    shock_cooldown = 0                    # bars remaining in the post-down-shock recovery watch (v6)
     stop_cooldown: Dict[str, int] = {}   # ticker -> bar_idx of its last stop-loss exit
     awaiting_reclaim: set = set()         # tickers stopped out, awaiting MA reclaim before re-entry
     stop_recover_low: Dict[str, float] = {}   # ticker -> lowest price since its stop; re-entry blocked until +recover_pct above this trough
@@ -1016,9 +1053,50 @@ def run_backtest(
                         ranked = pd.concat([prows, ranked], ignore_index=True).drop_duplicates(
                             subset="ticker", keep="first").reset_index(drop=True)
 
+                # Shock overlay: condition tomorrow's new buys on today's volatility.
+                eff_mult = exposure_mult
+                max_new_override = None
+                if shock_on:
+                    br = _ew_ret.iloc[bar_idx]; sig = _ew_sigma.iloc[bar_idx]
+                    bd = _breadth.iloc[bar_idx]
+                    is_shock = bool(pd.notna(br) and pd.notna(sig) and sig > 0
+                                    and abs(br) > shock_k * sig)
+                    down_shock = bool(is_shock and br < 0)
+                    spread_inv = (_momentum_spread_negative(current_scores, close, bar_idx)
+                                  if current_scores else False)
+                    # Re-risk-fast (v6): within the post-down-shock window, the first non-shock
+                    # bar that confirms recovery (breadth majority-up, momentum not inverting)
+                    # suspends de-risking and redeploys the idle budget aggressively.
+                    regime_recover_ok = True
+                    if shock_recover_regime_ma and qqq_arr is not None and bar_idx >= shock_recover_regime_ma:
+                        _qma = float(qqq_arr[bar_idx - shock_recover_regime_ma + 1: bar_idx + 1].mean())
+                        regime_recover_ok = float(qqq_arr[bar_idx]) > _qma
+                    recovering = bool(shock_recover_days and shock_cooldown > 0 and not down_shock
+                                      and pd.notna(bd) and float(bd) > shock_recover_breadth
+                                      and not spread_inv and regime_recover_ok)
+                    if recovering:
+                        max_new_override = shock_recover_max_new      # catch-up redeploy
+                        shock_cooldown = 0                            # recovered → leave the watch
+                    elif is_shock and (not shock_down_only or br < 0) and not ranked.empty:
+                        if down_shock and pd.notna(bd) and float(bd) < shock_crash_breadth and spread_inv:
+                            eff_mult = min(eff_mult, shock_crash_size_mult)   # correlated crash → stop adding
+                        else:
+                            eff_mult = eff_mult * shock_size_mult             # vol clustering → size down
+                        # No-chase: drop today's top-decile single-day gappers (reversal risk).
+                        if shock_no_chase_q is not None:
+                            tr = _uni_ret.iloc[bar_idx]
+                            thr = tr.quantile(float(shock_no_chase_q))
+                            if pd.notna(thr):
+                                gappers = set(tr[tr >= thr].dropna().index)
+                                ranked = ranked[~ranked["ticker"].isin(gappers)].reset_index(drop=True)
+                    # Update the post-down-shock recovery-watch countdown.
+                    if down_shock:
+                        shock_cooldown = shock_recover_days
+                    elif shock_cooldown > 0 and not recovering:
+                        shock_cooldown -= 1
                 pending_orders = (
                     _queue_entries(ranked, positions, portfolio_value, cash, config,
-                                   exposure_mult=exposure_mult)
+                                   exposure_mult=eff_mult, max_new_override=max_new_override)
                     if regime_ok else []
                 )
                 if signal_sink is not None:

@@ -1,0 +1,158 @@
+# ─── Scenario: model_v5 (model_v4 + shock overlay) ──────────────────────────
+# Identical to model_v4 (83-name universe, score-conditional exits, persistence buy,
+# rotation funding, Barroso volatility targeting) PLUS a fast, event-driven SHOCK
+# OVERLAY on the at-close BUY recommendations.
+#
+# Why: model_v4's only governor is Barroso vol targeting, which reacts on a 126-day
+# (6-month) realized-vol forecast — far too slow to respond to a single highly volatile
+# session. The 2022 stress test showed v4 churning new buys into a high-vol chop
+# (win rate 24%, PF 0.37). The overlay conditions tomorrow's NEW BUYS on TODAY's move:
+#
+#   * Shock day (|equal-weight basket 1d return| > vol_k × trailing σ):
+#       - size new buys DOWN by size_mult   (volatility clustering → tomorrow's vol is high)
+#       - DON'T CHASE the day's top-decile single-day gappers (short-term reversal risk)
+#   * Correlated DOWN-crash (shock + breadth collapsed + momentum INVERTING):
+#       - cut new buys to crash_size_mult (≈ stop adding into a momentum-crash tape)
+#
+# Conditions only the new-buy side; exits stay governed by the existing score-gated
+# logic (we found sell-side vol-trimming hurts). Theory-derived thresholds (vol
+# clustering / short-term reversal / Daniel-Moskowitz momentum crashes), NOT fit to any
+# single year — validate across the regime panel and OOS before trusting magnitudes.
+
+name: model_v5
+description: >
+  model_v4 plus a fast shock overlay: after a highly volatile session, size new buys
+  down and skip the day's blow-off gappers; in a confirmed correlated down-crash (breadth
+  collapse + momentum inversion) stop adding entirely. New-buy-side only; exits unchanged.
+
+tickers:
+  - CRWD
+  - ORCL
+  - COIN
+  - NFLX
+  - PANW
+  - GOOGL
+  - BAC
+  - MSFT
+  - AVGO
+  - AMZN
+  - COST
+  - ASML
+  - AAPL
+  - JPM
+  - TSM
+  - GS
+  - META
+  - TSLA
+  - MU
+  - AMD
+  - NVDA
+  # ── Dispersion / diversification adds (uncorrelated sectors + momentum leaders) ──
+  - LLY
+  - VST
+  - AXON
+  - GE
+  - PLTR
+  - OXY
+  # ── Adversarial / anti-survivorship laggards (test ranker discrimination) ──
+  - INTC
+  - BA
+  - PFE
+  - PYPL
+  - SEDG
+  - PLUG
+  # ── Growth / tech / mega-cap breadth adds ──
+  - ADBE
+  - CRM
+  - NOW
+  - INTU
+  - SAP
+  - WDAY
+  - SNOW
+  - DDOG
+  - NET
+  - MDB
+  - ZS
+  - FTNT
+  - TEAM
+  - OKTA
+  - TWLO
+  - HUBS
+  - SNPS
+  - CDNS
+  - QCOM
+  - TXN
+  - AMAT
+  - LRCX
+  - KLAC
+  - NXPI
+  - MRVL
+  - ADI
+  - MCHP
+  - "ON"
+  - ARM
+  - ANET
+  - CSCO
+  - IBM
+  - DELL
+  - SMCI
+  - VRT
+  - APP
+  - SHOP
+  - UBER
+  - ABNB
+  - MELI
+  - SE
+  - SPOT
+  - DASH
+  - RBLX
+  - PINS
+  - SNAP
+  - TTD
+  - NU
+  - HOOD
+  - SOFI
+
+portfolio:
+  max_position_pct: 0.085
+  max_total_exposure: 0.90
+  max_new_trades_per_day: 2
+
+signals:
+  min_composite_score: 0.70
+
+risk:
+  stop_loss: 0.15
+  take_profit: null
+  trailing_stop: null
+  max_holding_days: 90
+  reentry_recover_pct: 0.10
+  stop_loss_score_max: 0.90
+  max_hold_score_max: 0.80
+  score_entry_above: 0.90
+  score_entry_days: 3
+  fund_by_rotation: true
+  target_vol: 0.35
+  vol_lookback_days: 126
+  vol_exposure_floor: 0.3
+  vol_exposure_cap: 1.0
+  # ── NEW in v5: fast shock overlay (conditions new buys on today's volatility) ──
+  # REGIME-PANEL FINDING (2018→2026, vs v4): this is a CRASH-MITIGATION variant, NOT an
+  # all-weather return upgrade. down_only is the validated design — strictly better than the
+  # symmetric version in every stress/chop window:
+  #   2020 COVID  -20.5% → -3.2%   2021 chop  +11.7% → +20.9%   2018-Q4  -15.9% → -13.4%
+  # The cost is in smooth V-recovery bull years (2024 +85.7% → +72.5%): it sizes down on
+  # down-shock days that then bounce, so over a bull-DOMINATED full sample it ~halves the
+  # compound (+1942% → +967%) and does NOT improve the full-window max drawdown (-35.7% best
+  # at v4). Use v5 when the mandate is drawdown-averse; keep v4 to maximize terminal wealth.
+  # (Open refinement: re-risk FAST once breadth/momentum recover, to keep the crash
+  # protection without the V-recovery drag.)
+  shock_overlay:
+    enabled: true
+    down_only: true      # only size-down / no-chase / crash-mode on DOWN shocks (up-shocks = momentum continuation)
+    vol_k: 2.5           # shock if |basket 1d return| > vol_k × trailing daily σ
+    lookback: 20         # trailing window for the daily-σ estimate
+    size_mult: 0.5       # new-buy size multiplier on a (non-crash) down-shock day
+    no_chase_q: 0.90     # on a shock day, skip new buys for names in the top decile of today's 1d returns
+    crash_breadth: 0.25  # down-shock + advancers below this + momentum inverting → correlated crash
+    crash_size_mult: 0.0 # new-buy multiplier on a confirmed correlated crash (≈ stop adding)
