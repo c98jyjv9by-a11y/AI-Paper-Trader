@@ -199,8 +199,9 @@ def _spec_to_text(spec: Dict[str, Any], pf: Paper, prices: Dict[str, float]) -> 
     L.append("MODEL HELD BOOK:")
     if hold:
         for h in hold:
+            sess = h.get("session", h.get("today"))   # enrich_holdings renamed 'session' -> 'today'
             L.append(f"  {h['ticker']}: {h['shares']} sh @ {_money(h['now'],2)} "
-                     f"= {_money(h.get('value'))}  (unreal {_pct(h['unreal'])}, session {_pct(h['session'])})")
+                     f"= {_money(h.get('value'))}  (unreal {_pct(h['unreal'])}, session {_pct(sess)})")
     else:
         L.append("  (flat)")
     ns = spec.get("next_session") or {}
