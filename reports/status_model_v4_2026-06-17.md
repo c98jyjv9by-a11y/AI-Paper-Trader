@@ -7,10 +7,10 @@
 
 | Metric | Value |
 |--------|-------|
-| **Top 10 − Bottom 10 spread** | **+6.01%** |
-| Top 10 avg | +2.26% |
+| **Top 10 − Bottom 10 spread** | **+6.02%** |
+| Top 10 avg | +2.27% |
 | Bottom 10 avg | -3.75% |
-| Universe avg (all 83) | -1.24% |
+| Universe avg (all 83) | -1.23% |
 | Held book (equal-wt / $-wt) | +0.94% / +1.59% |
 | Advancers | 24/83 |
 | Names clearing buy gate | 20/83 |
@@ -59,13 +59,13 @@ _These are the scores that set up the most recent session; `Return` shows how ea
 | 2 | ARM | 0.910 | ✓ | 396.34 | 418.88 | +5.69% | HELD |
 | 3 | HOOD | 0.904 | ✓ | 96.71 | 105.20 | +8.78% |  |
 | 4 | KLAC | 0.885 | ✓ | 237.33 | 238.73 | +0.59% |  |
-| 5 | LRCX | 0.881 | ✓ | 369.34 | 374.18 | +1.31% |  |
+| 5 | LRCX | 0.881 | ✓ | 369.08 | 374.18 | +1.38% |  |
 | 6 | SOFI | 0.842 | ✓ | 17.71 | 17.42 | -1.64% |  |
 | 7 | MU | 0.809 | ✓ | 1020.76 | 1043.19 | +2.20% |  |
 | 8 | RBLX | 0.799 | ✓ | 49.34 | 48.02 | -2.68% |  |
 | 9 | MRVL | 0.794 | ✓ | 278.67 | 289.54 | +3.90% | HELD |
 | 10 | VST | 0.773 | ✓ | 158.61 | 158.83 | +0.14% |  |
-| | | | | | | **AVG +2.26%** | |
+| | | | | | | **AVG +2.27%** | |
 
 ### Bottom 10 (lowest buy scores @ prior close)
 
@@ -95,13 +95,13 @@ _Return from the prior close to each **hourly Chicago-time checkpoint** (9:00, 1
 | ARM | +1.88% | +5.79% | +6.68% | +6.73% | +7.80% | +10.51% | +5.69% |
 | HOOD | +3.36% | +8.37% | +11.41% | +11.91% | +12.63% | +13.32% | +8.78% |
 | KLAC | +3.92% | +3.05% | +2.76% | +1.59% | +2.60% | +2.95% | +0.59% |
-| LRCX | +4.63% | +5.49% | +5.35% | +4.28% | +4.42% | +3.71% | +1.31% |
+| LRCX | +4.71% | +5.56% | +5.42% | +4.35% | +4.50% | +3.79% | +1.38% |
 | SOFI | +3.19% | +3.27% | +4.50% | +4.66% | +5.00% | +3.47% | -1.64% |
 | MU | +0.12% | +1.49% | +3.71% | +3.55% | +4.47% | +5.36% | +2.20% |
 | RBLX | -1.82% | +0.13% | +1.49% | +1.13% | +1.99% | +1.36% | -2.68% |
 | MRVL | +1.92% | +4.02% | +5.34% | +5.81% | +6.76% | +7.84% | +3.90% |
 | VST | +0.89% | +0.51% | +1.82% | +2.16% | +2.34% | +1.59% | +0.14% |
-| **AVG** | +2.56% | +4.05% | +5.11% | +4.86% | +5.56% | +5.68% | +2.26% |
+| **AVG** | +2.56% | +4.06% | +5.12% | +4.87% | +5.57% | +5.69% | +2.27% |
 
 ### Bottom 10 @ prior close — intraday path
 
@@ -146,7 +146,7 @@ _Recomputed on the current/provisional prices. 20/83 names clear the buy gate no
 | 1 | HOOD | 0.972 | ✓ | 105.20 | ▲2 |  |
 | 2 | AMAT | 0.951 | ✓ | 592.92 | ▼1 |  |
 | 3 | ARM | 0.919 | ✓ | 418.88 | ▼1 | HELD |
-| 4 | LRCX | 0.887 | ✓ | 374.18 | ▲1 |  |
+| 4 | LRCX | 0.888 | ✓ | 374.18 | ▲1 |  |
 | 5 | KLAC | 0.866 | ✓ | 238.73 | ▼1 |  |
 | 6 | MRVL | 0.858 | ✓ | 289.54 | ▲3 | HELD |
 | 7 | MU | 0.853 | ✓ | 1043.19 | • |  |
@@ -173,12 +173,12 @@ _Recomputed on the current/provisional prices. 20/83 names clear the buy gate no
 
 | Group | Avg return |
 |-------|-----------:|
-| Top 10 | +2.26% |
-| Universe (all 83) | -1.24% |
+| Top 10 | +2.27% |
+| Universe (all 83) | -1.23% |
 | Held book (equal-wt) | +0.94% |
 | Bottom 10 | -3.75% |
 
-## Held book — 10 positions  (portfolio $172,011, cash $16,730)
+## Held book — 10 positions  (portfolio $172,009, cash $16,729)
 
 | Ticker | Shares | Entry | Now | Unreal % | Return |
 |--------|-------:|------:|----:|---------:|-------:|
@@ -200,6 +200,6 @@ _Recomputed on the current/provisional prices. 20/83 names clear the buy gate no
 | 1D | +1.43% | -1.25% | -1.01% | +2.68% | +2.44% |
 | 5D | +10.15% | +2.14% | +4.15% | +8.01% | +6.00% |
 | MTD | -3.55% | -2.32% | -2.72% | -1.24% | -0.83% |
-| Since 2026-01-01 | +72.01% | +8.76% | +17.99% | +63.26% | +54.02% |
+| Since 2026-01-01 | +72.01% | +8.76% | +17.99% | +63.25% | +54.02% |
 
 _Ranking is reproducible from price history (composite of 1d/5d/20d returns + volume ratio); the latest mark may be a provisional intraday bar that settles at the close._
