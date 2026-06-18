@@ -12,10 +12,11 @@ performance vs SPY/QQQ. Read-only w.r.t. live state; writes to reports/ and back
 import argparse
 import logging
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -71,6 +72,55 @@ def intraday_returns(tickers, day, prior_close: Dict[str, float]) -> Optional[Di
                     rec[hhmm] = None
         out[t] = rec
     return out if any_hit else None
+
+
+def extended_hours_prices(tickers, vwap_bars: int = 5):
+    """Latest EXTENDED-HOURS (pre-/post-market) price per ticker, from 1-minute `prepost`
+    bars. To damp a single thin print, the mark is a short volume-weighted average of the
+    last `vwap_bars` bars (falls back to the last price if volume is missing/zero).
+
+    Returns ({ticker: price} for names with data, as-of-label, as-of-date) — e.g.
+    ({...}, "19:59 ET post-market", date(2026, 6, 17)). Network call; extended bars exist only
+    for the very recent session, so this is for LIVE marking, never for historical/backtest
+    dates. Returns ({}, None, None) on any failure."""
+    import yfinance as yf
+    try:
+        raw = yf.download(list(tickers), period="2d", interval="1m", prepost=True,
+                          progress=False, auto_adjust=True)
+    except Exception:
+        return {}, None, None
+    if raw is None or raw.empty or "Close" not in raw:
+        return {}, None, None
+    cl = raw["Close"]; vol = raw["Volume"] if "Volume" in raw else None
+    if isinstance(cl, pd.Series):                       # single ticker → normalize to frame
+        cl = cl.to_frame(list(tickers)[0])
+        if vol is not None and isinstance(vol, pd.Series):
+            vol = vol.to_frame(list(tickers)[0])
+    out: Dict[str, float] = {}
+    asof = None
+    for t in tickers:
+        if t not in getattr(cl, "columns", []):
+            continue
+        s = cl[t].dropna()
+        if s.empty:
+            continue
+        tail = s.iloc[-vwap_bars:]
+        if vol is not None and t in getattr(vol, "columns", []):
+            v = vol[t].reindex(tail.index).fillna(0.0)
+            px = float((tail * v).sum() / v.sum()) if float(v.sum()) > 0 else float(tail.iloc[-1])
+        else:
+            px = float(tail.iloc[-1])
+        out[t] = px
+        last_ts = s.index[-1]
+        asof = last_ts if (asof is None or last_ts > asof) else asof
+    label = asof_date = None
+    if asof is not None:
+        h, m = asof.hour, asof.minute
+        sess = ("pre-market" if (h < 9 or (h == 9 and m < 30))
+                else "post-market" if h >= 16 else "regular hours")
+        label = f"{asof.strftime('%H:%M')} ET {sess}"
+        asof_date = asof.date()
+    return out, label, asof_date
 
 
 def _win_ret(series: pd.Series, anchor: pd.Timestamp) -> Optional[float]:
@@ -153,10 +203,11 @@ def _persistence_candidates(pdata: pd.DataFrame, cfg: Dict[str, Any], held: set,
     return sorted(above or set())
 
 
-def _next_session_block(cfg, pdata, positions, held, pv, cash, em, rows_cur) -> Dict[str, Any]:
+def _next_session_block(cfg, pdata, positions, held, pv, cash, em, rows_cur, start) -> Dict[str, Any]:
     """Queued decision for next session (decide at last close → fill next open), plus an
-    explicit reason when there is no trade."""
-    ns = next_session_decision(cfg, pdata)
+    explicit reason when there is no trade. `start` must match the report's sim start so
+    the simulated book agrees with the report's held book."""
+    ns = next_session_decision(cfg, pdata, start)
     buys, sells = ns["buys"], ns["sells"]
     risk = cfg.get("risk", {})
     base_exp = float(cfg["portfolio"]["max_total_exposure"])
@@ -206,7 +257,14 @@ def _next_session_block(cfg, pdata, positions, held, pv, cash, em, rows_cur) -> 
 
 
 def _write_ranking_snapshot(root: Path, scenario: str, d, ranked_rows) -> None:
+    """Persist the ranking AS OF date `d`. WRITE-ONCE / FROZEN: if a snapshot already exists
+    for that date it is left untouched — a later rerun (e.g. regenerating a report, or with
+    overnight feed-revised prices) must NOT silently rewrite the originally-published ranking.
+    To intentionally refresh one, delete the file first."""
     p = _ranking_snapshot_path(root, scenario, d)
+    if p.exists():
+        log.debug("Ranking snapshot %s already exists — frozen, not overwriting.", p.name)
+        return
     p.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame([{"rank": x["rank"], "ticker": x["ticker"], "score": round(x["score"], 4),
                    "gate": "yes" if x["clears_gate"] else "no"} for x in ranked_rows]).to_csv(p, index=False)
@@ -215,9 +273,16 @@ def _write_ranking_snapshot(root: Path, scenario: str, d, ranked_rows) -> None:
 def build_report(scenario: str, start: date, end: date, top_n: int = 10,
                  *, cfg: Optional[Dict[str, Any]] = None, pdata: Optional[pd.DataFrame] = None,
                  eq: Optional[pd.DataFrame] = None, positions: Optional[pd.DataFrame] = None,
-                 trades: Optional[pd.DataFrame] = None, fast: bool = False) -> Dict[str, Any]:
+                 trades: Optional[pd.DataFrame] = None, fast: bool = False,
+                 write_snapshot: Optional[bool] = None, with_intraday: Optional[bool] = None,
+                 account: Optional[str] = None, prepost: bool = False) -> Dict[str, Any]:
     """Build the rank/status snapshot. The scenario run can pass its already-computed
-    cfg/pdata/eq/positions to avoid re-fetching and re-running the backtest."""
+    cfg/pdata/eq/positions to avoid re-fetching and re-running the backtest.
+
+    `fast` (used by the cover-series harness) skips the snapshot read/write + intraday fetch.
+    `write_snapshot` overrides only the WRITE: e.g. a midday run wants to LOAD the prior EOD
+    snapshot and compute intraday (fast=False) but must NOT write a provisional one for the
+    in-progress day (write_snapshot=False)."""
     root = Path(__file__).parent.parent
     if cfg is None:
         cfg = build_config(load_config(root / "config"), load_scenario(scenario))
@@ -231,6 +296,42 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
     close = pdata["Close"]
     rank_close = close.index[-2]          # last completed close → ranking anchor
     mark = close.index[-1]                # latest available price (may be provisional)
+
+    # Extended-hours marking: bring in the latest pre-/post-market print and let every
+    # downstream return / current-ranking / held-book value reflect it. Two cases:
+    #   • the print is for a NEWER session than the daily panel has (e.g. pre-market on a new
+    #     day, before today's daily bar exists) → APPEND a fresh mark bar, so "latest" is
+    #     cleanly distinguished from the prior close;
+    #   • the print is for the SAME day as the latest daily bar (e.g. post-market after the
+    #     close) → overwrite that bar's prices.
+    # Guarded to a live render (end within a few days of today) so historical reports never
+    # stamp live prices onto a past date.
+    mark_note = None
+    if prepost and end >= date.today() - timedelta(days=4):
+        ext, mark_note, ext_date = extended_hours_prices(sorted(set(uni) | {"SPY", "QQQ"}))
+        if ext and ext_date and ext_date >= mark.date():
+            pdata = pdata.copy()
+            if ext_date > mark.date():                       # new session → append a mark bar
+                row = {}
+                for col in pdata.columns:
+                    lvl, t = col
+                    if lvl == "Close":
+                        cur = close.loc[mark, t]
+                        row[col] = ext.get(t, float(cur) if pd.notna(cur) else np.nan)
+                    else:
+                        row[col] = 0.0
+                pdata = pd.concat([pdata, pd.DataFrame(row, index=[pd.Timestamp(ext_date)])]).sort_index()
+                rank_close = mark                            # the prior daily close
+                mark = pd.Timestamp(ext_date)
+            else:                                            # same-day → overwrite latest bar
+                for t, px in ext.items():
+                    if ("Close", t) in pdata.columns:
+                        pdata.loc[mark, ("Close", t)] = px
+            close = pdata["Close"]
+        else:
+            mark_note = None              # nothing usable came back → fall back to the regular mark
+    elif prepost:
+        log.warning("prepost marking skipped — render end %s is not live.", end)
 
     def ret(t: str) -> Optional[float]:
         if t not in close.columns:
@@ -247,6 +348,15 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
     rf_cur = rank_candidates(calculate_signals(sl_cur, uni), top_n=len(uni),
                              weights=weights, ticker_weights=tw).reset_index(drop=True)
 
+    # Account mode: serve the FROZEN ledger (immune to config/model changes & price
+    # revisions) instead of recomputing the book — the locked window stays reproducible.
+    if account and (eq is None or positions is None):
+        from account import load_ledger
+        led = load_ledger(account)
+        eq, positions = led["equity"], led["positions"]
+        if trades is None:
+            trades = led["trades"]
+
     # current held book + portfolio stats (reuse the scenario run's results if given)
     if eq is None or positions is None:
         _t, eq, positions = run_backtest(cfg, pdata, start, end)
@@ -256,6 +366,17 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
     pv = float(eq["total_portfolio_value"].iloc[-1])
     cash = float(eq["cash"].iloc[-1])
     starting = float(cfg["portfolio"]["starting_value"])
+
+    # Extended-hours: re-mark the held book to the after-hours print and recompute portfolio
+    # value (cash is unchanged; only the marked equity moves) so every "Now"/Value/%NAV/PV
+    # downstream reflects the extended session.
+    if mark_note and not positions.empty:
+        positions = positions.copy()
+        for i in positions.index:
+            t = positions.at[i, "ticker"]
+            if t in close.columns and not pd.isna(close.loc[mark, t]):
+                positions.at[i, "current_price"] = float(close.loc[mark, t])
+        pv = cash + float((positions["shares"] * positions["current_price"]).sum())
 
     def _px(t, ts):
         return float(close.loc[ts, t]) if (t in close.columns and not pd.isna(close.loc[ts, t])) else None
@@ -293,8 +414,10 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
             "price": _px(t, mark), "held": t in held,
         })
     # Persist the current ranking as the snapshot for `mark`'s date (becomes the next
-    # session's authoritative prior-close ranking). Skipped in fast/series mode.
-    if not fast:
+    # session's authoritative prior-close ranking). Skipped in fast/series mode, and
+    # explicitly suppressible (e.g. a midday run must not write a provisional snapshot).
+    do_write = (not fast) if write_snapshot is None else write_snapshot
+    if do_write:
         try:
             _write_ranking_snapshot(root, scenario, mark.date(), rows_cur)
         except Exception as exc:
@@ -304,9 +427,34 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
     for x in rows_cur:
         x["rank_chg"] = (prior_rank.get(x["ticker"]) - x["rank"]) if x["ticker"] in prior_rank else None
 
-    # intraday return progression (vs prior close) for the top/bottom-N prior-close names
+    # prior-DAY rank movement: how each prior-close (rank_close) name moved vs the day before
+    # (the trading day before rank_close), from that day's saved snapshot. Attached to `rows`.
+    prev_day = close.index[-3].date() if len(close.index) >= 3 else None
+    prev_snap = _load_ranking_snapshot(root, scenario, prev_day) if (prev_day and not fast) else None
+    prev_rank_map = {s["ticker"]: s["rank"] for s in prev_snap} if prev_snap else {}
+    for x in rows:
+        x["prior_rank_chg"] = (prev_rank_map.get(x["ticker"]) - x["rank"]) if x["ticker"] in prev_rank_map else None
+
+    # entry-date composite score for each held name (for the midday score-transition column):
+    # the score the model saw on the day the position was opened. One ranking per unique entry date.
+    entry_scores: Dict[str, Optional[float]] = {}
+    if not fast and not positions.empty and "entry_date" in positions.columns:
+        for ed in pd.Series(positions["entry_date"]).dropna().unique():
+            try:
+                sl = pdata.loc[:pd.Timestamp(ed)].iloc[-_SIGNAL_WINDOW:]
+                rf_e = rank_candidates(calculate_signals(sl, uni), top_n=len(uni),
+                                       weights=weights, ticker_weights=tw)
+                scm = dict(zip(rf_e["ticker"], rf_e["composite_score"]))
+            except Exception:
+                scm = {}
+            for t in positions.loc[positions["entry_date"] == ed, "ticker"]:
+                entry_scores[t] = scm.get(t)
+
+    # intraday return progression (vs prior close) for the top/bottom-N prior-close names.
+    # Network fetch — skip it for EOD-style/account renders that don't show intraday paths.
+    do_intraday = (not fast) if with_intraday is None else with_intraday
     intraday = None
-    if not fast:
+    if do_intraday:
         try:
             need = ([x["ticker"] for x in rows[:top_n]] + [x["ticker"] for x in rows[-top_n:]]
                     + sorted(held))                          # include held positions too
@@ -354,13 +502,14 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
     return {
         "scenario": scenario, "rank_close": rank_close.date(), "mark": mark.date(),
         "min_score": min_score, "rows": rows, "n": n, "top_n": top_n,
-        "snapshot_used": snapshot_used,
+        "snapshot_used": snapshot_used, "prepost": bool(mark_note), "mark_note": mark_note,
         # vol-targeting risk budget (latest bar): forecast vol + exposure multiplier
         "today_trades": _today_trades(trades, mark.date().isoformat()),
         "recent_trades": _recent_trades(trades, 10),
         "next_session": _next_session_block(cfg, pdata, positions, held, pv, cash,
                                             (float(eq["exposure_mult"].iloc[-1])
-                                             if "exposure_mult" in eq.columns else 1.0), rows_cur),
+                                             if "exposure_mult" in eq.columns else 1.0),
+                                            rows_cur, start),
         "target_vol": cfg.get("risk", {}).get("target_vol"),
         "forecast_vol": (float(eq["forecast_vol"].dropna().iloc[-1])
                          if "forecast_vol" in eq.columns and eq["forecast_vol"].notna().any() else None),
@@ -370,7 +519,7 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
         "top_avg": top_avg, "bot_avg": bot_avg, "signal_strength": signal_strength,
         "advancers": advancers, "n_gate": n_gate,
         "rows_cur": rows_cur, "n_gate_cur": sum(1 for x in rows_cur if x["clears_gate"]),
-        "intraday": intraday,
+        "intraday": intraday, "entry_scores": entry_scores,
         "held_avg": (sum(held_rets) / len(held_rets)) if held_rets else None,
         "held_dw": held_dw,
         "positions": positions, "pv": pv, "cash": cash, "ret": ret, "stats": stats,

@@ -1,5 +1,5 @@
 # Status & Rank Report — model_v4
-**Ranked as of close:** 2026-06-15  |  **Marked to:** 2026-06-16 (latest; may be provisional)  |  **Buy gate:** 0.7  |  **Generated:** 2026-06-16
+**Ranked as of close:** 2026-06-15  |  **Marked to:** 2026-06-16 (latest; may be provisional)  |  **Buy gate:** 0.7  |  **Generated:** 2026-06-17
 
 > Two rankings, clearly separated: **(A) Prior-close ranking** — composite scores fixed at the prior close (2026-06-15) and marked forward to the latest price (shows how those picks did this session); and **(B) Current ranking** — composite scores recomputed on the latest prices (2026-06-16), i.e. the standing that sets up the next session. ✓ = clears the buy gate.
 
@@ -144,30 +144,30 @@ _Recomputed on the current/provisional prices. 20/83 names clear the buy gate no
 | # | Ticker | Score | Gate | 2026-06-16 px | Δrank vs prior | Held |
 |---|--------|------:|:----:|------:|:-------------:|:----:|
 | 1 | AMAT | 0.913 | ✓ | 568.23 | ▲3 |  |
-| 2 | ARM | 0.910 | ✓ | 396.34 | ▼1 | HELD |
-| 3 | HOOD | 0.904 | ✓ | 96.71 | ▲2 |  |
-| 4 | KLAC | 0.885 | ✓ | 237.33 | ▼1 |  |
-| 5 | LRCX | 0.881 | ✓ | 369.34 | ▼3 |  |
-| 6 | SOFI | 0.842 | ✓ | 17.71 | ▲14 |  |
-| 7 | MU | 0.809 | ✓ | 1020.76 | ▲3 |  |
-| 8 | RBLX | 0.799 | ✓ | 49.34 | ▲13 |  |
-| 9 | MRVL | 0.794 | ✓ | 278.67 | ▼2 | HELD |
-| 10 | VST | 0.773 | ✓ | 158.61 | ▲15 |  |
+| 2 | ARM | 0.898 | ✓ | 396.34 | ▼1 | HELD |
+| 3 | HOOD | 0.896 | ✓ | 96.71 | ▲2 |  |
+| 4 | KLAC | 0.883 | ✓ | 237.33 | ▼1 |  |
+| 5 | LRCX | 0.879 | ✓ | 369.34 | ▼3 |  |
+| 6 | GE | 0.851 | ✓ | 351.73 | ▲5 |  |
+| 7 | SOFI | 0.842 | ✓ | 17.71 | ▲13 |  |
+| 8 | VST | 0.828 | ✓ | 158.61 | ▲17 |  |
+| 9 | ANET | 0.822 | ✓ | 168.01 | ▲4 |  |
+| 10 | RBLX | 0.799 | ✓ | 49.34 | ▲11 |  |
 
 ### Bottom 10 (lowest buy scores @ current prices)
 
 | # | Ticker | Score | Gate | 2026-06-16 px | Δrank vs prior | Held |
 |---|--------|------:|:----:|------:|:-------------:|:----:|
-| 74 | OXY | 0.245 | — | 53.67 | • |  |
-| 75 | ADBE | 0.227 | — | 207.32 | • |  |
-| 76 | SMCI | 0.219 | — | 29.22 | ▼6 |  |
-| 77 | TTD | 0.206 | — | 18.96 | ▼13 |  |
-| 78 | ZS | 0.198 | — | 127.23 | ▲1 |  |
-| 79 | NOW | 0.198 | — | 101.33 | ▼14 |  |
-| 80 | SAP | 0.184 | — | 165.41 | • |  |
-| 81 | HUBS | 0.173 | — | 182.85 | • |  |
-| 82 | INTU | 0.165 | — | 280.99 | • |  |
-| 83 | PLUG | 0.108 | — | 2.71 | • |  |
+| 74 | SNPS | 0.243 | — | 448.38 | ▼7 |  |
+| 75 | ADBE | 0.220 | — | 207.32 | • |  |
+| 76 | HUBS | 0.216 | — | 182.85 | ▲5 |  |
+| 77 | ZS | 0.198 | — | 127.23 | ▲2 |  |
+| 78 | NOW | 0.195 | — | 101.33 | ▼13 |  |
+| 79 | SMCI | 0.195 | — | 29.22 | ▼9 |  |
+| 80 | TTD | 0.184 | — | 18.96 | ▼16 |  |
+| 81 | SAP | 0.184 | — | 165.41 | ▼1 |  |
+| 82 | INTU | 0.153 | — | 280.99 | • |  |
+| 83 | PLUG | 0.103 | — | 2.71 | • |  |
 
 ## Group returns (ranking-close → latest)
 

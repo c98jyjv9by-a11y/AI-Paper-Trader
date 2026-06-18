@@ -1,0 +1,30 @@
+{
+  "name": "primary",
+  "scenario": "model_v4",
+  "status": "frozen",
+  "inception": "2026-01-01",
+  "frozen_through": "2026-06-17",
+  "starting_value": 100000.0,
+  "ending_value": 172010.72,
+  "total_return": 0.7201072000000001,
+  "n_trades": 40,
+  "n_positions": 10,
+  "created_at": "2026-06-17T18:26:47",
+  "rankings_copied": [
+    "rankings_model_v4_2026-06-15.csv",
+    "rankings_model_v4_2026-06-16.csv",
+    "rankings_model_v4_2026-06-17.csv"
+  ],
+  "note": "Immutable derived ledger; frozen against config/model changes and price revisions. Phase 1 = static record (no forward trading).",
+  "hashes": {
+    "trades.csv": "10a1a4eeaf0068961ba6000d060289f1671834e01e7a861690d30bb8aff4c153",
+    "equity.csv": "cd827eb42090eba8d20f3747d85e831374ac48589ba6246f9917a338406984a9",
+    "positions.csv": "153df899ca5edbfbd777c963da14882269da3341ecf923502b50e7c14853d677",
+    "reports/backtest_model_v4_2026-06-17.md": "40d393fbcef40bcef4cf8756b421daebd8c80e9d6eb83971145d3e3b4a699704",
+    "reports/eod_model_v4_2026-06-17.pdf": "c92abddcaf0da840decfffdcacc18144d74c7be8445827f3718de6719d2a13ab",
+    "reports/status_model_v4_2026-06-17.md": "072ba1aee75b73b0090afd9d3f4d9bf5822fdf0d4ca11a49a29f61437fab894c",
+    "rankings/rankings_model_v4_2026-06-15.csv": "61a562754e21322bf3cc933d7fdef0ee12bae7e9e7d71cd4691d6bf62f06d147",
+    "rankings/rankings_model_v4_2026-06-16.csv": "16e589b0cd24f11c5c63deca4b7c291597447741d37aff716de2def8ea46f832",
+    "rankings/rankings_model_v4_2026-06-17.csv": "4133d57b3eb385e33fa1f169b8f8627e059d8a6af5632a96b22863ac8ccbbf09"
+  }
+}

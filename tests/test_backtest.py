@@ -952,3 +952,116 @@ class TestNextSessionDecision:
         # the baseline by re-running baseline and checking it is unchanged & deterministic
         base2, _e2, _p2 = run_backtest(cfg, data, data.index[0].date(), data.index[-1].date())
         pd.testing.assert_frame_equal(base.reset_index(drop=True), base2.reset_index(drop=True))
+
+
+# ─── Resume-from-state (Phase-2 living continuation) ──────────────────────────
+
+
+class TestResumeFromState:
+    def _flat(self, tickers, n=40, px=100.0):
+        return _make_flat_price_data(tickers + ["SPY", "QQQ"], n_days=n, base_price=px)
+
+    def test_seeded_position_and_cash_carry_forward(self):
+        data = self._flat(["AAA"], n=40)
+        dates = data.index
+        cfg = _make_config(["AAA"], stop_loss=0.9, take_profit=9.0, max_holding=999, max_new=0)
+        seed = pd.DataFrame([{
+            "ticker": "AAA", "shares": 10, "entry_price": 100.0,
+            "entry_date": dates[5].date().isoformat(), "current_price": 100.0,
+            "highest_price": 100.0, "lowest_price": 100.0}])
+        trades, eq, pos = run_backtest(
+            cfg, data, dates[20].date(), dates[-1].date(),
+            initial_cash=5_000.0, initial_positions=seed, initial_equity=[6000.0, 6000.0])
+        # the seeded position is carried (flat prices, no exit trigger, no new buys)
+        assert "AAA" in set(pos["ticker"]) and int(pos.loc[pos.ticker == "AAA", "shares"].iloc[0]) == 10
+        # equity starts from seeded cash + position value (5000 + 10*100), not the $100k default
+        assert abs(float(eq["total_portfolio_value"].iloc[0]) - 6000.0) < 1.0
+        assert abs(float(eq["cash"].iloc[0]) - 5000.0) < 1.0
+
+    def test_no_seed_still_starts_at_starting_value(self):
+        data = self._flat(["AAA"], n=40)
+        dates = data.index
+        cfg = _make_config(["AAA"], max_new=0)
+        _t, eq, _p = run_backtest(cfg, data, dates[20].date(), dates[-1].date())
+        assert abs(float(eq["total_portfolio_value"].iloc[0]) - cfg["portfolio"]["starting_value"]) < 1.0
+
+
+# ─── Shock overlay (model_v5): fast event-driven conditioning of new buys ─────
+
+
+class TestShockOverlay:
+    """The shock overlay conditions tomorrow's NEW BUYS on today's volatility. It is OFF
+    by default, must be a strict no-op when no bar is a shock, and must size-down (or
+    suppress) new buys on a down-shock day."""
+
+    def _multi(self, n_tickers=12, n_days=40, shock_bar=None, shock_ret=-0.15):
+        """N names on an identical, perfectly-steady +1%/day path (constant daily return →
+        zero trailing σ → the overlay never fires) plus SPY/QQQ. If shock_bar is set, every
+        name takes a synchronized shock_ret move on that one bar."""
+        names = [f"T{i:02d}" for i in range(n_tickers)]
+        dates = pd.date_range("2024-01-01", periods=n_days, freq="B")
+        base = 100.0 * 1.01 ** np.arange(n_days)
+        cols = {}
+        for t in names:
+            p = base.copy()
+            if shock_bar is not None:
+                # apply a one-bar shock and carry the level shift forward
+                p[shock_bar:] = p[shock_bar:] * (1.0 + shock_ret)
+            cols[t] = p
+        cols["SPY"] = base.copy(); cols["QQQ"] = base.copy()
+        cl = pd.DataFrame(cols, index=dates)
+        vol = pd.DataFrame({t: np.full(n_days, 1e6) for t in cols}, index=dates)
+        cl.columns = pd.MultiIndex.from_product([["Close"], cl.columns])
+        vol.columns = pd.MultiIndex.from_product([["Volume"], vol.columns])
+        return names, pd.concat([cl, vol], axis=1)
+
+    def _cfg(self, names, overlay=None):
+        cfg = _make_config(names, max_position_pct=0.05, max_exposure=0.9, max_new=1,
+                           stop_loss=0.9, take_profit=9.0, max_holding=999, top_n=12)
+        if overlay is not None:
+            cfg["risk"]["shock_overlay"] = overlay
+        return cfg
+
+    def test_noop_when_no_shock(self):
+        """Constant +1%/day → zero σ → overlay can never fire → identical trades to off."""
+        names, data = self._multi(shock_bar=None)
+        s, e = data.index[0].date(), data.index[-1].date()
+        off, _eo, _po = run_backtest(self._cfg(names), data, s, e)
+        on, _en, _pn = run_backtest(
+            self._cfg(names, {"enabled": True, "down_only": True, "vol_k": 2.5,
+                              "lookback": 5, "size_mult": 0.1, "no_chase_q": None}),
+            data, s, e)
+        pd.testing.assert_frame_equal(off.reset_index(drop=True), on.reset_index(drop=True))
+
+    def test_down_shock_sizes_down_next_day_buys(self):
+        """A synchronized down-shock on bar T → the buys filled at T+1 are sized down
+        (size_mult) vs the overlay-off run, which is identical up to the T decision."""
+        shock_bar = 30
+        names, data = self._multi(shock_bar=shock_bar, shock_ret=-0.15)
+        s, e = data.index[0].date(), data.index[-1].date()
+        overlay = {"enabled": True, "down_only": True, "vol_k": 2.5, "lookback": 5,
+                   "size_mult": 0.1, "no_chase_q": None, "crash_breadth": 0.0}
+        off, _eo, _po = run_backtest(self._cfg(names), data, s, e)
+        on, _en, _pn = run_backtest(self._cfg(names, overlay), data, s, e)
+        t1_iso = data.index[shock_bar + 1].date().isoformat()
+        v_off = off[(off.date == t1_iso) & (off.action == "BUY")]["trade_value"].sum()
+        v_on = on[(on.date == t1_iso) & (on.action == "BUY")]["trade_value"].sum()
+        assert v_off > 0                      # the off run does buy at T+1
+        assert v_on < v_off * 0.5             # the overlay shrinks that buy materially
+
+    def test_no_chase_drops_the_gapper_on_shock_day(self):
+        """With no-chase on, the day's top single-day mover is dropped from the candidates,
+        so the name bought at T+1 differs from the off run (which buys the gapper)."""
+        shock_bar = 30
+        names, data = self._multi(shock_bar=shock_bar, shock_ret=-0.15)
+        # make ONE name a big UP gapper on the shock bar (the rest crash) → it's the top mover
+        gapper = names[0]
+        data.loc[data.index[shock_bar], ("Close", gapper)] = \
+            float(data[("Close", gapper)].iloc[shock_bar - 1]) * 1.20
+        s, e = data.index[0].date(), data.index[-1].date()
+        overlay = {"enabled": True, "down_only": True, "vol_k": 2.5, "lookback": 5,
+                   "size_mult": 1.0, "no_chase_q": 0.90, "crash_breadth": 0.0}
+        on, _en, _pn = run_backtest(self._cfg(names, overlay), data, s, e)
+        t1_iso = data.index[shock_bar + 1].date().isoformat()
+        bought = set(on[(on.date == t1_iso) & (on.action == "BUY")]["ticker"])
+        assert gapper not in bought           # the blow-off gapper is not chased
