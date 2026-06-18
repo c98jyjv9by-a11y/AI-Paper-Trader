@@ -40,6 +40,8 @@ python run.py account-continue --name primary --end 2026-06-30 --scenario model_
 ```bash
 # Intraday — a Midday Pulse on the locked book marked to today's provisional price:
 python run.py midday --account primary
+# After the bell — mark the book to the latest extended-hours (pre/post-market) print:
+python run.py midday --account primary --prepost      # also on `eod`; live session only
 
 # After the close — advance the account one day; this ALSO renders + archives the day's
 # EOD + status reports into accounts/primary/reports/:

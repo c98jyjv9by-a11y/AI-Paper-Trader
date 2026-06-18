@@ -149,6 +149,112 @@ def freeze(name: str, scenario: str, start: date, end: date, *,
     return manifest
 
 
+# ── Seed (a fresh live account that trails a model) ───────────────────────────────
+def seed(name: str, scenario: str, *, cash: float = 100_000.0, top_n: int = 3,
+         per_name_pct: Optional[float] = None, as_of: Optional[date] = None,
+         force: bool = False, promote: bool = False, now: Optional[str] = None) -> Dict[str, Any]:
+    """Create a NEW living account funded with `cash`, opening positions in the scenario's
+    current top-`top_n` ranked names (scored on the latest close, bought at that close +
+    slippage). Each position is sized at the model's per-name budget (`per_name_pct` or the
+    scenario's max_position_pct) so the book genuinely TRAILS the model — the remaining cash
+    is what `account-continue --scenario <model>` deploys as the model adds/rotates forward.
+
+    Writes a normal account ledger (trades/equity/positions + manifest) so verify() and
+    continue_account() work on it unchanged. Refuses to overwrite without force."""
+    from scenarios import build_config, load_scenario
+    from backtest import (load_config, fetch_backtest_data, _SIGNAL_WINDOW,
+                          _build_ticker_weights, resolve_max_position_pct)
+    from signals import calculate_signals, rank_candidates
+    from risk import apply_slippage
+    import datetime as _dt
+
+    d_dir = _acct_dir(name)
+    if _manifest_path(name).exists() and not force:
+        raise FileExistsError(f"Account '{name}' already exists ({_manifest_path(name)}). "
+                              "Pass force=True to overwrite.")
+    cfg = build_config(load_config(ROOT / "config"), load_scenario(scenario))
+    uni, weights = cfg["tickers"], cfg["signals"].get("weights")
+    tw = _build_ticker_weights(cfg) or None
+    slip = float(cfg.get("risk", {}).get("slippage", 0.001))
+    pct = float(per_name_pct if per_name_pct is not None else resolve_max_position_pct(cfg))
+
+    as_of = as_of or date.today()
+    pdata = fetch_backtest_data(uni, as_of - _dt.timedelta(days=400), as_of)
+    close = pdata["Close"]
+    mark, prior = close.index[-1], close.index[-2]      # latest close + the bar before it
+    # Rank the whole universe on the latest close; take the top N tradeable names.
+    sl = pdata.loc[:mark].iloc[-_SIGNAL_WINDOW:]
+    rf = rank_candidates(calculate_signals(sl, uni), top_n=len(uni), weights=weights,
+                         ticker_weights=tw).reset_index(drop=True)
+    picks = []
+    for _, r in rf.iterrows():
+        t = r["ticker"]
+        px = close.loc[mark, t] if t in close.columns else None
+        if px is None or pd.isna(px):
+            continue
+        picks.append((t, float(px), float(r["composite_score"])))
+        if len(picks) >= top_n:
+            break
+
+    budget = cash * pct
+    pos_rows, trade_rows = [], []
+    spent = 0.0
+    for t, px, score in picks:
+        fill = apply_slippage(px, "buy", slip)
+        shares = int(budget // fill)
+        if shares <= 0:
+            continue
+        tv = round(fill * shares, 2)
+        spent += tv
+        pos_rows.append({"ticker": t, "shares": shares, "entry_price": fill,
+                         "entry_date": mark.date().isoformat(), "current_price": px,
+                         "highest_price": px, "lowest_price": px})
+        trade_rows.append({"date": mark.date().isoformat(), "action": "BUY", "ticker": t,
+                           "shares": shares, "price": fill, "trade_value": tv,
+                           "reason": f"seed_top{top_n}", "realized_pnl": float("nan"),
+                           "holding_days": 0, "entry_price": fill,
+                           "highest_price": px, "lowest_price": px})
+    positions = pd.DataFrame(pos_rows)
+    trades = pd.DataFrame(trade_rows)
+    remaining = round(cash - spent, 2)
+    mkt = float((positions["shares"] * positions["current_price"]).sum()) if not positions.empty else 0.0
+    unreal = float((positions["shares"] * (positions["current_price"] - positions["entry_price"])).sum()) \
+        if not positions.empty else 0.0
+    # Two equity rows (prior all-cash → buy day) so reports' trailing-window stats have an anchor.
+    equity = pd.DataFrame([
+        {"date": prior.date().isoformat(), "cash": cash, "open_positions_value": 0.0,
+         "total_portfolio_value": cash, "realized_pnl_to_date": 0.0, "unrealized_pnl": 0.0,
+         "exposure_mult": 1.0},
+        {"date": mark.date().isoformat(), "cash": remaining, "open_positions_value": round(mkt, 2),
+         "total_portfolio_value": round(remaining + mkt, 2), "realized_pnl_to_date": 0.0,
+         "unrealized_pnl": round(unreal, 2), "exposure_mult": 1.0},
+    ])
+
+    d_dir.mkdir(parents=True, exist_ok=True)
+    trades.to_csv(d_dir / "trades.csv", index=False)
+    equity.to_csv(d_dir / "equity.csv", index=False)
+    positions.to_csv(d_dir / "positions.csv", index=False)
+    hashes = {f: _sha256(d_dir / f) for f in _LEDGER_FILES}
+    manifest = {
+        "name": name, "scenario": scenario, "status": "living",
+        "inception": mark.date().isoformat(), "frozen_through": mark.date().isoformat(),
+        "live_through": mark.date().isoformat(),
+        "starting_value": float(cash), "ending_value": float(round(remaining + mkt, 2)),
+        "total_return": float((remaining + mkt) / cash - 1),
+        "n_trades": int(len(trades)), "n_positions": int(len(positions)),
+        "created_at": now or datetime.now().isoformat(timespec="seconds"),
+        "seed": {"picks": [{"ticker": t, "score": round(s, 4), "close": round(p, 2)}
+                           for t, p, s in picks], "per_name_pct": pct, "cash": float(cash)},
+        "note": (f"Seeded live account: ${cash:,.0f} → bought top-{top_n} {scenario} names at the "
+                 f"{mark.date()} close, sized at {pct:.1%}/name. Trails {scenario} via account-continue."),
+        "hashes": hashes,
+    }
+    _manifest_path(name).write_text(json.dumps(manifest, indent=2))
+    if promote:
+        (ACCOUNTS_DIR / "ACTIVE").write_text(name + "\n")
+    return manifest
+
+
 # ── Continue (Phase 2: living continuation) ──────────────────────────────────────
 def continue_account(name: str, end: date, *, scenario: Optional[str] = None,
                      now: Optional[str] = None) -> Dict[str, Any]:

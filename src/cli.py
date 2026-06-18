@@ -266,6 +266,18 @@ def build_parser() -> argparse.ArgumentParser:
     af.add_argument("--no-promote", action="store_true", help="don't mark this account as the active/primary one")
     af.set_defaults(func=_cmd_account_freeze)
 
+    as_ = sub.add_parser("account-seed",
+                         help="Create a fresh live account funded with cash, buying a model's current top-N names")
+    as_.add_argument("--name", required=True, help="account name (e.g. tracker)")
+    as_.add_argument("--scenario", required=True, help="model to trail (e.g. model_v4)")
+    as_.add_argument("--cash", type=float, default=100_000.0, help="starting cash (default 100000)")
+    as_.add_argument("--top", type=int, default=3, help="how many top-ranked names to buy (default 3)")
+    as_.add_argument("--per-name-pct", type=float, help="position size per name as a fraction (default: model's max_position_pct)")
+    as_.add_argument("--as-of", metavar="YYYY-MM-DD", help="rank/buy as of this close (default: latest)")
+    as_.add_argument("--force", action="store_true", help="overwrite an existing account")
+    as_.add_argument("--promote", action="store_true", help="mark this account as active/primary")
+    as_.set_defaults(func=_cmd_account_seed)
+
     av = sub.add_parser("account-verify",
                         help="Verify a frozen account's files still match their manifest hashes")
     av.add_argument("--name", required=True, help="account name")
@@ -283,6 +295,8 @@ def build_parser() -> argparse.ArgumentParser:
     eo.add_argument("--scenario", help="scenario (required if no --account)")
     eo.add_argument("--start", metavar="YYYY-MM-DD")
     eo.add_argument("--end", metavar="YYYY-MM-DD")
+    eo.add_argument("--prepost", action="store_true",
+                    help="mark the latest bar to the after-hours print (live session only)")
     eo.add_argument("--out")
     eo.set_defaults(func=_cmd_eod)
 
@@ -291,6 +305,8 @@ def build_parser() -> argparse.ArgumentParser:
     md.add_argument("--scenario", help="scenario (required if no --account)")
     md.add_argument("--start", metavar="YYYY-MM-DD")
     md.add_argument("--end", metavar="YYYY-MM-DD", help="the in-progress day to mark to (default: today)")
+    md.add_argument("--prepost", action="store_true",
+                    help="mark the book to the latest extended-hours (pre/post-market) print")
     md.add_argument("--out")
     md.set_defaults(func=_cmd_midday)
 
@@ -311,6 +327,23 @@ def _cmd_account_freeze(args: argparse.Namespace) -> None:
           f"·  {man['n_trades']} trades  ·  {man['n_positions']} open positions")
     print(f"  wrote accounts/{man['name']}/ (ledger + reports + {len(man['rankings_copied'])} ranking snapshots)"
           + ("  ·  promoted to ACTIVE" if not args.no_promote else ""))
+
+
+def _cmd_account_seed(args: argparse.Namespace) -> None:
+    import account
+    try:
+        man = account.seed(args.name, args.scenario, cash=args.cash, top_n=args.top,
+                           per_name_pct=args.per_name_pct,
+                           as_of=date.fromisoformat(args.as_of) if args.as_of else None,
+                           force=args.force, promote=args.promote)
+    except FileExistsError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+    print(f"Seeded account '{man['name']}' trailing {man['scenario']} — ${man['seed']['cash']:,.0f} as of {man['inception']}")
+    for p in man["seed"]["picks"]:
+        print(f"  BUY {p['ticker']:6} score {p['score']:.3f}  @ {p['close']:.2f}")
+    print(f"  invested {man['n_positions']} names at {man['seed']['per_name_pct']:.1%}/name  ·  book value ${man['ending_value']:,.0f}")
+    print(f"  → extend it daily with:  python run.py account-continue --name {man['name']} --end <date> --scenario {man['scenario']}")
 
 
 def _cmd_account_verify(args: argparse.Namespace) -> None:
@@ -352,7 +385,8 @@ def _cmd_eod(args: argparse.Namespace) -> None:
     out = pdf_report.run(args.scenario,
                          date.fromisoformat(args.start) if args.start else None,
                          date.fromisoformat(args.end) if args.end else None,
-                         Path(args.out) if args.out else None, account=args.account)
+                         Path(args.out) if args.out else None, account=args.account,
+                         prepost=args.prepost)
     print(f"Wrote {out}")
 
 
@@ -364,7 +398,8 @@ def _cmd_midday(args: argparse.Namespace) -> None:
     out = midday_pdf.run(args.scenario,
                          date.fromisoformat(args.start) if args.start else None,
                          date.fromisoformat(args.end) if args.end else None,
-                         Path(args.out) if args.out else None, account=args.account)
+                         Path(args.out) if args.out else None, account=args.account,
+                         prepost=args.prepost)
     print(f"Wrote {out}")
 
 

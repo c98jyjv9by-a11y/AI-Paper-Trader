@@ -41,17 +41,18 @@ def _footer(ax, page):
             va="center", ha="right")
 
 
-def _banner(ax, scenario, mark, rank_close):
+def _banner(ax, scenario, mark, rank_close, note=None):
     ax.add_patch(P.plt.Rectangle((0, 0.93), 1, 0.07, transform=ax.transAxes,
                                  facecolor=P.NAVY, edgecolor="none"))
     ax.text(0.06, 0.965, f"{scenario}  —  Midday Pulse", color="white", fontsize=15,
             fontweight="bold", va="center")
-    ax.text(0.06, 0.943, "Intraday snapshot · provisional prices · is the signal working so far?",
-            color="#b9c6d8", fontsize=8.5, va="center")
+    sub = (f"Extended-hours mark · {note} · is the signal working?" if note
+           else "Intraday snapshot · provisional prices · is the signal working so far?")
+    ax.text(0.06, 0.943, sub, color="#b9c6d8", fontsize=8.5, va="center")
     ax.text(0.94, 0.958, mark.isoformat(), color="white", fontsize=11, fontweight="bold",
             va="center", ha="right")
-    ax.text(0.94, 0.940, f"vs prior close {rank_close}", color="#b9c6d8", fontsize=7.5,
-            va="center", ha="right")
+    ax.text(0.94, 0.940, (note if note else f"vs prior close {rank_close}"),
+            color="#b9c6d8", fontsize=7.5, va="center", ha="right")
 
 
 def _anomalies(d: Dict[str, Any], cfg: Dict[str, Any]) -> List[str]:
@@ -135,7 +136,7 @@ def _intraday_table(ax, y, title, tickers, intra, cps, retf):
 def _page3(pdf, d, cfg):
     from rank_report import _CHECKPOINTS
     fig, ax = P._new_page(pdf)
-    _banner(ax, d["scenario"], d["mark"], d["rank_close"])
+    _banner(ax, d["scenario"], d["mark"], d["rank_close"], d.get("mark_note"))
     y = 0.90
     y = P._section(ax, y, "Intraday return paths — 1-hour intervals (vs prior close, Chicago time)")
     intra = d.get("intraday")
@@ -168,7 +169,7 @@ def _page3(pdf, d, cfg):
 
 def _page1(pdf, d, cfg):
     fig, ax = P._new_page(pdf)
-    _banner(ax, d["scenario"], d["mark"], d["rank_close"])
+    _banner(ax, d["scenario"], d["mark"], d["rank_close"], d.get("mark_note"))
     one = (d.get("stats") or {}).get("1D", {})
     port = one.get("port")
     y = P._cards(ax, 0.905, [
@@ -221,7 +222,7 @@ def _page1(pdf, d, cfg):
 
 def _page2(pdf, d, cfg):
     fig, ax = P._new_page(pdf)
-    _banner(ax, d["scenario"], d["mark"], d["rank_close"])
+    _banner(ax, d["scenario"], d["mark"], d["rank_close"], d.get("mark_note"))
     y = 0.90
     cur = {r["ticker"]: r["score"] for r in (d.get("rows_cur") or [])}
     retf = d.get("ret")
@@ -328,10 +329,12 @@ def build_pdf(d: Dict[str, Any], cfg: Dict[str, Any], out_path: Path) -> Path:
 
 
 def run(scenario: Optional[str] = None, start: Optional[date] = None, end: Optional[date] = None,
-        output: Optional[Path] = None, account: Optional[str] = None) -> Path:
+        output: Optional[Path] = None, account: Optional[str] = None, prepost: bool = False) -> Path:
     """Midday Pulse PDF. With `account`, the held book / equity come from the frozen+living
     ledger (as of its last close), marked to `end` (default today) for the intraday pulse;
-    scenario/start default to the account's base/inception. Else a fresh scenario run."""
+    scenario/start default to the account's base/inception. Else a fresh scenario run.
+
+    `prepost` marks the book to the latest extended-hours (pre/post-market) print."""
     import rank_report
     from scenarios import build_config, load_scenario
     from backtest import load_config as _load_cfg
@@ -341,12 +344,14 @@ def run(scenario: Optional[str] = None, start: Optional[date] = None, end: Optio
         man = load_manifest(account)
         scenario = scenario or man["scenario"]
         start = start or date.fromisoformat(man["inception"])
-        end = end or date.today()              # mark the locked book to today's provisional price
     if not scenario:
         raise ValueError("midday_pdf.run needs --scenario or --account")
+    end = end or date.today()                  # intraday report → mark to today's session
+    start = start or date(end.year, 1, 1)
     cfg = build_config(_load_cfg(root / "config"), load_scenario(scenario))
     # Use the prior EOD snapshot + intraday paths; never write a provisional snapshot.
-    d = rank_report.build_report(scenario, start, end, cfg=cfg, write_snapshot=False, account=account)
+    d = rank_report.build_report(scenario, start, end, cfg=cfg, write_snapshot=False,
+                                 account=account, prepost=prepost)
     tag = f"{account}_" if account else ""
     out = output or (root / "reports" / f"midday_{tag}{scenario}_{d['mark'].isoformat()}.pdf")
     return build_pdf(d, cfg, out)
@@ -358,11 +363,13 @@ def main(argv=None):
     ap.add_argument("--start")
     ap.add_argument("--end")
     ap.add_argument("--account", help="render the held book from a frozen/living account ledger")
+    ap.add_argument("--prepost", action="store_true",
+                    help="mark the book to the latest extended-hours (pre/post-market) print")
     ap.add_argument("--out")
     a = ap.parse_args(argv)
     out = run(a.scenario, date.fromisoformat(a.start) if a.start else None,
               date.fromisoformat(a.end) if a.end else None,
-              Path(a.out) if a.out else None, account=a.account)
+              Path(a.out) if a.out else None, account=a.account, prepost=a.prepost)
     print(f"Wrote {out}")
 
 

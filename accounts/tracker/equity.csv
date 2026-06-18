@@ -1,0 +1,3 @@
+date,cash,open_positions_value,total_portfolio_value,realized_pnl_to_date,unrealized_pnl,exposure_mult
+2026-06-16,100000.0,0.0,100000.0,0.0,0.0,1.0
+2026-06-17,74880.42,25094.48,99974.9,0.0,-25.09,1.0

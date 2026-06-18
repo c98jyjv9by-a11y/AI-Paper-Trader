@@ -142,3 +142,38 @@ def test_continue_appends_and_merges(tmp_path, monkeypatch):
     # frozen core is untouched → verify's core hashes still match
     v = A.verify("acct")
     assert "trades.csv" not in v["drift"] and "equity.csv" not in v["drift"]
+
+
+def test_seed_buys_top_n_and_is_continuable(tmp_path, monkeypatch):
+    monkeypatch.setattr(A, "ACCOUNTS_DIR", tmp_path)
+    import scenarios, backtest, signals
+    cfg = {"tickers": ["AAA", "BBB", "CCC"],
+           "portfolio": {"starting_value": 100000.0, "max_position_pct": 0.10,
+                         "max_total_exposure": 0.90, "max_new_trades_per_day": 2},
+           "risk": {"stop_loss": 0.15, "take_profit": None, "max_holding_days": 90, "slippage": 0.0},
+           "signals": {}}
+    monkeypatch.setattr(scenarios, "build_config", lambda *a, **k: cfg)
+    monkeypatch.setattr(scenarios, "load_scenario", lambda *a, **k: {})
+    monkeypatch.setattr(backtest, "load_config", lambda *a, **k: {})
+    monkeypatch.setattr(backtest, "fetch_backtest_data",
+                        lambda tickers, s, e, **k: _flat_panel(list(tickers) + ["SPY", "QQQ"]))
+    monkeypatch.setattr(signals, "calculate_signals", lambda sl, uni: pd.DataFrame({"ticker": uni}))
+    monkeypatch.setattr(signals, "rank_candidates", lambda sig, **k: pd.DataFrame(
+        {"ticker": ["AAA", "BBB", "CCC"], "composite_score": [0.9, 0.8, 0.7]}))
+
+    man = A.seed("trk", "model_v4", cash=100000.0, top_n=2)
+    # bought the top 2 by score, at 10% each (px 100 → 100 shares each)
+    assert [p["ticker"] for p in man["seed"]["picks"]] == ["AAA", "BBB"]
+    assert man["n_positions"] == 2 and man["status"] == "living"
+    led = A.load_ledger("trk")
+    assert set(led["positions"]["ticker"]) == {"AAA", "BBB"}
+    assert int(led["positions"]["shares"].iloc[0]) == 100
+    assert abs(float(led["equity"]["cash"].iloc[-1]) - 80000.0) < 1.0      # 100k − 2×10k
+    assert abs(float(led["equity"]["total_portfolio_value"].iloc[-1]) - 100000.0) < 1.0
+    assert A.verify("trk")["intact"]
+    # refuses to overwrite without force
+    try:
+        A.seed("trk", "model_v4")
+        assert False, "expected FileExistsError"
+    except FileExistsError:
+        pass

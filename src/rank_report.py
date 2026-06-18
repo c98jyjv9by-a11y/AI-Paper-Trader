@@ -12,10 +12,11 @@ performance vs SPY/QQQ. Read-only w.r.t. live state; writes to reports/ and back
 import argparse
 import logging
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -71,6 +72,55 @@ def intraday_returns(tickers, day, prior_close: Dict[str, float]) -> Optional[Di
                     rec[hhmm] = None
         out[t] = rec
     return out if any_hit else None
+
+
+def extended_hours_prices(tickers, vwap_bars: int = 5):
+    """Latest EXTENDED-HOURS (pre-/post-market) price per ticker, from 1-minute `prepost`
+    bars. To damp a single thin print, the mark is a short volume-weighted average of the
+    last `vwap_bars` bars (falls back to the last price if volume is missing/zero).
+
+    Returns ({ticker: price} for names with data, as-of-label, as-of-date) — e.g.
+    ({...}, "19:59 ET post-market", date(2026, 6, 17)). Network call; extended bars exist only
+    for the very recent session, so this is for LIVE marking, never for historical/backtest
+    dates. Returns ({}, None, None) on any failure."""
+    import yfinance as yf
+    try:
+        raw = yf.download(list(tickers), period="2d", interval="1m", prepost=True,
+                          progress=False, auto_adjust=True)
+    except Exception:
+        return {}, None, None
+    if raw is None or raw.empty or "Close" not in raw:
+        return {}, None, None
+    cl = raw["Close"]; vol = raw["Volume"] if "Volume" in raw else None
+    if isinstance(cl, pd.Series):                       # single ticker → normalize to frame
+        cl = cl.to_frame(list(tickers)[0])
+        if vol is not None and isinstance(vol, pd.Series):
+            vol = vol.to_frame(list(tickers)[0])
+    out: Dict[str, float] = {}
+    asof = None
+    for t in tickers:
+        if t not in getattr(cl, "columns", []):
+            continue
+        s = cl[t].dropna()
+        if s.empty:
+            continue
+        tail = s.iloc[-vwap_bars:]
+        if vol is not None and t in getattr(vol, "columns", []):
+            v = vol[t].reindex(tail.index).fillna(0.0)
+            px = float((tail * v).sum() / v.sum()) if float(v.sum()) > 0 else float(tail.iloc[-1])
+        else:
+            px = float(tail.iloc[-1])
+        out[t] = px
+        last_ts = s.index[-1]
+        asof = last_ts if (asof is None or last_ts > asof) else asof
+    label = asof_date = None
+    if asof is not None:
+        h, m = asof.hour, asof.minute
+        sess = ("pre-market" if (h < 9 or (h == 9 and m < 30))
+                else "post-market" if h >= 16 else "regular hours")
+        label = f"{asof.strftime('%H:%M')} ET {sess}"
+        asof_date = asof.date()
+    return out, label, asof_date
 
 
 def _win_ret(series: pd.Series, anchor: pd.Timestamp) -> Optional[float]:
@@ -225,7 +275,7 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
                  eq: Optional[pd.DataFrame] = None, positions: Optional[pd.DataFrame] = None,
                  trades: Optional[pd.DataFrame] = None, fast: bool = False,
                  write_snapshot: Optional[bool] = None, with_intraday: Optional[bool] = None,
-                 account: Optional[str] = None) -> Dict[str, Any]:
+                 account: Optional[str] = None, prepost: bool = False) -> Dict[str, Any]:
     """Build the rank/status snapshot. The scenario run can pass its already-computed
     cfg/pdata/eq/positions to avoid re-fetching and re-running the backtest.
 
@@ -246,6 +296,42 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
     close = pdata["Close"]
     rank_close = close.index[-2]          # last completed close → ranking anchor
     mark = close.index[-1]                # latest available price (may be provisional)
+
+    # Extended-hours marking: bring in the latest pre-/post-market print and let every
+    # downstream return / current-ranking / held-book value reflect it. Two cases:
+    #   • the print is for a NEWER session than the daily panel has (e.g. pre-market on a new
+    #     day, before today's daily bar exists) → APPEND a fresh mark bar, so "latest" is
+    #     cleanly distinguished from the prior close;
+    #   • the print is for the SAME day as the latest daily bar (e.g. post-market after the
+    #     close) → overwrite that bar's prices.
+    # Guarded to a live render (end within a few days of today) so historical reports never
+    # stamp live prices onto a past date.
+    mark_note = None
+    if prepost and end >= date.today() - timedelta(days=4):
+        ext, mark_note, ext_date = extended_hours_prices(sorted(set(uni) | {"SPY", "QQQ"}))
+        if ext and ext_date and ext_date >= mark.date():
+            pdata = pdata.copy()
+            if ext_date > mark.date():                       # new session → append a mark bar
+                row = {}
+                for col in pdata.columns:
+                    lvl, t = col
+                    if lvl == "Close":
+                        cur = close.loc[mark, t]
+                        row[col] = ext.get(t, float(cur) if pd.notna(cur) else np.nan)
+                    else:
+                        row[col] = 0.0
+                pdata = pd.concat([pdata, pd.DataFrame(row, index=[pd.Timestamp(ext_date)])]).sort_index()
+                rank_close = mark                            # the prior daily close
+                mark = pd.Timestamp(ext_date)
+            else:                                            # same-day → overwrite latest bar
+                for t, px in ext.items():
+                    if ("Close", t) in pdata.columns:
+                        pdata.loc[mark, ("Close", t)] = px
+            close = pdata["Close"]
+        else:
+            mark_note = None              # nothing usable came back → fall back to the regular mark
+    elif prepost:
+        log.warning("prepost marking skipped — render end %s is not live.", end)
 
     def ret(t: str) -> Optional[float]:
         if t not in close.columns:
@@ -280,6 +366,17 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
     pv = float(eq["total_portfolio_value"].iloc[-1])
     cash = float(eq["cash"].iloc[-1])
     starting = float(cfg["portfolio"]["starting_value"])
+
+    # Extended-hours: re-mark the held book to the after-hours print and recompute portfolio
+    # value (cash is unchanged; only the marked equity moves) so every "Now"/Value/%NAV/PV
+    # downstream reflects the extended session.
+    if mark_note and not positions.empty:
+        positions = positions.copy()
+        for i in positions.index:
+            t = positions.at[i, "ticker"]
+            if t in close.columns and not pd.isna(close.loc[mark, t]):
+                positions.at[i, "current_price"] = float(close.loc[mark, t])
+        pv = cash + float((positions["shares"] * positions["current_price"]).sum())
 
     def _px(t, ts):
         return float(close.loc[ts, t]) if (t in close.columns and not pd.isna(close.loc[ts, t])) else None
@@ -405,7 +502,7 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
     return {
         "scenario": scenario, "rank_close": rank_close.date(), "mark": mark.date(),
         "min_score": min_score, "rows": rows, "n": n, "top_n": top_n,
-        "snapshot_used": snapshot_used,
+        "snapshot_used": snapshot_used, "prepost": bool(mark_note), "mark_note": mark_note,
         # vol-targeting risk budget (latest bar): forecast vol + exposure multiplier
         "today_trades": _today_trades(trades, mark.date().isoformat()),
         "recent_trades": _recent_trades(trades, 10),

@@ -1,0 +1,41 @@
+{
+  "name": "tracker",
+  "scenario": "model_v4",
+  "status": "living",
+  "inception": "2026-06-17",
+  "frozen_through": "2026-06-17",
+  "live_through": "2026-06-17",
+  "starting_value": 100000.0,
+  "ending_value": 99974.9,
+  "total_return": -0.00025100385742193865,
+  "n_trades": 3,
+  "n_positions": 3,
+  "created_at": "2026-06-18T02:16:53",
+  "seed": {
+    "picks": [
+      {
+        "ticker": "HOOD",
+        "score": 0.9717,
+        "close": 105.2
+      },
+      {
+        "ticker": "AMAT",
+        "score": 0.9482,
+        "close": 592.92
+      },
+      {
+        "ticker": "ARM",
+        "score": 0.8904,
+        "close": 418.88
+      }
+    ],
+    "per_name_pct": 0.085,
+    "cash": 100000.0
+  },
+  "note": "Seeded live account: $100,000 \u2192 bought top-3 model_v4 names at the 2026-06-17 close, sized at 8.5%/name. Trails model_v4 via account-continue.",
+  "hashes": {
+    "trades.csv": "3ba9fcf4def1ace9310b2d7cb2a19b0627a0e49b1f6eeb0717d451b89ad17bd9",
+    "equity.csv": "705f9e65368e01048f2917d05728b1dd8c5194370fcd7d02a5591148437688ad",
+    "positions.csv": "5271bcd67053b452655bd13bddff69fb575d10932d67f8c41eadf23ee11dbe32"
+  }
+}

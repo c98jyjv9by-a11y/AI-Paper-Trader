@@ -495,6 +495,7 @@ def _cover_spec(d: Dict[str, Any], comm: Dict[str, List[str]]) -> Dict[str, Any]
         "n_positions": 0 if (pos is None or pos.empty) else len(pos),
         "next_session": d.get("next_session") or {}, "holdings": holdings, "rankings": rankings,
         "observations": comm["observations"], "recommendations": comm["recommendations"],
+        "mark_note": d.get("mark_note"),
     }
 
 
@@ -502,7 +503,8 @@ def _render_cover(pdf, spec: Dict[str, Any], page: int = 1):
     """Render one cover page from a picklable spec (used by both build_pdf and the series)."""
     fig, ax = _new_page(pdf)
     _banner(ax, spec["scenario"], spec["mark"], spec["rank_close"],
-            "Systematic momentum portfolio · daily update")
+            (f"Extended-hours mark · {spec['mark_note']}" if spec.get("mark_note")
+             else "Systematic momentum portfolio · daily update"))
 
     pv, cash, port_1d, em = spec.get("pv"), spec.get("cash"), spec.get("port_1d"), spec.get("exposure_mult")
     y = _cards(ax, 0.905, [
@@ -714,9 +716,11 @@ def build_pdf(d: Dict[str, Any], cfg: Dict[str, Any], out_path: Path) -> Path:
 
 
 def run(scenario: Optional[str] = None, start: Optional[date] = None, end: Optional[date] = None,
-        output: Optional[Path] = None, account: Optional[str] = None) -> Path:
+        output: Optional[Path] = None, account: Optional[str] = None, prepost: bool = False) -> Path:
     """Standalone EOD PDF. With `account`, serve the FROZEN/living ledger (scenario/start/end
-    default to the account's base/inception/live-through); else re-run the scenario backtest."""
+    default to the account's base/inception/live-through); else re-run the scenario backtest.
+
+    `prepost` marks the latest bar to the after-hours print (live session only)."""
     sys.path.insert(0, str(Path(__file__).parent))
     import rank_report
     from scenarios import build_config, load_scenario
@@ -733,7 +737,8 @@ def run(scenario: Optional[str] = None, start: Optional[date] = None, end: Optio
         raise ValueError("pdf_report.run needs --scenario or --account")
     cfg = build_config(_load_cfg(root / "config"), load_scenario(scenario))
     d = rank_report.build_report(scenario, start, end, cfg=cfg, account=account,
-                                 write_snapshot=False if account else None, with_intraday=False)
+                                 write_snapshot=False if account else None, with_intraday=False,
+                                 prepost=prepost)
     tag = f"{account}_" if account else ""
     out = output or (root / "reports" / f"eod_{tag}{scenario}_{d['mark'].isoformat()}.pdf")
     return build_pdf(d, cfg, out)
@@ -846,11 +851,13 @@ def main(argv=None):
                     help="render the COVER page for every date in [start, end] into one combined PDF")
     ap.add_argument("--sim-start", help="backtest warmup inception for --series (default = start)")
     ap.add_argument("--workers", type=int, help="parallel workers for --series")
+    ap.add_argument("--prepost", action="store_true",
+                    help="mark the latest bar to the after-hours print (live session only)")
     a = ap.parse_args(argv)
     if a.account:
         out = run(a.scenario, date.fromisoformat(a.start) if a.start else None,
                   date.fromisoformat(a.end) if a.end else None,
-                  Path(a.out) if a.out else None, account=a.account)
+                  Path(a.out) if a.out else None, account=a.account, prepost=a.prepost)
         print(f"Wrote {out}")
     elif a.series:
         res = run_cover_series(
@@ -863,7 +870,7 @@ def main(argv=None):
             print(f"  ({len(res['errors'])} date(s) skipped: {', '.join(sorted(res['errors'])[:5])}…)")
     else:
         out = run(a.scenario, date.fromisoformat(a.start), date.fromisoformat(a.end),
-                  Path(a.out) if a.out else None)
+                  Path(a.out) if a.out else None, prepost=a.prepost)
         print(f"Wrote {out}")
 
 
