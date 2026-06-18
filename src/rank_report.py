@@ -456,8 +456,9 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
     intraday = None
     if do_intraday:
         try:
-            need = ([x["ticker"] for x in rows[:top_n]] + [x["ticker"] for x in rows[-top_n:]]
-                    + sorted(held) + ["SPY", "QQQ"])         # held + benchmarks for the intraday page
+            # Fetch the FULL universe (+ benchmarks) intraday so the universe-average row on the
+            # attribution page has a real intraday path, not just a closing mark.
+            need = list(dict.fromkeys(list(uni) + ["SPY", "QQQ"]))
             # Anchor each needed ticker to its actual prior close (not just the snapshot rows),
             # so held names outside the top/bottom-N still get intraday checkpoints.
             pc_map = {t: _px(t, rank_close) for t in set(need) if _px(t, rank_close)}

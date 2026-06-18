@@ -30,6 +30,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.patches import Ellipse
 
 # Treat "$" literally — dollar amounts must not be parsed as TeX math (mathtext).
 plt.rcParams["text.parse_math"] = False
@@ -42,6 +43,9 @@ MIDGREY = "#5a6577"
 GREEN = "#1a7f3c"
 RED = "#c0392b"
 RULE = "#c7d0db"
+HILITE = "#ffe28a"        # gold band for a stand-out row (e.g. the signal)
+HILITE_RULE = "#c9a227"   # darker gold framing line
+WARN = "#e8590c"          # warning orange (e.g. a signal-reversion column box)
 
 PAGE_W, PAGE_H = 8.5, 11.0
 
@@ -223,13 +227,21 @@ def _table(ax, y: float, col_labels: List[str], rows: List[List[str]],
            align: Optional[List[str]] = None,
            text_color: Optional[Callable[[int, int, str], str]] = None,
            header_fontsize: float = 7.8, emph_rows: Optional[set] = None,
-           glyphs: Optional[Callable[[int, int], Optional[tuple]]] = None) -> float:
+           glyphs: Optional[Callable[[int, int], Optional[tuple]]] = None,
+           hi_rows: Optional[set] = None, hl_cols: Optional[set] = None,
+           hl_label: Optional[str] = None, star_cells: Optional[set] = None) -> float:
     """Lightweight banded table drawn with primitives (full control over colours).
     `emph_rows` (row indices) are shaded with an accent tint and bolded — e.g. an AVG row.
+    `hi_rows` get a stronger GOLD band framed by rules + bold — a stand-out row (e.g. signal).
     `glyphs(r, c) -> (text, color) | None` draws a small LEFT-aligned glyph in a cell with
-    its OWN colour (e.g. a ▲/▼ trend arrow), independent of the right-aligned value's colour."""
+    its OWN colour (e.g. a ▲/▼ trend arrow), independent of the right-aligned value's colour.
+    `hl_cols` (table column indices) draws a WARN-orange box around those columns over the full
+    table height + `hl_label` above it; `star_cells` (set of (r, c)) append a ★ to those values."""
     width = x1 - x0
     emph = emph_rows or set()
+    hi = hi_rows or set()
+    stars = star_cells or set()
+    y_top = y
     xs = [x0]
     for cw in col_widths:
         xs.append(xs[-1] + cw * width)
@@ -245,7 +257,12 @@ def _table(ax, y: float, col_labels: List[str], rows: List[List[str]],
     y -= row_h
 
     for r, row in enumerate(rows):
-        if r in emph:
+        if r in hi:                                          # stand-out gold band, framed top & bottom
+            ax.add_patch(plt.Rectangle((x0, y - row_h), width, row_h, transform=ax.transAxes,
+                                       facecolor=HILITE, edgecolor="none", zorder=0))
+            ax.add_line(plt.Line2D([x0, x1], [y, y], color=HILITE_RULE, lw=1.4, zorder=3))
+            ax.add_line(plt.Line2D([x0, x1], [y - row_h, y - row_h], color=HILITE_RULE, lw=1.4, zorder=3))
+        elif r in emph:
             ax.add_patch(plt.Rectangle((x0, y - row_h), width, row_h, transform=ax.transAxes,
                                        facecolor="#cdd8e6", edgecolor="none", zorder=0))
         elif r % 2 == 0:
@@ -254,9 +271,19 @@ def _table(ax, y: float, col_labels: List[str], rows: List[List[str]],
         for c, val in enumerate(row):
             cx, a = _cell_x(xs, c, align)
             col = text_color(r, c, val) if text_color else "#1f2a3a"
-            fw = "bold" if (c == 0 or r in emph) else "normal"
+            fw = "bold" if (c == 0 or r in emph or r in hi) else "normal"
             tval = ax.text(cx, y - row_h / 2, val, color=col, fontsize=fontsize,
                            va="center", ha=a, fontweight=fw, zorder=2)
+            if (r, c) in stars and val:                      # ring the driving number with a dotted oval
+                try:
+                    bb = tval.get_window_extent(renderer=ax.figure.canvas.get_renderer())
+                    inv = ax.transAxes.inverted()
+                    ex0, _ = inv.transform((bb.x0, 0)); ex1, _ = inv.transform((bb.x1, 0))
+                    ax.add_patch(Ellipse(((ex0 + ex1) / 2, y - row_h / 2),
+                                         (ex1 - ex0) + 0.012, row_h * 0.82, transform=ax.transAxes,
+                                         fill=False, edgecolor=WARN, lw=1.1, linestyle=":", zorder=5))
+                except Exception:
+                    pass
             g = glyphs(r, c) if glyphs else None
             if g and g[0]:                                   # trend arrow, own colour, hugging the value
                 gx, gha = xs[c] + 0.006, "left"
@@ -272,6 +299,13 @@ def _table(ax, y: float, col_labels: List[str], rows: List[List[str]],
                         va="center", ha=gha, fontweight="bold", zorder=2)
         y -= row_h
     ax.add_line(plt.Line2D([x0, x1], [y, y], color=RULE, lw=0.8))
+    if hl_cols:                                              # WARN box around the flagged columns
+        bx0, bx1 = xs[min(hl_cols)], xs[max(hl_cols) + 1]
+        ax.add_patch(plt.Rectangle((bx0, y), bx1 - bx0, y_top - y, transform=ax.transAxes,
+                                   facecolor="none", edgecolor=WARN, lw=2.0, zorder=4))
+        if hl_label:
+            ax.text(bx1, y_top + 0.006, hl_label, color=WARN, fontsize=7.6, fontweight="bold",
+                    va="bottom", ha="right", zorder=5)
     return y - 0.012
 
 
@@ -664,7 +698,28 @@ def _page_rankings(pdf, d):
             "Δ prior = rank move on the prior day. Signal Today = return vs universe avg.",
             color=MIDGREY, fontsize=7.0, va="top", style="italic")
 
+    _footer(ax, 5)
+    pdf.savefig(fig); plt.close(fig)
+
+
+def _page_attribution_eod(pdf, d, cfg):
+    """EOD page 3 — the attribution table + takeaways (reused from midday), built off the
+    official close that `d` carries (not after-hours). Degrades gracefully without intraday."""
+    import midday_pdf as MP
+    fig, ax = _new_page(pdf)
+    _banner(ax, d["scenario"], d["mark"], d["rank_close"], "Attribution — session breakdown (official close)")
+    MP.attribution_body(ax, d)
     _footer(ax, 3)
+    pdf.savefig(fig); plt.close(fig)
+
+
+def _page_paths_eod(pdf, d, cfg):
+    """EOD page 4 — intraday return paths (reused from midday), ending at the official close."""
+    import midday_pdf as MP
+    fig, ax = _new_page(pdf)
+    _banner(ax, d["scenario"], d["mark"], d["rank_close"], "Intraday return paths — to the official close")
+    MP.paths_body(ax, d)
+    _footer(ax, 4)
     pdf.savefig(fig); plt.close(fig)
 
 
@@ -700,7 +755,7 @@ def _page_activity(pdf, d):
                    align=["left", "left", "left", "right", "right", "left", "right"], fontsize=7.4,
                    text_color=lambda r, c, v: (_ret_color(_parse_money(v)) if c == 6 and v != "—" else "#1f2a3a"))
 
-    _footer(ax, 4)
+    _footer(ax, 6)
     pdf.savefig(fig); plt.close(fig)
 
 
@@ -724,10 +779,12 @@ def build_pdf(d: Dict[str, Any], cfg: Dict[str, Any], out_path: Path) -> Path:
     comm = _commentary(d, cfg)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with PdfPages(out_path) as pdf:
-        _page_cover(pdf, d, cfg, comm)
-        _page_signals(pdf, d)
-        _page_rankings(pdf, d)
-        _page_activity(pdf, d)
+        _page_cover(pdf, d, cfg, comm)              # 1
+        _page_signals(pdf, d)                       # 2
+        _page_attribution_eod(pdf, d, cfg)          # 3
+        _page_paths_eod(pdf, d, cfg)                # 4
+        _page_rankings(pdf, d)                      # 5
+        _page_activity(pdf, d)                      # 6
     return out_path
 
 
@@ -751,9 +808,11 @@ def run(scenario: Optional[str] = None, start: Optional[date] = None, end: Optio
         end = end or date.fromisoformat(man.get("live_through", man["frozen_through"]))
     if not scenario:
         raise ValueError("pdf_report.run needs --scenario or --account")
+    end = end or date.today()                       # default to today (EOD); start to that year's Jan 1
+    start = start or date(end.year, 1, 1)
     cfg = build_config(_load_cfg(root / "config"), load_scenario(scenario))
     d = rank_report.build_report(scenario, start, end, cfg=cfg, account=account,
-                                 write_snapshot=False if account else None, with_intraday=False,
+                                 write_snapshot=False if account else None, with_intraday=True,
                                  prepost=prepost)
     tag = f"{account}_" if account else ""
     out = output or (root / "reports" / f"eod_{tag}{scenario}_{d['mark'].isoformat()}.pdf")
