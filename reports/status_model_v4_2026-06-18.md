@@ -1,19 +1,19 @@
 # Status & Rank Report — model_v4
-**Ranked as of close:** 2026-06-16  |  **Marked to:** 2026-06-17 (latest; may be provisional)  |  **Buy gate:** 0.7  |  **Generated:** 2026-06-18
+**Ranked as of close:** 2026-06-17  |  **Marked to:** 2026-06-18 (latest; may be provisional)  |  **Buy gate:** 0.7  |  **Generated:** 2026-06-18
 
-> Two rankings, clearly separated: **(A) Prior-close ranking** — composite scores fixed at the prior close (2026-06-16) and marked forward to the latest price (shows how those picks did this session); and **(B) Current ranking** — composite scores recomputed on the latest prices (2026-06-17), i.e. the standing that sets up the next session. ✓ = clears the buy gate.
+> Two rankings, clearly separated: **(A) Prior-close ranking** — composite scores fixed at the prior close (2026-06-17) and marked forward to the latest price (shows how those picks did this session); and **(B) Current ranking** — composite scores recomputed on the latest prices (2026-06-18), i.e. the standing that sets up the next session. ✓ = clears the buy gate.
 
 ## Signal strength (session: ranking-close → latest)
 
 | Metric | Value |
 |--------|-------|
-| **Top 10 − Bottom 10 spread** | **+6.02%** |
-| Top 10 avg | +2.27% |
-| Bottom 10 avg | -3.75% |
-| Universe avg (all 83) | -1.23% |
-| Held book (equal-wt / $-wt) | +0.94% / +1.59% |
-| Advancers | 24/83 |
-| Names clearing buy gate | 20/83 |
+| **Top 10 − Bottom 10 spread** | **+6.51%** |
+| Top 10 avg | +5.41% |
+| Bottom 10 avg | -1.11% |
+| Universe avg (all 83) | +1.87% |
+| Held book (equal-wt / $-wt) | +4.14% / +4.41% |
+| Advancers | 54/83 |
+| Names clearing buy gate | 19/83 |
 
 _Positive spread ⇒ higher-scored names out-returned lower-scored names this session (momentum signal working). One session is mostly market beta; read the spread, not the level._
 
@@ -21,14 +21,14 @@ _Positive spread ⇒ higher-scored names out-returned lower-scored names this se
 
 | Metric | Value |
 |--------|-------|
-| Forecast volatility (annualized, 126d) | +42.73% |
+| Forecast volatility (annualized, 126d) | +42.85% |
 | Vol target | +35.00% |
 | Exposure multiplier | 0.82× |
 | Effective vs base exposure | 82% of budget |
 
 _Scales gross exposure by clip(target / forecast vol, floor, cap); currently **de-risked to 82% (forecast vol above the +35.00% target)**. Affects position sizing only — not the composite scores._
 
-## Today's transactions (2026-06-17)
+## Today's transactions (2026-06-18)
 
 _No transactions today._
 
@@ -47,159 +47,159 @@ _No transactions today._
 | 2026-05-20 | BUY | FTNT | 89 | 130.13 | momentum_score=0.906 | — |
 | 2026-05-27 | SELL | ZS | 64 | 126.28 | stop_loss | $-3,145 |
 
-## A) Ranking at PRIOR CLOSE (2026-06-16) — scores fixed at that close, marked to the latest price (2026-06-17, may be intraday) — _scores loaded from saved ranking snapshot (authoritative for that date)_
+## A) Ranking at PRIOR CLOSE (2026-06-17) — scores fixed at that close, marked to the latest price (2026-06-18, may be intraday) — _scores loaded from saved ranking snapshot (authoritative for that date)_
 
 _These are the scores that set up the most recent session; `Return` shows how each did from the prior close to the latest price (the latest bar may be a provisional intraday price, not an official close)._
 
 ### Top 10 (highest buy scores @ prior close)
 
-| # | Ticker | Score | Gate | 2026-06-16 close | 2026-06-17 latest | Return | Held |
+| # | Ticker | Score | Gate | 2026-06-17 close | 2026-06-18 latest | Return | Held |
 |---|--------|------:|:----:|------:|------:|-------:|:----:|
-| 1 | AMAT | 0.913 | ✓ | 568.23 | 592.92 | +4.35% |  |
-| 2 | ARM | 0.910 | ✓ | 396.34 | 418.88 | +5.69% | HELD |
-| 3 | HOOD | 0.904 | ✓ | 96.71 | 105.20 | +8.78% |  |
-| 4 | KLAC | 0.885 | ✓ | 237.33 | 238.73 | +0.59% |  |
-| 5 | LRCX | 0.881 | ✓ | 369.08 | 374.18 | +1.38% |  |
-| 6 | SOFI | 0.842 | ✓ | 17.71 | 17.42 | -1.64% |  |
-| 7 | MU | 0.809 | ✓ | 1020.76 | 1043.19 | +2.20% |  |
-| 8 | RBLX | 0.799 | ✓ | 49.34 | 48.02 | -2.68% |  |
-| 9 | MRVL | 0.794 | ✓ | 278.67 | 289.54 | +3.90% | HELD |
-| 10 | VST | 0.773 | ✓ | 158.61 | 158.83 | +0.14% |  |
-| | | | | | | **AVG +2.27%** | |
+| 1 | HOOD | 0.970 | ✓ | 105.20 | 107.61 | +2.29% |  |
+| 2 | AMAT | 0.950 | ✓ | 592.92 | 617.30 | +4.11% |  |
+| 3 | ARM | 0.920 | ✓ | 418.88 | 430.50 | +2.77% | HELD |
+| 4 | LRCX | 0.890 | ✓ | 374.18 | 395.67 | +5.74% |  |
+| 5 | MRVL | 0.880 | ✓ | 289.54 | 326.07 | +12.62% | HELD |
+| 6 | MU | 0.870 | ✓ | 1043.19 | 1135.77 | +8.87% |  |
+| 7 | KLAC | 0.860 | ✓ | 238.73 | 258.41 | +8.24% |  |
+| 8 | ASML | 0.830 | ✓ | 1867.83 | 1923.01 | +2.95% |  |
+| 9 | SOFI | 0.810 | ✓ | 17.42 | 17.82 | +2.30% |  |
+| 10 | AMD | 0.800 | ✓ | 512.48 | 533.90 | +4.18% |  |
+| | | | | | | **AVG +5.41%** | |
 
 ### Bottom 10 (lowest buy scores @ prior close)
 
-| # | Ticker | Score | Gate | 2026-06-16 close | 2026-06-17 latest | Return | Held |
+| # | Ticker | Score | Gate | 2026-06-17 close | 2026-06-18 latest | Return | Held |
 |---|--------|------:|:----:|------:|------:|-------:|:----:|
-| 74 | OXY | 0.245 | — | 53.67 | 53.04 | -1.17% |  |
-| 75 | ADBE | 0.227 | — | 207.32 | 196.28 | -5.33% |  |
-| 76 | SMCI | 0.219 | — | 29.22 | 27.78 | -4.93% |  |
-| 77 | TTD | 0.206 | — | 18.96 | 18.16 | -4.22% |  |
-| 78 | ZS | 0.198 | — | 127.23 | 124.38 | -2.24% |  |
-| 79 | NOW | 0.198 | — | 101.33 | 95.48 | -5.77% |  |
-| 80 | SAP | 0.184 | — | 165.41 | 158.79 | -4.00% |  |
-| 81 | HUBS | 0.173 | — | 182.85 | 176.71 | -3.36% |  |
-| 82 | INTU | 0.165 | — | 280.99 | 269.08 | -4.24% |  |
-| 83 | PLUG | 0.108 | — | 2.71 | 2.65 | -2.21% |  |
-| | | | | | | **AVG -3.75%** | |
+| 74 | CRM | 0.220 | — | 155.02 | 152.93 | -1.35% |  |
+| 75 | ADBE | 0.210 | — | 196.28 | 194.95 | -0.68% |  |
+| 76 | SAP | 0.210 | — | 158.79 | 154.96 | -2.41% |  |
+| 77 | TTD | 0.200 | — | 18.16 | 18.42 | +1.43% |  |
+| 78 | TWLO | 0.190 | — | 188.11 | 186.56 | -0.82% |  |
+| 79 | WDAY | 0.190 | — | 121.83 | 118.53 | -2.71% |  |
+| 80 | OXY | 0.180 | — | 53.04 | 51.40 | -3.10% |  |
+| 81 | ZS | 0.170 | — | 124.38 | 123.89 | -0.39% |  |
+| 82 | HUBS | 0.150 | — | 176.71 | 177.86 | +0.65% |  |
+| 83 | INTU | 0.130 | — | 269.08 | 264.55 | -1.68% |  |
+| | | | | | | **AVG -1.11%** | |
 
-## A2) Intraday return progression — 2026-06-17 (vs prior close 2026-06-16)
+## A2) Intraday return progression — 2026-06-18 (vs prior close 2026-06-17)
 
 _Return from the prior close to each **hourly Chicago-time checkpoint** (9:00, 10:00, 11:00 … up to whatever has traded so far), using 30-min bars. The far-right **Latest** column is the most recent price (≈the 15:00 CT close). Watch the spread between the top and bottom AVG rows build through the session._
 
 ### Top 10 @ prior close — intraday path
 
-| Ticker | 9:00 CT | 10:00 CT | 11:00 CT | 12:00 CT | 13:00 CT | 14:00 CT | Latest (≈15:00 CT close) |
-|--------|------:|------:|------:|------:|------:|------:|------:|
-| AMAT | +7.47% | +8.42% | +8.07% | +6.81% | +7.59% | +6.68% | +4.35% |
-| ARM | +1.88% | +5.79% | +6.68% | +6.73% | +7.80% | +10.51% | +5.69% |
-| HOOD | +3.36% | +8.37% | +11.41% | +11.91% | +12.63% | +13.32% | +8.78% |
-| KLAC | +3.92% | +3.05% | +2.76% | +1.59% | +2.60% | +2.95% | +0.59% |
-| LRCX | +4.71% | +5.56% | +5.42% | +4.35% | +4.50% | +3.79% | +1.38% |
-| SOFI | +3.19% | +3.27% | +4.50% | +4.66% | +5.00% | +3.47% | -1.64% |
-| MU | +0.12% | +1.49% | +3.71% | +3.55% | +4.47% | +5.36% | +2.20% |
-| RBLX | -1.82% | +0.13% | +1.49% | +1.13% | +1.99% | +1.36% | -2.68% |
-| MRVL | +1.92% | +4.02% | +5.34% | +5.81% | +6.76% | +7.84% | +3.90% |
-| VST | +0.89% | +0.51% | +1.82% | +2.16% | +2.34% | +1.59% | +0.14% |
-| **AVG** | +2.56% | +4.06% | +5.12% | +4.87% | +5.57% | +5.69% | +2.27% |
+| Ticker | 9:00 CT | 10:00 CT | 11:00 CT | 12:00 CT | Latest (≈15:00 CT close) |
+|--------|------:|------:|------:|------:|------:|
+| HOOD | -0.67% | +3.44% | +0.54% | +2.11% | +2.29% |
+| AMAT | +7.30% | +6.52% | +5.90% | +4.61% | +4.11% |
+| ARM | +5.32% | +6.74% | +6.08% | +1.92% | +2.77% |
+| LRCX | +6.78% | +6.25% | +5.82% | +5.65% | +5.74% |
+| MRVL | +6.97% | +11.25% | +11.87% | +12.06% | +12.62% |
+| MU | +6.05% | +8.14% | +7.82% | +8.17% | +8.87% |
+| KLAC | +7.18% | +6.63% | +8.52% | +8.61% | +8.24% |
+| ASML | +2.52% | +3.61% | +2.95% | +2.75% | +2.95% |
+| SOFI | +0.86% | +2.87% | +2.12% | +1.82% | +2.30% |
+| AMD | +3.51% | +4.15% | +4.39% | +4.24% | +4.18% |
+| **AVG** | +4.58% | +5.96% | +5.60% | +5.19% | +5.41% |
 
 ### Bottom 10 @ prior close — intraday path
 
-| Ticker | 9:00 CT | 10:00 CT | 11:00 CT | 12:00 CT | 13:00 CT | 14:00 CT | Latest (≈15:00 CT close) |
-|--------|------:|------:|------:|------:|------:|------:|------:|
-| OXY | -0.69% | +0.01% | -0.10% | -0.62% | -0.43% | -0.67% | -1.17% |
-| ADBE | -0.71% | -2.51% | -2.43% | -2.40% | -2.04% | -3.80% | -5.33% |
-| SMCI | +0.38% | -0.29% | -0.26% | -0.34% | +0.27% | -2.09% | -4.93% |
-| TTD | -0.76% | -1.95% | -0.05% | -0.74% | -1.03% | -1.93% | -4.22% |
-| ZS | +0.58% | -1.18% | -0.56% | -0.68% | -0.86% | -1.75% | -2.24% |
-| NOW | +1.39% | -0.60% | -0.72% | -0.89% | -0.88% | -2.89% | -5.77% |
-| SAP | +0.35% | -2.03% | -1.22% | -1.66% | -1.84% | -2.80% | -4.00% |
-| HUBS | +1.33% | -0.55% | +0.28% | +0.03% | +0.07% | -1.06% | -3.36% |
-| INTU | +1.34% | -0.56% | -0.39% | -0.54% | -0.62% | -2.61% | -4.24% |
-| PLUG | +4.98% | +4.98% | +5.90% | +5.35% | +5.17% | +3.51% | -2.21% |
-| **AVG** | +0.82% | -0.47% | +0.04% | -0.25% | -0.22% | -1.61% | -3.75% |
+| Ticker | 9:00 CT | 10:00 CT | 11:00 CT | 12:00 CT | Latest (≈15:00 CT close) |
+|--------|------:|------:|------:|------:|------:|
+| CRM | -2.44% | -1.54% | -1.64% | -1.64% | -1.35% |
+| ADBE | -1.52% | -0.37% | -1.16% | -1.24% | -0.68% |
+| SAP | -2.04% | -1.84% | -2.37% | -2.62% | -2.41% |
+| TTD | -0.72% | +0.83% | +0.30% | +0.36% | +1.43% |
+| TWLO | -3.93% | -1.63% | -1.67% | -1.39% | -0.82% |
+| WDAY | -0.80% | -1.89% | -2.57% | -3.01% | -2.71% |
+| OXY | -3.00% | -2.82% | -3.07% | -3.24% | -3.10% |
+| ZS | -2.73% | -0.88% | -1.33% | -0.92% | -0.39% |
+| HUBS | -0.26% | +3.12% | +1.33% | +0.89% | +0.65% |
+| INTU | -2.03% | -0.90% | -2.02% | -2.02% | -1.68% |
+| **AVG** | -1.95% | -0.79% | -1.42% | -1.48% | -1.11% |
 
 ### Held positions — intraday path
 
-| Ticker | 9:00 CT | 10:00 CT | 11:00 CT | 12:00 CT | 13:00 CT | 14:00 CT | Latest (≈15:00 CT close) |
-|--------|------:|------:|------:|------:|------:|------:|------:|
-| ARM | +1.88% | +5.79% | +6.68% | +6.73% | +7.80% | +10.51% | +5.69% |
-| CRWD | +1.52% | -0.14% | +0.69% | +0.91% | +1.21% | +0.76% | +0.51% |
-| DDOG | +2.12% | -1.22% | -0.12% | +0.12% | +0.45% | -0.43% | -1.94% |
-| DELL | -0.59% | +2.43% | +3.67% | +4.33% | +5.40% | +5.66% | +3.77% |
-| FTNT | +0.61% | -0.34% | -2.34% | -1.70% | -1.73% | -1.87% | -1.96% |
-| INTC | +0.98% | +2.96% | +3.52% | +4.08% | +4.65% | +5.25% | +3.46% |
-| MRVL | +1.92% | +4.02% | +5.34% | +5.81% | +6.76% | +7.84% | +3.90% |
-| PANW | +0.81% | -0.17% | +0.09% | +0.31% | +1.11% | +0.96% | +0.80% |
-| QCOM | +1.60% | +1.11% | +1.69% | +2.14% | +1.98% | +1.83% | -0.51% |
-| SEDG | -0.68% | -2.38% | -0.08% | +1.62% | +2.13% | +1.70% | -4.32% |
-| **AVG** | +1.02% | +1.21% | +1.91% | +2.43% | +2.98% | +3.22% | +0.94% |
+| Ticker | 9:00 CT | 10:00 CT | 11:00 CT | 12:00 CT | Latest (≈15:00 CT close) |
+|--------|------:|------:|------:|------:|------:|
+| ARM | +5.32% | +6.74% | +6.08% | +1.92% | +2.77% |
+| CRWD | -2.19% | -0.51% | -1.38% | -1.15% | -0.58% |
+| DDOG | -4.04% | -2.48% | -3.12% | -2.72% | -1.76% |
+| DELL | +1.88% | +3.17% | +1.02% | +1.67% | +2.05% |
+| FTNT | -0.70% | +0.74% | +0.15% | +0.96% | +1.35% |
+| INTC | +7.02% | +8.03% | +9.88% | +10.64% | +10.80% |
+| MRVL | +6.97% | +11.25% | +11.87% | +12.06% | +12.62% |
+| PANW | -0.29% | +0.24% | +0.57% | +1.03% | +1.10% |
+| QCOM | +6.59% | +5.09% | +3.47% | +4.81% | +5.94% |
+| SEDG | -0.17% | +1.79% | +4.37% | +5.56% | +7.12% |
+| **AVG** | +2.04% | +3.41% | +3.29% | +3.48% | +4.14% |
 
-## B) CURRENT composite ranking (scored on latest prices 2026-06-17) — sets up the next session
+## B) CURRENT composite ranking (scored on latest prices 2026-06-18) — sets up the next session
 
 _Recomputed on the current/provisional prices. 19/83 names clear the buy gate now. `Δrank vs prior` = move vs the prior-close ranking (▲ = ranked higher now)._
 
 ### Top 10 (highest buy scores @ current prices)
 
-| # | Ticker | Score | Gate | 2026-06-17 px | Δrank vs prior | Held |
+| # | Ticker | Score | Gate | 2026-06-18 px | Δrank vs prior | Held |
 |---|--------|------:|:----:|------:|:-------------:|:----:|
-| 1 | HOOD | 0.972 | ✓ | 105.20 | ▲2 |  |
-| 2 | AMAT | 0.948 | ✓ | 592.92 | ▼1 |  |
-| 3 | ARM | 0.890 | ✓ | 418.88 | ▼1 | HELD |
-| 4 | LRCX | 0.881 | ✓ | 374.18 | ▲1 |  |
-| 5 | KLAC | 0.856 | ✓ | 238.73 | ▼1 |  |
-| 6 | MRVL | 0.844 | ✓ | 289.54 | ▲3 | HELD |
-| 7 | MU | 0.843 | ✓ | 1043.19 | • |  |
-| 8 | GE | 0.831 | ✓ | 357.03 | ▲3 |  |
-| 9 | ASML | 0.817 | ✓ | 1867.83 | ▲13 |  |
-| 10 | SOFI | 0.805 | ✓ | 17.42 | ▼4 |  |
+| 1 | MRVL | 0.961 | ✓ | 326.07 | ▲4 | HELD |
+| 2 | HOOD | 0.920 | ✓ | 107.61 | ▼1 |  |
+| 3 | RBLX | 0.909 | ✓ | 52.17 | ▲8 |  |
+| 4 | ARM | 0.902 | ✓ | 430.50 | ▼1 | HELD |
+| 5 | MU | 0.893 | ✓ | 1135.77 | ▲1 |  |
+| 6 | AMAT | 0.886 | ✓ | 617.30 | ▼4 |  |
+| 7 | INTC | 0.881 | ✓ | 134.18 | ▲5 | HELD |
+| 8 | VST | 0.874 | ✓ | 165.27 | ▲10 |  |
+| 9 | TSM | 0.830 | ✓ | 458.33 | ▲11 |  |
+| 10 | KLAC | 0.809 | ✓ | 258.41 | ▼3 |  |
 
 ### Bottom 10 (lowest buy scores @ current prices)
 
-| # | Ticker | Score | Gate | 2026-06-17 px | Δrank vs prior | Held |
+| # | Ticker | Score | Gate | 2026-06-18 px | Δrank vs prior | Held |
 |---|--------|------:|:----:|------:|:-------------:|:----:|
-| 74 | SMCI | 0.219 | — | 27.78 | ▲2 |  |
-| 75 | ADBE | 0.212 | — | 196.28 | • |  |
-| 76 | TTD | 0.207 | — | 18.16 | ▲1 |  |
-| 77 | HUBS | 0.200 | — | 176.71 | ▲4 |  |
-| 78 | OXY | 0.197 | — | 53.04 | ▼4 |  |
-| 79 | SAP | 0.196 | — | 158.79 | ▲1 |  |
-| 80 | TWLO | 0.195 | — | 188.11 | ▼10 |  |
-| 81 | WDAY | 0.176 | — | 121.83 | ▼21 |  |
-| 82 | ZS | 0.163 | — | 124.38 | ▼4 |  |
-| 83 | INTU | 0.111 | — | 269.08 | ▼1 |  |
+| 74 | NOW | 0.223 | — | 95.44 | ▼7 |  |
+| 75 | TWLO | 0.222 | — | 186.56 | ▲3 |  |
+| 76 | CRM | 0.221 | — | 152.93 | ▼2 |  |
+| 77 | OXY | 0.199 | — | 51.40 | ▲3 |  |
+| 78 | TEAM | 0.195 | — | 83.74 | ▼10 |  |
+| 79 | SNAP | 0.187 | — | 4.74 | ▼6 |  |
+| 80 | HUBS | 0.182 | — | 177.86 | ▲2 |  |
+| 81 | WDAY | 0.171 | — | 118.53 | ▼2 |  |
+| 82 | ZS | 0.154 | — | 123.89 | ▼1 |  |
+| 83 | INTU | 0.110 | — | 264.55 | • |  |
 
 ## Group returns (ranking-close → latest)
 
 | Group | Avg return |
 |-------|-----------:|
-| Top 10 | +2.27% |
-| Universe (all 83) | -1.23% |
-| Held book (equal-wt) | +0.94% |
-| Bottom 10 | -3.75% |
+| Top 10 | +5.41% |
+| Universe (all 83) | +1.87% |
+| Held book (equal-wt) | +4.14% |
+| Bottom 10 | -1.11% |
 
-## Held book — 10 positions  (portfolio $172,009, cash $16,729)
+## Held book — 10 positions  (portfolio $178,855, cash $16,729)
 
 | Ticker | Shares | Entry | Now | Unreal % | Return |
 |--------|-------:|------:|----:|---------:|-------:|
-| ARM | 46 | 216.10 | 418.88 | +93.84% | +5.69% |
-| CRWD | 18 | 617.50 | 682.96 | +10.60% | +0.51% |
-| DDOG | 59 | 200.14 | 226.63 | +13.24% | -1.94% |
-| DELL | 62 | 153.23 | 419.32 | +173.66% | +3.77% |
-| FTNT | 89 | 130.13 | 144.14 | +10.77% | -1.96% |
-| INTC | 123 | 94.84 | 121.10 | +27.68% | +3.46% |
-| MRVL | 75 | 131.43 | 289.54 | +120.30% | +3.90% |
-| PANW | 46 | 247.80 | 282.13 | +13.86% | +0.80% |
-| QCOM | 56 | 218.50 | 212.97 | -2.53% | -0.51% |
-| SEDG | 183 | 55.29 | 54.68 | -1.09% | -4.32% |
+| ARM | 46 | 216.10 | 430.50 | +99.22% | +2.77% |
+| CRWD | 18 | 617.50 | 679.03 | +9.96% | -0.58% |
+| DDOG | 59 | 200.14 | 222.63 | +11.24% | -1.76% |
+| DELL | 62 | 153.23 | 427.91 | +179.26% | +2.05% |
+| FTNT | 89 | 130.13 | 146.08 | +12.26% | +1.35% |
+| INTC | 123 | 94.84 | 134.18 | +41.47% | +10.80% |
+| MRVL | 75 | 131.43 | 326.07 | +148.09% | +12.62% |
+| PANW | 46 | 247.80 | 285.23 | +15.11% | +1.10% |
+| QCOM | 56 | 218.50 | 225.62 | +3.26% | +5.94% |
+| SEDG | 183 | 55.29 | 58.58 | +5.95% | +7.12% |
 
 ## Portfolio vs benchmarks
 
 | Window | model_v4 | SPY | QQQ | vs SPY | vs QQQ |
 |--------|------:|----:|----:|-------:|-------:|
-| 1D | +1.43% | -1.25% | -1.01% | +2.68% | +2.44% |
-| 5D | +10.15% | +2.14% | +4.15% | +8.01% | +6.00% |
-| MTD | -3.55% | -2.32% | -2.72% | -1.24% | -0.83% |
-| Since 2026-01-01 | +72.01% | +8.76% | +17.99% | +63.25% | +54.02% |
+| 1D | +3.98% | +0.91% | +2.46% | +3.07% | +1.52% |
+| 5D | +7.56% | +1.34% | +3.23% | +6.22% | +4.33% |
+| MTD | +0.29% | -1.43% | -0.33% | +1.72% | +0.62% |
+| Since 2026-01-01 | +78.85% | +9.74% | +20.89% | +69.11% | +57.96% |
 
 _Ranking is reproducible from price history (composite of 1d/5d/20d returns + volume ratio); the latest mark may be a provisional intraday bar that settles at the close._
