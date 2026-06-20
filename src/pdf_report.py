@@ -814,8 +814,13 @@ def run(scenario: Optional[str] = None, start: Optional[date] = None, end: Optio
     d = rank_report.build_report(scenario, start, end, cfg=cfg, account=account,
                                  write_snapshot=False if account else None, with_intraday=True,
                                  prepost=prepost)
-    tag = f"{account}_" if account else ""
-    out = output or (root / "reports" / f"eod_{tag}{scenario}_{d['mark'].isoformat()}.pdf")
+    if output:
+        out = Path(output)
+    elif account:
+        # account-mode: render into the account's own reports/ folder (alongside the ledger)
+        out = root / "accounts" / account / "reports" / f"eod_{scenario}_{d['mark'].isoformat()}.pdf"
+    else:
+        out = root / "reports" / f"eod_{scenario}_{d['mark'].isoformat()}.pdf"
     return build_pdf(d, cfg, out)
 
 

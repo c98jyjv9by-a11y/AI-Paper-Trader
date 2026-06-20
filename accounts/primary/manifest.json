@@ -1,7 +1,7 @@
 {
   "name": "primary",
   "scenario": "model_v4",
-  "status": "frozen",
+  "status": "living",
   "inception": "2026-01-01",
   "frozen_through": "2026-06-17",
   "starting_value": 100000.0,
@@ -25,6 +25,21 @@
     "reports/status_model_v4_2026-06-17.md": "072ba1aee75b73b0090afd9d3f4d9bf5822fdf0d4ca11a49a29f61437fab894c",
     "rankings/rankings_model_v4_2026-06-15.csv": "61a562754e21322bf3cc933d7fdef0ee12bae7e9e7d71cd4691d6bf62f06d147",
     "rankings/rankings_model_v4_2026-06-16.csv": "16e589b0cd24f11c5c63deca4b7c291597447741d37aff716de2def8ea46f832",
-    "rankings/rankings_model_v4_2026-06-17.csv": "4133d57b3eb385e33fa1f169b8f8627e059d8a6af5632a96b22863ac8ccbbf09"
-  }
+    "rankings/rankings_model_v4_2026-06-17.csv": "4133d57b3eb385e33fa1f169b8f8627e059d8a6af5632a96b22863ac8ccbbf09",
+    "continuation/equity.csv": "7657c3aa33c6ca9f4bdfd07df6c93d3b4378888cf08acbdff97018c12f512a09",
+    "continuation/positions.csv": "8e1eae907a0343d0b8edefe19bbe77b5734778aa4acc4da3c0e2260b7942fa54",
+    "reports/eod_model_v4_2026-06-18.pdf": "7c3639f2ccf7a029632ee3d79244a4d5600863c9e81104ace6aa7cedd553ae0a",
+    "reports/status_model_v4_2026-06-18.md": "16c10c05b616e60b92f11ece4de1d7fbbe2504b1e140f1c93b6f2c6004ea71d2"
+  },
+  "segments": [
+    {
+      "scenario": "model_v4",
+      "from": "2026-06-18",
+      "to": "2026-06-18",
+      "ran_at": "2026-06-20T15:24:07",
+      "n_trades": 0
+    }
+  ],
+  "live_through": "2026-06-18",
+  "live_value": 176997.02
 }

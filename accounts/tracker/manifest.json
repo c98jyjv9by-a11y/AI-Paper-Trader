@@ -4,12 +4,12 @@
   "status": "living",
   "inception": "2026-06-17",
   "frozen_through": "2026-06-17",
-  "live_through": "2026-06-17",
+  "live_through": "2026-06-18",
   "starting_value": 100000.0,
   "ending_value": 99974.9,
   "total_return": -0.00025100385742193865,
   "n_trades": 3,
-  "n_positions": 3,
+  "n_positions": 5,
   "created_at": "2026-06-18T02:16:53",
   "seed": {
     "picks": [
@@ -32,10 +32,24 @@
     "per_name_pct": 0.085,
     "cash": 100000.0
   },
-  "note": "Seeded live account: $100,000 \u2192 bought top-3 model_v4 names at the 2026-06-17 close, sized at 8.5%/name. Trails model_v4 via account-continue.",
+  "note": "Seeded live account: $100,000 \u2192 bought top-3 model_v4 names at the 2026-06-17 close, sized at 8.5%/name. Trails model_v4 via account-continue. | 2026-06-18 manual: +MRVL (8.5%) and soft-gate SOXS hedge (HALF, sized off position MV).",
   "hashes": {
     "trades.csv": "3ba9fcf4def1ace9310b2d7cb2a19b0627a0e49b1f6eeb0717d451b89ad17bd9",
     "equity.csv": "705f9e65368e01048f2917d05728b1dd8c5194370fcd7d02a5591148437688ad",
-    "positions.csv": "5271bcd67053b452655bd13bddff69fb575d10932d67f8c41eadf23ee11dbe32"
-  }
+    "positions.csv": "5271bcd67053b452655bd13bddff69fb575d10932d67f8c41eadf23ee11dbe32",
+    "continuation/equity.csv": "62dbedbd46159f9c6788b696b7e44db0ca08df98b51dd607144c0d64ba59fc89",
+    "continuation/positions.csv": "52cd14ff989a641816728bb646dd68e4a583e783f0fc5d9bcb3b681a4aba7560",
+    "continuation/trades.csv": "903f27c159fddd12b16a231b00cd5c126db4c9ccea4f8a265a7c1b3185404d5b"
+  },
+  "segments": [
+    {
+      "scenario": "model_v4",
+      "from": "2026-06-18",
+      "to": "2026-06-18",
+      "ran_at": "2026-06-20T15:27:15",
+      "n_trades": 0,
+      "report_error": "unsupported format string passed to NoneType.__format__"
+    }
+  ],
+  "live_value": 100961.16
 }

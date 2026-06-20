@@ -635,8 +635,12 @@ def run(scenario: Optional[str] = None, start: Optional[date] = None, end: Optio
     # Use the prior EOD snapshot + intraday paths; never write a provisional snapshot.
     d = rank_report.build_report(scenario, start, end, cfg=cfg, write_snapshot=False,
                                  account=account, prepost=prepost)
-    tag = f"{account}_" if account else ""
-    out = output or (root / "reports" / f"midday_{tag}{scenario}_{d['mark'].isoformat()}.pdf")
+    if output:
+        out = Path(output)
+    elif account:
+        out = root / "accounts" / account / "reports" / f"midday_{scenario}_{d['mark'].isoformat()}.pdf"
+    else:
+        out = root / "reports" / f"midday_{scenario}_{d['mark'].isoformat()}.pdf"
     return build_pdf(d, cfg, out)
 
 
