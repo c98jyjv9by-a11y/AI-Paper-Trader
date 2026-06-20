@@ -8,7 +8,8 @@ candidate hedge instruments' next-day returns — and applies a configurable end
     RULE (decide at close T, hold T+1 only, exit at close T+1):
       if  qqq_trl_1d >= up_threshold        (QQQ had a big up day)
       AND z(spy_vol_trl_5d) >= vol_z         (5-day realized vol elevated vs its recent norm)
-      then BUY a 1-day semis hedge sized `weight` (short-SMH by default; SOXS/PSQ selectable).
+      then BUY a 1-day semis hedge (default SOXS, the long -3x inverse-semis ETF — no shorting;
+      short_smh / psq selectable), sized inverse-vol to the book's risk.
 
 Validated finding (see backtests/hedge_overlay_model_v4_summary.md): neither factor works
 alone — a QQQ up-day on its own *bounces*; it's the INTERACTION (up-shock while vol is already
@@ -53,7 +54,7 @@ class HedgeConfig:
     vol_z_threshold: float = 1.0       # fire when z(vol_factor) >= this
     vol_lookback: int = 63             # trailing window for the vol z-score
     # ---- hedge sleeve ----
-    product: str = "short_smh"
+    product: str = "soxs"              # long inverse-ETF only (no shorting); SOXS = -3x semis
     sizing: str = "inverse_vol"        # "inverse_vol" (risk-targeted) or "fixed"
     target_risk: float = 0.50          # inverse_vol: hedge daily-vol as a fraction of book daily-vol
     vol_window: int = 20               # trailing window for the sizing vols
