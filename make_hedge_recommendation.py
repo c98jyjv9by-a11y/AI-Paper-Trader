@@ -41,14 +41,18 @@ subprocess.run([sys.executable, str(ROOT / "make_rolling_chart.py")], check=True
 res = ho.run()
 summ, wf = res["summary"], res["walk_forward"]
 
-# ── per-horizon $ PnL on $100k (SOXS @10% = matched beta, matches the chart) ──────
+# ── per-horizon $ PnL on $100k — SOXS sized INVERSE-VOL (matches the chart) ───────
 df = pd.read_csv(ROOT / "backtests" / "model_v4_timeseries.csv", parse_dates=["date"]).set_index("date")
-ov = ho.build_overlay(df, ho.HedgeConfig())
+ov_smh = ho.build_overlay(df, ho.HedgeConfig())                       # default = short-SMH inverse-vol
+ov = ho.build_overlay(df, ho.HedgeConfig(product="soxs", sizing="inverse_vol"))
 fires = ov.index[ov["hedge_on"]]
-BOOK, W, RT = 100_000, 0.10, 0.0010
-pnl = {h: ((W * df["soxs_fwd_%dd" % h].reindex(fires) - RT) * BOOK).dropna() for h in (1, 5, 20)}
+BOOK, RT = 100_000, 0.0010
+wf_ = ov["weight"].reindex(fires)
+avg_w = wf_[wf_ > 0].mean()
+aw_smh = ov_smh["weight"][ov_smh["hedge_on"]].mean()
+pnl = {h: ((wf_ * df["soxs_fwd_%dd" % h].reindex(fires) - wf_ * RT) * BOOK).dropna() for h in (1, 5, 20)}
 p1 = pnl[1]
-j16 = (W * df["soxs_fwd_1d"].loc["2026-06-15"] - RT) * BOOK
+j16 = ov["sleeve_pnl"].loc["2026-06-15"] * BOOK
 
 # ── June-16 case study numbers ────────────────────────────────────────────────────
 _T, _N = pd.Timestamp("2026-06-15"), pd.Timestamp("2026-06-16")
@@ -60,9 +64,10 @@ CS = dict(
     book_nx=df.loc[_N, "book_trl_1d"] * 100, top10=df.loc[_N, "top10_trl_1d"] * 100,
     smh=df.loc[_N, "smh_trl_1d"] * 100, qqq=df.loc[_N, "qqq_trl_1d"] * 100,
     spy=df.loc[_N, "spy_trl_1d"] * 100, spread=df.loc[_N, "spread_trl_1d"] * 100,
-    hed_smh=(-0.30 * df["smh_fwd_1d"].loc[_T] - 0.0010) * 100,
-    hed_soxs=(0.10 * df["soxs_fwd_1d"].loc[_T] - 0.0010) * 100, hed_usd=j16,
-    softened=(df["book_fwd_1d"].loc[_T] + (-0.30 * df["smh_fwd_1d"].loc[_T] - 0.0010)) * 100,
+    w_smh=ov_smh["weight"].loc[_T] * 100, w_soxs=ov["weight"].loc[_T] * 100,
+    hed_smh=ov_smh["sleeve_pnl"].loc[_T] * 100,
+    hed_soxs=ov["sleeve_pnl"].loc[_T] * 100, hed_usd=j16,
+    softened=(df["book_fwd_1d"].loc[_T] + ov_smh["sleeve_pnl"].loc[_T]) * 100,
 )
 
 
@@ -91,7 +96,9 @@ with PdfPages(TMP) as pdf:
     y = 0.880
     y = section(y, "THE RULE  (decide at close T, hold T+1 only, exit next close)", [
         "FIRE if:   QQQ 1-day return >= +2%   AND   z(SPY 5d realized vol, 63d) >= 1.0",
-        "THEN buy:  short-SMH ~30% notional (default)  OR  SOXS ~10% (matched -0.30 beta)",
+        "THEN buy:  semis hedge sized INVERSE-VOL (hedge $-vol = 50% of book $-vol),",
+        f"           scaling with book size & relative vols  ->  avg notional:",
+        f"           short-SMH ~{aw_smh*100:.0f}%   or   SOXS ~{avg_w*100:.0f}% (=same risk, -3x).",
     ])
     y = section(y, "WHAT IT TARGETS", [
         "- Sharp up-days that occur while volatility is already elevated -- a combination",
@@ -101,7 +108,7 @@ with PdfPages(TMP) as pdf:
         "- Best supporting signal (sensitivity): 5-day realized-vol z-score. Relative vol",
         "  beats absolute level / surge-ratio; the 5d window beats 1d and 20d.",
     ])
-    y = section(y, f"QUANTIFIED VALUE   ($100k book, SOXS @10%, {len(p1)} fires)", [
+    y = section(y, f"QUANTIFIED VALUE   ($100k book, SOXS inverse-vol ~{avg_w*100:.0f}% avg, {len(p1)} fires)", [
         f"1-DAY hold (THE RULE):  net ${p1.sum():+,.0f}   "
         f"[wins ${p1[p1>0].sum():+,.0f} / losses ${p1[p1<0].sum():+,.0f}, {100*(p1>0).mean():.0f}% win]",
         f"if held 5D:  ${pnl[5].sum():+,.0f}      if held 20D:  ${pnl[20].sum():+,.0f}   "
@@ -135,8 +142,9 @@ with PdfPages(TMP) as pdf:
     fig = plt.figure(figsize=(11, 8.5)); ax = fig.add_axes([0, 0, 1, 1]); ax.axis("off")
     ax.set_xlim(0, 1); ax.set_ylim(0, 1)
     _t(ax, 0.04, 0.96, "Backtest — windows & yearly walk-forward", fontsize=15, fontweight="bold", color="#0b3d91")
-    _t(ax, 0.04, 0.935, "Default config: short-SMH 0.30, trigger qqq_1d>=2%% & z(spy_vol_5d)>=1.  "
-       "dSh = hedged minus book Sharpe; dDD = max-drawdown change (+=better).", fontsize=8, color="#666")
+    _t(ax, 0.04, 0.935, "Default: short-SMH sized inverse-vol (hedge=50%% of book risk), "
+       "trigger qqq_1d>=2%% & z(spy_vol_5d)>=1.  dSh = hedged-minus-book Sharpe; dDD = max-DD change (+=better).",
+       fontsize=8, color="#666")
     yy = 0.895
     _t(ax, 0.04, yy, "WINDOW SUMMARY", fontsize=10.5, fontweight="bold"); yy -= 0.028
     hdr = "%-12s %5s %4s | %7s %7s %7s | %7s %7s | %8s %6s %8s" % (
@@ -165,8 +173,8 @@ with PdfPages(TMP) as pdf:
         f"SPY 5d-vol z = {CS['volz']:+.2f} (elevated)   ->  RULE FIRES\n"
         f"  Next day 2026-06-16:  book {CS['book_nx']:+.2f}%  (leaders-led: top10 {CS['top10']:+.1f}%, "
         f"SMH {CS['smh']:+.1f}%, QQQ {CS['qqq']:+.1f}%, SPY {CS['spy']:+.1f}%; spread {CS['spread']:+.1f}%)\n"
-        f"  Hedge result:  short-SMH 0.30 -> {CS['hed_smh']:+.2f}%   "
-        f"(SOXS 0.10 -> {CS['hed_soxs']:+.2f}%, ${CS['hed_usd']:+,.0f} on $100k)   "
+        f"  Hedge result:  short-SMH (inv-vol, {CS['w_smh']:.0f}% wt) -> {CS['hed_smh']:+.2f}%   "
+        f"(SOXS {CS['w_soxs']:.0f}% wt -> {CS['hed_soxs']:+.2f}%, ${CS['hed_usd']:+,.0f} on $100k)   "
         f"->  the -3.8% book day softened to ~ {CS['softened']:+.1f}%"
     )
     ax.text(0.04, 0.30, cs, transform=ax.transAxes, va="top", ha="left",

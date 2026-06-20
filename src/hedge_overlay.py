@@ -34,12 +34,13 @@ ROOT = Path(__file__).parent.parent
 PANEL = ROOT / "backtests" / "model_v4_timeseries.csv"
 OUT_PREFIX = ROOT / "backtests" / "hedge_overlay_model_v4"
 
-# hedge instrument -> how to build its next-day return from panel columns (sign-adjusted)
+# hedge instrument -> next-day return (sign-adjusted) and the trailing daily-return
+# column used to size it (inverse-vol). The vol column is the instrument's own daily move.
 PRODUCTS = {
-    "short_smh": lambda d: -d["smh_fwd_1d"],     # 1x short semis (preferred: no leverage decay)
-    "soxs":      lambda d: d["soxs_fwd_1d"],      # 3x inverse semis (more tail convexity, carries)
-    "psq":       lambda d: d["psq_fwd_1d"],       # 1x inverse QQQ (weaker — not semi-specific)
-    "short_top10": lambda d: -d["top10_fwd_1d"],  # 1x short the leaders
+    "short_smh":   (lambda d: -d["smh_fwd_1d"],   "smh_trl_1d"),    # 1x short semis (no leverage decay)
+    "soxs":        (lambda d: d["soxs_fwd_1d"],    "soxs_trl_1d"),   # 3x inverse semis (convex; carries)
+    "psq":         (lambda d: d["psq_fwd_1d"],     "psq_trl_1d"),    # 1x inverse QQQ (not semi-specific)
+    "short_top10": (lambda d: -d["top10_fwd_1d"],  "top10_trl_1d"),  # 1x short the leaders
 }
 
 
@@ -53,10 +54,15 @@ class HedgeConfig:
     vol_lookback: int = 63             # trailing window for the vol z-score
     # ---- hedge sleeve ----
     product: str = "short_smh"
-    weight: float = 0.30               # notional sleeve size (additive overlay)
-    cost_bps: float = 10.0             # round-trip cost per on-day, bps of sleeve notional
+    sizing: str = "inverse_vol"        # "inverse_vol" (risk-targeted) or "fixed"
+    target_risk: float = 0.50          # inverse_vol: hedge daily-vol as a fraction of book daily-vol
+    vol_window: int = 20               # trailing window for the sizing vols
+    weight_cap: float = 0.60           # max sleeve notional (fraction of book)
+    weight: float = 0.30               # fixed-mode sleeve size (used only when sizing="fixed")
+    cost_bps: float = 10.0             # round-trip cost per on-day, bps of the TRADED sleeve notional
     # ---- accounting ----
     book_col: str = "book_fwd_1d"
+    book_ret_col: str = "book_trl_1d"  # realized daily book return, for sizing vol
     covid_start: str = "2020-04-01"
     oos_start: str = "2024-01-01"
 
@@ -66,18 +72,32 @@ def _zscore(s: pd.Series, lookback: int) -> pd.Series:
     return (s - s.rolling(lookback).mean().shift(1)) / s.rolling(lookback).std().shift(1)
 
 
+def _sizing_weight(df: pd.DataFrame, cfg: HedgeConfig) -> pd.Series:
+    """Per-date sleeve notional (fraction of book). Inverse-vol = risk-targeted to the book."""
+    if cfg.sizing == "fixed":
+        return pd.Series(cfg.weight, index=df.index)
+    fn, vol_col = PRODUCTS[cfg.product]
+    sig_book = df[cfg.book_ret_col].rolling(cfg.vol_window).std().shift(1)
+    sig_hedge = df[vol_col].rolling(cfg.vol_window).std().shift(1)
+    w = cfg.target_risk * sig_book / sig_hedge          # hedge $-vol = target_risk * book $-vol
+    return w.clip(upper=cfg.weight_cap).fillna(0.0)
+
+
 def build_overlay(df: pd.DataFrame, cfg: HedgeConfig) -> pd.DataFrame:
-    """Return a frame with the signal, hedge sleeve, and overlaid daily return. Read-only on df."""
+    """Return a frame with the signal, sleeve weight, hedge PnL, and overlaid daily return.
+    Read-only on df. Sleeve weight is a fraction of the (current) book, so it scales with book size."""
     book = df[cfg.book_col]
     up = df[cfg.up_factor] >= cfg.up_threshold
     volz = _zscore(df[cfg.vol_factor], cfg.vol_lookback)
     on = (up & (volz >= cfg.vol_z_threshold)).fillna(False)
-    hedge_ret = PRODUCTS[cfg.product](df)
+    hedge_ret = PRODUCTS[cfg.product][0](df)
+    w = _sizing_weight(df, cfg)
     rt = cfg.cost_bps / 1e4
-    sleeve = np.where(on, cfg.weight * hedge_ret - rt, 0.0)
+    sleeve = np.where(on, w * hedge_ret - w * rt, 0.0)   # cost on the TRADED notional (w)
     out = pd.DataFrame(index=df.index)
     out["book_ret"] = book
     out["hedge_on"] = on
+    out["weight"] = np.where(on, w, 0.0)
     out["hedge_instr_ret"] = hedge_ret
     out["sleeve_pnl"] = sleeve
     out["overlaid_ret"] = book + sleeve
@@ -158,8 +178,18 @@ def _write_summary(path, cfg, summary, wf, panel_path, df) -> None:
     L.append("```")
     L.append("if  %s >= %+.3f            (up-shock)" % (cfg.up_factor, cfg.up_threshold))
     L.append("AND z(%s, %dd) >= %.2f     (vol-surge supporting signal)" % (cfg.vol_factor, cfg.vol_lookback, cfg.vol_z_threshold))
-    L.append("then BUY %s @ %.0f%% notional for 1 day (round-trip cost %.0fbp), exit next close."
-             % (cfg.product, cfg.weight * 100, cfg.cost_bps))
+    if cfg.sizing == "inverse_vol":
+        L.append("then BUY %s, sized INVERSE-VOL: weight = %.2f * sigma_book / sigma_%s"
+                 % (cfg.product, cfg.target_risk, cfg.product))
+        L.append("     (%dd trailing vols, hedge $-vol targeted at %.0f%% of book $-vol, cap %.0f%% notional);"
+                 % (cfg.vol_window, cfg.target_risk * 100, cfg.weight_cap * 100))
+        avg_w = build_overlay(df, cfg)["weight"]
+        avg_w = avg_w[avg_w > 0].mean()
+        L.append("     avg fire-day weight ~ %.0f%% of book.  Hold 1 day, exit next close (cost %.0fbp)."
+                 % (avg_w * 100, cfg.cost_bps))
+    else:
+        L.append("then BUY %s @ %.0f%% notional for 1 day (round-trip cost %.0fbp), exit next close."
+                 % (cfg.product, cfg.weight * 100, cfg.cost_bps))
     L.append("```")
     L.append("\nKey finding: **no single factor works alone** — a QQQ up-day by itself bounces; "
              "the edge is the *interaction* (up-shock while vol already elevated). Best supporting "
@@ -196,12 +226,17 @@ def _cli(argv=None):
     p.add_argument("--vol-factor", help="vol factor column (e.g. spy_vol_trl_5d)")
     p.add_argument("--lookback", type=int, help="vol z lookback (days)")
     p.add_argument("--product", choices=list(PRODUCTS), help="hedge instrument")
-    p.add_argument("--weight", type=float, help="sleeve notional weight")
+    p.add_argument("--sizing", choices=["inverse_vol", "fixed"], help="sleeve sizing mode")
+    p.add_argument("--target-risk", type=float, help="inverse-vol: hedge $-vol as fraction of book $-vol")
+    p.add_argument("--vol-window", type=int, help="trailing window for sizing vols")
+    p.add_argument("--weight", type=float, help="fixed-mode sleeve notional weight")
     a = p.parse_args(argv)
     cfg = HedgeConfig()
     for k_arg, k_cfg in [("up", "up_threshold"), ("vol_z", "vol_z_threshold"),
                          ("vol_factor", "vol_factor"), ("lookback", "vol_lookback"),
-                         ("product", "product"), ("weight", "weight")]:
+                         ("product", "product"), ("weight", "weight"),
+                         ("sizing", "sizing"), ("target_risk", "target_risk"),
+                         ("vol_window", "vol_window")]:
         v = getattr(a, k_arg)
         if v is not None:
             setattr(cfg, k_cfg, v)

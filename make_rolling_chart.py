@@ -41,16 +41,22 @@ _ov = ho.build_overlay(ts, ho.HedgeConfig())
 HEDGE_DATES = _ov.index[_ov["hedge_on"]]
 HEDGE_DATES = HEDGE_DATES[(HEDGE_DATES >= START) & (HEDGE_DATES <= END)]
 
-# hedge PnL per hold-horizon (SOXS @ 10% notional = 0.30 semi-beta, matched to default; $100k book)
-BOOK, W_SOXS, RT = 100_000, 0.10, 0.0010
+# hedge PnL per hold-horizon — SOXS sized INVERSE-VOL (risk-targeted to the book), $100k book.
+# Per-fire notional weight comes from the codified overlay (scales with book size & relative vols).
+BOOK, RT = 100_000, 0.0010
+_cfg_soxs = ho.HedgeConfig(product="soxs", sizing="inverse_vol")
+_ov_soxs = ho.build_overlay(ts, _cfg_soxs)
+_wf = _ov_soxs["weight"].reindex(HEDGE_DATES)          # per-fire SOXS weight (fraction of book)
+_avgw = _wf[_wf > 0].mean()
 _pnl = {}
 for _h in (1, 5, 20):
     _r = ts["soxs_fwd_%dd" % _h].reindex(HEDGE_DATES)
-    _pnl[_h] = ((W_SOXS * _r - RT) * BOOK).dropna()
+    _pnl[_h] = ((_wf * _r - _wf * RT) * BOOK).dropna()
 _p1 = _pnl[1]
-_j16 = (W_SOXS * ts["soxs_fwd_1d"].loc["2026-06-15"] - RT) * BOOK
+_j16 = _ov_soxs["sleeve_pnl"].loc["2026-06-15"] * BOOK
 CALLOUT = (
-    f"SOXS hedge @10% on ${BOOK//1000}k book — PnL by hold horizon (n={len(_p1)} fires)\n"
+    f"SOXS hedge, inverse-vol sized (~{_avgw*100:.0f}% avg notional) on ${BOOK//1000}k book "
+    f"— PnL by hold horizon (n={len(_p1)} fires)\n"
     f"  1-DAY (the rule):  net ${_p1.sum():+,.0f}   "
     f"[wins ${_p1[_p1>0].sum():+,.0f} / losses ${_p1[_p1<0].sum():+,.0f}, {100*(_p1>0).mean():.0f}% win]\n"
     f"  5-DAY:  ${_pnl[5].sum():+,.0f}      20-DAY:  ${_pnl[20].sum():+,.0f}   "
