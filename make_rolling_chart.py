@@ -70,33 +70,39 @@ fig.subplots_adjust(hspace=0.28)
 
 # panel 1 — book (main series) vs long-exposure benchmarks (MTUM & SMH removed)
 shade(ax0)
-# benchmarks demoted to dotted reference lines
-ax0.plot(r20.index, r20["SPY"], color="gray", lw=1.0, ls=":", alpha=0.7, zorder=2, label="SPY (ref)")
-ax0.plot(r20.index, r20["QQQ"], color="darkorange", lw=1.0, ls=":", alpha=0.7, zorder=2, label="QQQ (ref)")
-# the book — the series to read: solid blue line, drawn on top
+# the portfolio — solid blue line on the left axis
 ax0.plot(book20.index, book20, color="royalblue", lw=1.0, zorder=5,
-         label="model_v4 book (20d) — main")
-# ★ stars where the codified up-shock+vol hedge would be placed (decide at close)
+         label="model_v4 book (20d)")
+# SOXS on a right axis (its -3x swings are ~10x the book's scale)
+ax0b = ax0.twinx()
+ax0b.plot(r20.index, r20["SOXS"], color="purple", lw=0.9, alpha=0.65, zorder=3,
+          label="SOXS -3x semis (20d, right)")
+ax0b.set_ylabel("SOXS 20d return (%)", color="purple")
+ax0b.tick_params(axis="y", labelcolor="purple")
+# ★ stars where the codified up-shock+vol hedge would be placed (on the portfolio line)
 _star_y = book20.reindex(HEDGE_DATES)
 ax0.scatter(HEDGE_DATES, _star_y, marker="*", s=130, color="gold",
             edgecolors="black", linewidths=0.6, zorder=7)
 ax0.axhline(0, color="black", lw=0.6)
-ax0.set_title("model_v4 book trailing 20-day return  (vs SPY / QQQ)  —  ★ = hedge placed",
+ax0.set_title("model_v4 portfolio vs SOXS hedge  —  ★ = hedge placed (up-shock + vol-surge)",
               fontweight="bold")
-ax0.set_ylabel("20d return (%)")
+ax0.set_ylabel("book 20d return (%)", color="royalblue")
+ax0.tick_params(axis="y", labelcolor="royalblue")
 h, l = ax0.get_legend_handles_labels()
+hb, lb = ax0b.get_legend_handles_labels()
+h += hb; l += lb
 h.append(Patch(facecolor="peachpuff", alpha=0.45)); l.append("high-vol regime (SPY 21d vol >15%)")
 h.append(Line2D([0], [0], marker="*", color="none", markerfacecolor="gold",
                 markeredgecolor="black", markersize=12))
-l.append("hedge placed (up-shock + vol-surge, n=%d)" % len(HEDGE_DATES))
+l.append("hedge placed (n=%d)" % len(HEDGE_DATES))
 ax0.legend(h, l, ncol=4, fontsize=8, loc="upper left", framealpha=0.9)
 
-# panel 2 — hedges
+# panel 2 — SPY / QQQ
 shade(ax1)
-ax1.plot(r20.index, r20["PSQ"], color="firebrick", lw=1.0, ls="--", label="PSQ (inverse QQQ)")
-ax1.plot(r20.index, r20["SOXS"], color="purple", lw=1.0, ls="--", label="SOXS (-3x semis)")
+ax1.plot(r20.index, r20["SPY"], color="gray", lw=1.1, label="SPY")
+ax1.plot(r20.index, r20["QQQ"], color="darkorange", lw=1.1, label="QQQ")
 ax1.axhline(0, color="black", lw=0.6)
-ax1.set_title("Hedges — trailing 20-day return", fontweight="bold")
+ax1.set_title("SPY / QQQ — trailing 20-day return", fontweight="bold")
 ax1.set_ylabel("20d return (%)")
 ax1.legend(ncol=2, fontsize=8, loc="upper left", framealpha=0.9)
 
