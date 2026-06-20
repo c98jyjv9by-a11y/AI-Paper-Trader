@@ -256,6 +256,106 @@ def seed(name: str, scenario: str, *, cash: float = 100_000.0, top_n: int = 3,
 
 
 # ── Continue (Phase 2: living continuation) ──────────────────────────────────────
+def _continue_ramp_up(name, end, man, scenario, d_dir, cont, now) -> Dict[str, Any]:
+    """Ramp-up continuation: accumulate the >=entry_score book + roll the 1-day SOXS hedge.
+    Reuses build_report to mark the book to `end` and to produce the ramp-up queue, then
+    executes it (sell yesterday's hedge → buy new entries + fresh hedge), all at the mark close."""
+    import datetime as _dt
+    import pandas as pd
+    from scenarios import build_config, load_scenario
+    from backtest import load_config
+    import rank_report, pdf_report
+
+    led = load_ledger(name); eq = led["equity"]
+    last_iso = str(eq["date"].iloc[-1])
+    if end.isoformat() <= last_iso:
+        return {"noop": True, "live_through": last_iso, "requested_end": end.isoformat()}
+    cfg = build_config(load_config(ROOT / "config"), load_scenario(scenario))
+    d = rank_report.build_report(scenario, date.fromisoformat(man["inception"]), end,
+                                 cfg=cfg, account=name, write_snapshot=False, with_intraday=False)
+    mark_iso = str(d["mark"])
+    if mark_iso <= last_iso:                       # no new trading data yet
+        return {"noop": True, "live_through": last_iso, "requested_end": end.isoformat()}
+
+    pos = d["positions"].copy()
+    cash = float(d["cash"])
+    # re-mark the held book to the latest close (current ranking carries the marked prices)
+    pxmap = {r["ticker"]: r["price"] for r in (d.get("rows_cur") or []) if r.get("price")}
+    for i in pos.index:
+        t = pos.at[i, "ticker"]
+        if t in pxmap:
+            pos.at[i, "current_price"] = float(pxmap[t])
+    total = cash + float((pos["shares"] * pos["current_price"]).sum())
+    trows = []
+
+    def _trade(action, t, sh, px, reason, pnl=""):
+        trows.append({"date": mark_iso, "action": action, "ticker": t, "shares": int(sh),
+                      "price": float(px), "trade_value": float(sh * px), "reason": reason,
+                      "realized_pnl": pnl, "holding_days": 0, "entry_price": float(px),
+                      "highest_price": float(px), "lowest_price": float(px)})
+
+    # 1) roll the 1-day hedge: exit any SOXS held from the prior session at the mark close
+    if "SOXS" in set(pos["ticker"]):
+        i = pos.index[pos["ticker"] == "SOXS"][0]
+        sh = float(pos.at[i, "shares"]); px = float(pos.at[i, "current_price"])
+        cash += sh * px; _trade("SELL", "SOXS", sh, px, "hedge expiry (1-day)")
+        pos = pos[pos["ticker"] != "SOXS"].reset_index(drop=True)
+
+    # 2) execute the queued ramp-up buys + fresh hedge (cash -> positions; total unchanged)
+    for b in ((d.get("next_session") or {}).get("buys") or []):
+        sh, px = int(b["shares"]), float(b["price"])
+        if sh <= 0:
+            continue
+        cash -= sh * px; _trade("BUY", b["ticker"], sh, px, b["reason"])
+        if b["ticker"] in set(pos["ticker"]):
+            j = pos.index[pos["ticker"] == b["ticker"]][0]
+            pos.at[j, "shares"] = float(pos.at[j, "shares"]) + sh
+        else:
+            pos = pd.concat([pos, pd.DataFrame([{"ticker": b["ticker"], "shares": sh,
+                "entry_price": px, "entry_date": mark_iso, "current_price": px,
+                "highest_price": px, "lowest_price": px}])], ignore_index=True)
+
+    open_pos = total - cash
+    prior_total = float(eq["total_portfolio_value"].iloc[-1])
+    start_val = float(man.get("starting_value", prior_total))
+    new_eq = pd.DataFrame([{"date": mark_iso, "cash": cash, "open_positions_value": open_pos,
+        "total_portfolio_value": total, "realized_pnl_to_date": 0.0, "unrealized_pnl": total - start_val,
+        "daily_return": (total / prior_total - 1) if prior_total else 0.0,
+        "cumulative_return": (total / start_val - 1) if start_val else 0.0,
+        "spy_cumulative_return": 0.0, "qqq_cumulative_return": 0.0,
+        "equal_weight_cumulative_return": 0.0, "forecast_vol": "", "exposure_mult": 1.0}])
+
+    cont.mkdir(parents=True, exist_ok=True)
+    _append_csv(cont / "equity.csv", new_eq)
+    if trows:
+        _append_csv(cont / "trades.csv", pd.DataFrame(trows))
+    pos.to_csv(cont / "positions.csv", index=False)
+
+    seg = {"scenario": scenario, "from": (date.fromisoformat(last_iso) + _dt.timedelta(days=1)).isoformat(),
+           "to": mark_iso, "ran_at": now or _dt.datetime.now().isoformat(timespec="seconds"),
+           "n_trades": len(trows), "mode": "ramp_up"}
+    man["segments"] = man.get("segments", []) + [seg]
+    man["live_through"] = mark_iso; man["live_value"] = total
+    man["status"] = "living"; man["n_positions"] = len(pos)
+    try:
+        d2 = rank_report.build_report(scenario, date.fromisoformat(man["inception"]),
+                                      date.fromisoformat(mark_iso), cfg=cfg, account=name,
+                                      write_snapshot=False, with_intraday=False)
+        (d_dir / "reports").mkdir(exist_ok=True)
+        (d_dir / "reports" / f"status_{scenario}_{mark_iso}.md").write_text(rank_report.render_md(d2))
+        pdf_report.build_pdf(d2, cfg, d_dir / "reports" / f"eod_{scenario}_{mark_iso}.pdf")
+    except Exception as exc:
+        seg["report_error"] = str(exc)
+    man.setdefault("hashes", {})
+    for f in sorted(cont.glob("*.csv")):
+        man["hashes"][f"continuation/{f.name}"] = _sha256(f)
+    for f in sorted((d_dir / "reports").glob("*")):
+        man["hashes"][f"reports/{f.name}"] = _sha256(f)
+    _manifest_path(name).write_text(json.dumps(man, indent=2))
+    return {"noop": False, **seg, "live_through": mark_iso, "live_value": total,
+            "segments": len(man["segments"])}
+
+
 def continue_account(name: str, end: date, *, scenario: Optional[str] = None,
                      now: Optional[str] = None) -> Dict[str, Any]:
     """Extend a frozen account forward to `end`, seeded from its latest state, trading with
@@ -276,6 +376,12 @@ def continue_account(name: str, end: date, *, scenario: Optional[str] = None,
     core_drift = [f for f in (chk["drift"] + chk["missing"]) if not f.startswith("continuation/")]
     if core_drift:
         raise RuntimeError(f"Frozen core of '{name}' has drifted ({core_drift}); refusing to continue.")
+
+    # Ramp-up accounts: instead of mirroring the model, accumulate via the ramp-up queue
+    # (buy current-ranking names >= entry_score not held @ size_pct, + the up-shock/vol hedge),
+    # marked to `end`. Exits are off during ramp-up (accumulate-only).
+    if man.get("ramp_up"):
+        return _continue_ramp_up(name, end, man, scenario, d_dir, cont, now)
 
     led = load_ledger(name)                       # combined latest state
     eq = led["equity"]

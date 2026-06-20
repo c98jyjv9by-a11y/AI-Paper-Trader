@@ -566,8 +566,27 @@ def _render_cover(pdf, spec: Dict[str, Any], page: int = 1):
 
     # Queued decision for next session (decide at today's close → fill next open)
     y = _section(ax, y - 0.006, "Queued for next session  (after today's close → next open)")
-    y = _queued_block(ax, y, spec.get("next_session") or {},
-                      fontsize=7.6, lh=0.0148, gap=0.004, width=112)
+    ns = spec.get("next_session") or {}
+    y = _queued_block(ax, y, ns, fontsize=7.6, lh=0.0148, gap=0.004, width=112)
+
+    # Book AFTER today's queued trades (current book + queued buys)
+    qbuys = ns.get("buys") or []
+    if qbuys:
+        after = {}
+        for h in (spec.get("holdings") or []):
+            after[h["ticker"]] = [h["shares"], h["value"]]
+        for b in qbuys:
+            if b["ticker"] in after:
+                after[b["ticker"]][0] += b["shares"]; after[b["ticker"]][1] += b["value"]
+            else:
+                after[b["ticker"]] = [b["shares"], b["value"]]
+        rows_a = sorted(([t, str(int(s)), _money(v)] for t, (s, v) in after.items()),
+                        key=lambda r: -float(r[2].replace("$", "").replace(",", "")))
+        tot = sum(v for _, (_, v) in after.items())
+        rows_a.append(["TOTAL (invested)", "", _money(tot)])
+        y = _section(ax, y - 0.006, "Current book AFTER today's trades")
+        y = _table(ax, y, ["Ticker", "Shares", "Market value"], rows_a, [0.30, 0.22, 0.30],
+                   align=["left", "right", "right"])
 
     y = _section(ax, y - 0.006, "Market commentary")
     y = _bullets(ax, y, spec["observations"], width=114, lh=0.0146, gap=0.004, fontsize=7.5)

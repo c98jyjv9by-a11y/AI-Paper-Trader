@@ -203,31 +203,57 @@ def _persistence_candidates(pdata: pd.DataFrame, cfg: Dict[str, Any], held: set,
     return sorted(above or set())
 
 
-def _next_session_block(cfg, pdata, positions, held, pv, cash, em, rows_cur, start) -> Dict[str, Any]:
+def _next_session_block(cfg, pdata, positions, held, pv, cash, em, rows_cur, start,
+                        ramp_up=None) -> Dict[str, Any]:
     """Queued decision for next session (decide at last close → fill next open), plus an
     explicit reason when there is no trade. `start` must match the report's sim start so
-    the simulated book agrees with the report's held book."""
-    ns = next_session_decision(cfg, pdata, start)
-    buys, sells = ns["buys"], ns["sells"]
-    buys = [b for b in buys if b["ticker"] not in held]   # never queue a buy for a name already held
-    # queue the up-shock+vol SOXS hedge if it fires, sized off current position market value (ex-cash).
-    # Compute the signal from the latest available closes (the panel's ETF rows lag a day).
-    try:
-        import hedge_overlay as _ho, yfinance as _yf, numpy as _np
-        mv = max((pv or 0.0) - (cash or 0.0), 0.0)
-        px = _yf.download(["QQQ", "SPY", "SOXS"], period="1y", auto_adjust=True,
-                          progress=False)["Close"].dropna()
-        qup = float(px["QQQ"].pct_change().iloc[-1])
-        sv = px["SPY"].pct_change().rolling(5).std() * _np.sqrt(252)
-        volz = float(((sv - sv.rolling(63).mean().shift(1)) / sv.rolling(63).std().shift(1)).iloc[-1])
-        rec = _ho.recommend(market_value=mv, up_override=qup, volz_override=volz)
-        if rec.get("fires") and mv > 0:
-            spx = float(px["SOXS"].iloc[-1])
-            buys.append({"ticker": "SOXS", "shares": int(rec["hedge_dollars"] / spx) if spx else 0,
-                         "price": spx, "value": rec["hedge_dollars"],
-                         "reason": "hedge: %s gate (%.1f%% of position MV)" % (rec["tier"], rec["weight"] * 100)})
-    except Exception:
-        pass
+    the simulated book agrees with the report's held book.
+
+    ramp_up (account manifest): {entry_score, entry_size_pct, hedge} → buy any current-ranking
+    name >= entry_score not already held, sized entry_size_pct of book; accumulate-only (no sells).
+    The hedge is sized off the book AFTER the queued buys (it hedges the resulting book)."""
+    if ramp_up:
+        thr = float(ramp_up.get("entry_score", 0.9))
+        sz = float(ramp_up.get("entry_size_pct", 0.085))
+        notional = sz * (pv or 0.0)
+        cands = sorted([r for r in rows_cur if r.get("score") is not None
+                        and r["score"] >= thr and not r["held"]], key=lambda r: -r["score"])
+        buys = []
+        for r in cands:
+            px = r.get("price")          # rows_cur stores the latest mark under "price"
+            sh = int(notional / px) if px else 0
+            buys.append({"ticker": r["ticker"], "shares": sh, "price": px or 0.0,
+                         "value": (sh * px) if px else notional,
+                         "reason": "ramp-up entry: score %.2f (>= %.2f), %.1f%% size" % (r["score"], thr, sz * 100)})
+        sells = []
+    else:
+        ns = next_session_decision(cfg, pdata, start)
+        buys, sells = ns["buys"], ns["sells"]
+        buys = [b for b in buys if b["ticker"] not in held]   # never queue a buy for a name already held
+    # up-shock+vol SOXS hedge, sized off the book AFTER the queued buys (current MV + queued-buy notional).
+    # Signal from the latest available closes (the panel's ETF rows lag a day).
+    if (ramp_up is None) or ramp_up.get("hedge", True):
+        try:
+            import hedge_overlay as _ho, yfinance as _yf, numpy as _np
+            mv = max((pv or 0.0) - (cash or 0.0), 0.0) + sum(b["value"] for b in buys)  # post-buy book
+            px = _yf.download(["QQQ", "SPY", "SOXS"], period="1y", auto_adjust=True,
+                              progress=False)["Close"].dropna()
+            qup = float(px["QQQ"].pct_change().iloc[-1])
+            sv = px["SPY"].pct_change().rolling(5).std() * _np.sqrt(252)
+            volz = float(((sv - sv.rolling(63).mean().shift(1)) / sv.rolling(63).std().shift(1)).iloc[-1])
+            rec = _ho.recommend(market_value=mv, up_override=qup, volz_override=volz)
+            if rec.get("fires") and mv > 0:
+                spx = float(px["SOXS"].iloc[-1])
+                buys.append({"ticker": "SOXS", "shares": int(rec["hedge_dollars"] / spx) if spx else 0,
+                             "price": spx, "value": rec["hedge_dollars"],
+                             "reason": "hedge: %s gate (%.1f%% of post-buy book MV)" % (rec["tier"], rec["weight"] * 100)})
+        except Exception:
+            pass
+    if ramp_up:
+        buy_reason = None if buys else ("No ramp-up entry: no unheld name scores >= %.2f." % float(ramp_up.get("entry_score", 0.9)))
+        return {"buys": buys, "sells": sells, "buy_reason": buy_reason,
+                "sell_reason": "Ramp-up phase: accumulate only — exits follow model_v4 once ramp-up ends.",
+                "invested_frac": ((pv - cash) / pv) if pv else 0.0, "exposure_cap_frac": None}
     risk = cfg.get("risk", {})
     base_exp = float(cfg["portfolio"]["max_total_exposure"])
     cap = base_exp * (em or 1.0)
@@ -498,6 +524,14 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
     top_avg = (sum(_tret) / len(_tret)) if _tret else None
     bot_avg = (sum(_bret) / len(_bret)) if _bret else None
     signal_strength = (top_avg - bot_avg) if (top_avg is not None and bot_avg is not None) else None
+    # ramp-up account config (score>thr EOD entries + hedge, shown as the queue) — from the manifest
+    _ramp_up_cfg = None
+    if account:
+        try:
+            from account import load_manifest
+            _ramp_up_cfg = load_manifest(account).get("ramp_up")
+        except Exception:
+            _ramp_up_cfg = None
     n_gate = sum(1 for _, r in rf.iterrows() if (min_score is None or r["composite_score"] >= min_score))
     # Dollar-weighted held-book return — weights by CURRENT market value so it equals the
     # attribution table's Book row exactly: held_dw = Σ wᵢ·retᵢ, wᵢ = sharesᵢ·markᵢ /
@@ -534,7 +568,7 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
         "next_session": _next_session_block(cfg, pdata, positions, held, pv, cash,
                                             (float(eq["exposure_mult"].iloc[-1])
                                              if "exposure_mult" in eq.columns else 1.0),
-                                            rows_cur, start),
+                                            rows_cur, start, ramp_up=_ramp_up_cfg),
         "target_vol": cfg.get("risk", {}).get("target_vol"),
         "forecast_vol": (float(eq["forecast_vol"].dropna().iloc[-1])
                          if "forecast_vol" in eq.columns and eq["forecast_vol"].notna().any() else None),
