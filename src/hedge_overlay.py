@@ -49,9 +49,9 @@ PRODUCTS = {
 class HedgeConfig:
     # ---- trigger (the rule; change freely, model untouched) ----
     up_factor: str = "qqq_trl_1d"      # the "up-shock" measure (today's move)
-    up_threshold: float = 0.02         # fire when up_factor >= this (e.g. +2% QQQ day)
+    up_threshold: float = 0.015        # fire when up_factor >= this (sweep-best: +1.5% QQQ day)
     vol_factor: str = "spy_vol_trl_5d" # the supporting signal (best in sensitivity)
-    vol_z_threshold: float = 1.0       # fire when z(vol_factor) >= this
+    vol_z_threshold: float = 0.75      # fire when z(vol_factor) >= this (sweep-best)
     vol_lookback: int = 63             # trailing window for the vol z-score
     # ---- hedge sleeve ----
     product: str = "soxs"              # long inverse-ETF only (no shorting); SOXS = -3x semis
