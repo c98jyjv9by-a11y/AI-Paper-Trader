@@ -97,8 +97,8 @@ with PdfPages(TMP) as pdf:
     y = section(y, "THE RULE  (decide at close T, hold T+1 only, exit next close)", [
         "FIRE if:   QQQ 1-day return >= +2%   AND   z(SPY 5d realized vol, 63d) >= 1.0",
         "THEN buy:  SOXS (long -3x inverse-semis ETF -- no shorting), sized INVERSE-VOL",
-        f"           to ~{avg_w*100:.0f}% of book on avg (hedge $-vol = 50% of book $-vol; scales",
-        f"           with book size & vol).  => ~${avg_w*BOOK/1000:.0f}k cash per $100k book.",
+        f"           to ~{avg_w*100:.0f}% of INVESTED capital (positions, ex-cash); hedge $-vol",
+        f"           = 50% of book $-vol, scales with invested size & vol  =>  ~${avg_w*BOOK/1000:.0f}k per $100k invested.",
     ])
     y = section(y, "WHAT IT TARGETS", [
         "- Sharp up-days that occur while volatility is already elevated -- a combination",
@@ -174,7 +174,7 @@ with PdfPages(TMP) as pdf:
         f"SPY 5d-vol z = {CS['volz']:+.2f} (elevated)   ->  RULE FIRES\n"
         f"  Next day 2026-06-16:  book {CS['book_nx']:+.2f}%  (leaders-led: top10 {CS['top10']:+.1f}%, "
         f"SMH {CS['smh']:+.1f}%, QQQ {CS['qqq']:+.1f}%, SPY {CS['spy']:+.1f}%; spread {CS['spread']:+.1f}%)\n"
-        f"  Hedge result:  SOXS (inv-vol, {CS['w_soxs']:.0f}% = ~${CS['w_soxs']/100*BOOK/1000:.0f}k cash) "
+        f"  Hedge result:  SOXS (inv-vol, {CS['w_soxs']:.0f}% of invested = ~${CS['w_soxs']/100*BOOK/1000:.0f}k) "
         f"-> {CS['hed_soxs']:+.2f}% (${CS['hed_usd']:+,.0f} on $100k)   "
         f"->  the -3.8% book day softened to ~ {CS['softened']:+.1f}%"
     )

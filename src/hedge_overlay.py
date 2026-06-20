@@ -161,6 +161,29 @@ def run(panel_path: Path = PANEL, cfg: HedgeConfig = None, out_prefix: Path = OU
     return dict(config=asdict(cfg), summary=summary, walk_forward=wf)
 
 
+def recommend(invested_value: float, cfg: HedgeConfig = None, panel_path: Path = PANEL,
+              as_of: str = None, up_override: float = None, volz_override: float = None) -> dict:
+    """Live sizing: given INVESTED capital (positions only, excl. cash), return the $ of the
+    hedge ETF to buy if the rule fires. Size = weight * invested_value, where weight is the
+    inverse-vol fraction (target_risk * sigma_book / sigma_hedge). Pass up_override/volz_override
+    to evaluate today's fresh signal; otherwise the latest date with complete panel inputs is used."""
+    cfg = cfg or HedgeConfig()
+    df = pd.read_csv(panel_path, parse_dates=["date"]).set_index("date")
+    w_series = _sizing_weight(df, cfg)
+    volz = _zscore(df[cfg.vol_factor], cfg.vol_lookback)
+    valid = df[cfg.up_factor].notna() & volz.notna()
+    date = pd.Timestamp(as_of) if as_of else df.index[valid][-1]
+    up = up_override if up_override is not None else float(df[cfg.up_factor].loc[date])
+    vz = volz_override if volz_override is not None else float(volz.loc[date])
+    fires = (up >= cfg.up_threshold) and (vz >= cfg.vol_z_threshold)
+    weight = float(w_series.loc[date])
+    dollars = weight * invested_value if fires else 0.0
+    return dict(date=str(date.date()), product=cfg.product, fires=fires,
+                qqq_up=up, vol_z=vz, weight=weight, invested=invested_value,
+                hedge_dollars=dollars,
+                note="size = weight x INVESTED capital (positions, excl. cash)")
+
+
 def _fmt(row: dict) -> str:
     return ("days=%4d on=%3d (%4.1f%%) | bookSh %+.2f hedSh %+.2f dSh %+.2f | "
             "bookDD %.1f%% dDD %+.1f%% | onBook %+s%% SOXS+ %s%% sleeve %+.2f%%") % (
@@ -231,6 +254,10 @@ def _cli(argv=None):
     p.add_argument("--target-risk", type=float, help="inverse-vol: hedge $-vol as fraction of book $-vol")
     p.add_argument("--vol-window", type=int, help="trailing window for sizing vols")
     p.add_argument("--weight", type=float, help="fixed-mode sleeve notional weight")
+    p.add_argument("--recommend", type=float, metavar="INVESTED",
+                   help="live mode: $ of INVESTED capital (positions, excl. cash) -> $ hedge to buy")
+    p.add_argument("--qqq", type=float, help="recommend: override today's QQQ 1-day return (e.g. 0.025)")
+    p.add_argument("--spy-vol-z", type=float, help="recommend: override today's SPY 5d-vol z")
     a = p.parse_args(argv)
     cfg = HedgeConfig()
     for k_arg, k_cfg in [("up", "up_threshold"), ("vol_z", "vol_z_threshold"),
@@ -241,6 +268,19 @@ def _cli(argv=None):
         v = getattr(a, k_arg)
         if v is not None:
             setattr(cfg, k_cfg, v)
+    if a.recommend is not None:
+        rec = recommend(a.recommend, cfg, Path(a.panel), up_override=a.qqq, volz_override=a.spy_vol_z)
+        print("HEDGE RECOMMENDATION  (as of %s, %s)" % (rec["date"], rec["product"]))
+        print("  signal: QQQ 1d %+.2f%% (>= %.1f%%?)  |  SPY vol-z %+.2f (>= %.2f?)  ->  FIRES: %s"
+              % (rec["qqq_up"] * 100, cfg.up_threshold * 100, rec["vol_z"], cfg.vol_z_threshold,
+                 "YES" if rec["fires"] else "NO"))
+        print("  invested capital (ex-cash): $%s" % f"{rec['invested']:,.0f}")
+        if rec["fires"]:
+            print("  -> BUY $%s of %s   (%.1f%% of invested = inverse-vol weight)"
+                  % (f"{rec['hedge_dollars']:,.0f}", rec["product"], rec["weight"] * 100))
+        else:
+            print("  -> no hedge today (rule not triggered)")
+        return
     res = run(Path(a.panel), cfg)
     print("config:", res["config"])
     for wn, r in res["summary"].items():
