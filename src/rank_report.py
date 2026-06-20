@@ -524,12 +524,16 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
     top_avg = (sum(_tret) / len(_tret)) if _tret else None
     bot_avg = (sum(_bret) / len(_bret)) if _bret else None
     signal_strength = (top_avg - bot_avg) if (top_avg is not None and bot_avg is not None) else None
-    # ramp-up account config (score>thr EOD entries + hedge, shown as the queue) — from the manifest
+    # ramp-up account config + as-of date — from the manifest (live_through is the authoritative
+    # "today" for the ledger, independent of any price-mark/extended-hours shifts to eq).
     _ramp_up_cfg = None
+    _acct_asof = None
     if account:
         try:
             from account import load_manifest
-            _ramp_up_cfg = load_manifest(account).get("ramp_up")
+            _m = load_manifest(account)
+            _ramp_up_cfg = _m.get("ramp_up")
+            _acct_asof = _m.get("live_through")
         except Exception:
             _ramp_up_cfg = None
     n_gate = sum(1 for _, r in rf.iterrows() if (min_score is None or r["composite_score"] >= min_score))
@@ -563,7 +567,11 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
         "min_score": min_score, "rows": rows, "n": n, "top_n": top_n,
         "snapshot_used": snapshot_used, "prepost": bool(mark_note), "mark_note": mark_note,
         # vol-targeting risk budget (latest bar): forecast vol + exposure multiplier
-        "today_trades": _today_trades(trades, mark.date().isoformat()),
+        # "today" = the account's live_through (authoritative, fixed) for accounts; else the
+        # equity/mark date. Robust to price-mark/extended-hours shifts so the day's fills show.
+        "today_trades": _today_trades(
+            trades, _acct_asof or (str(eq["date"].iloc[-1]) if (eq is not None and len(eq))
+                                   else mark.date().isoformat())),
         "recent_trades": _recent_trades(trades, 10),
         "next_session": _next_session_block(cfg, pdata, positions, held, pv, cash,
                                             (float(eq["exposure_mult"].iloc[-1])

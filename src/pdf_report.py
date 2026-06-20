@@ -359,10 +359,12 @@ def enrich_holdings(d: Dict[str, Any]) -> List[Dict[str, Any]]:
     return out
 
 
-def render_current_book(ax, y, holdings, *, npos, pv, cash, univ, held_dw):
+def render_current_book(ax, y, holdings, *, npos, pv, cash, univ, held_dw, title=None):
     """Render the rich held-positions table (Prior/Live rank, Δ today, Δ prior, entry→
-    yesterday→today score path, days, entry, now, %NAV, unreal, today, Signal Today) + TOTAL."""
-    y = _section(ax, y, f"Current book — today's moves (worst first)  ·  {npos} positions  "
+    yesterday→today score path, days, entry, now, %NAV, unreal, today, Signal Today) + TOTAL.
+    %NAV is each position's share of market value; the header carries the cash balance."""
+    head = title or "Current book — today's moves (worst first)"
+    y = _section(ax, y, f"{head}  ·  {npos} positions  "
                         f"(portfolio {_money(pv)}, cash {_money(cash)})")
     if not holdings:
         ax.text(0.075, y, "No open positions.", color=MIDGREY, fontsize=8.0, va="top")
@@ -537,6 +539,7 @@ def _cover_spec(d: Dict[str, Any], comm: Dict[str, List[str]]) -> Dict[str, Any]
         "univ_avg": d.get("univ_avg"), "held_dw": d.get("held_dw"),
         "n_positions": 0 if (pos is None or pos.empty) else len(pos),
         "next_session": d.get("next_session") or {}, "holdings": holdings, "rankings": rankings,
+        "today_trades": d.get("today_trades") or [],
         "observations": comm["observations"], "recommendations": comm["recommendations"],
         "mark_note": d.get("mark_note"),
     }
@@ -559,34 +562,46 @@ def _render_cover(pdf, spec: Dict[str, Any], page: int = 1):
          (RED if (em or 1) < 0.999 else GREEN)),
     ])
 
-    # Held book — same rich table as the midday report (single source of truth)
-    y = render_current_book(ax, y - 0.004, spec.get("holdings") or [],
-                            npos=spec.get("n_positions", 0), pv=pv, cash=cash,
-                            univ=spec.get("univ_avg"), held_dw=spec.get("held_dw"))
-
-    # Queued decision for next session (decide at today's close → fill next open)
-    y = _section(ax, y - 0.006, "Queued for next session  (after today's close → next open)")
-    ns = spec.get("next_session") or {}
-    y = _queued_block(ax, y, ns, fontsize=7.6, lh=0.0148, gap=0.004, width=112)
-
-    # Book AFTER today's queued trades (current book + queued buys)
-    qbuys = ns.get("buys") or []
-    if qbuys:
-        after = {}
-        for h in (spec.get("holdings") or []):
-            after[h["ticker"]] = [h["shares"], h["value"]]
-        for b in qbuys:
-            if b["ticker"] in after:
-                after[b["ticker"]][0] += b["shares"]; after[b["ticker"]][1] += b["value"]
+    holdings = spec.get("holdings") or []
+    tt = spec.get("today_trades") or []
+    univ, held_dw = spec.get("univ_avg"), spec.get("held_dw")
+    if tt:
+        # --- ramp-up / traded day: BEFORE today's trades → today's trades → AFTER ---
+        before = {h["ticker"]: dict(h) for h in holdings}
+        cash_before = cash
+        for t in tt:
+            tk, sh, px = t["ticker"], t["shares"], t["price"]
+            if str(t["action"]).upper() == "BUY":
+                cash_before += sh * px
+                if tk in before:
+                    before[tk]["shares"] -= sh
+                    if before[tk]["shares"] <= 1e-6:
+                        before.pop(tk, None)
             else:
-                after[b["ticker"]] = [b["shares"], b["value"]]
-        rows_a = sorted(([t, str(int(s)), _money(v)] for t, (s, v) in after.items()),
-                        key=lambda r: -float(r[2].replace("$", "").replace(",", "")))
-        tot = sum(v for _, (_, v) in after.items())
-        rows_a.append(["TOTAL (invested)", "", _money(tot)])
-        y = _section(ax, y - 0.006, "Current book AFTER today's trades")
-        y = _table(ax, y, ["Ticker", "Shares", "Market value"], rows_a, [0.30, 0.22, 0.30],
-                   align=["left", "right", "right"])
+                cash_before -= sh * px
+        before_list = [v for v in before.values() if v.get("shares", 0) > 1e-6]
+        y = render_current_book(ax, y - 0.004, before_list, npos=len(before_list), pv=pv,
+                                cash=cash_before, univ=univ, held_dw=held_dw,
+                                title="Current book — BEFORE today's trades")
+        # today's executed trades
+        y = _section(ax, y - 0.006, "Today's trades (executed at close)")
+        trows = [[t["action"], t["ticker"], str(int(t["shares"])), _money(t["price"], 2),
+                  _money(t["shares"] * t["price"]), t.get("reason", "")] for t in tt]
+        tcol = lambda r, c, v: (GREEN if tt[r]["action"].upper() == "BUY" else RED) if c == 0 else "#1f2a3a"
+        y = _table(ax, y, ["Action", "Ticker", "Shares", "Price", "Value", "Reason"], trows,
+                   [0.10, 0.11, 0.10, 0.12, 0.14, 0.40],
+                   align=["left", "left", "right", "right", "right", "left"], text_color=tcol)
+        # AFTER today's trades — %NAV per position + cash carried in the header
+        y = render_current_book(ax, y - 0.006, holdings, npos=spec.get("n_positions", 0), pv=pv,
+                                cash=cash, univ=univ, held_dw=held_dw,
+                                title="Current book — AFTER today's trades")
+    else:
+        # --- normal day: current book + forward queue ---
+        y = render_current_book(ax, y - 0.004, holdings, npos=spec.get("n_positions", 0),
+                                pv=pv, cash=cash, univ=univ, held_dw=held_dw)
+        y = _section(ax, y - 0.006, "Queued for next session  (after today's close → next open)")
+        y = _queued_block(ax, y, spec.get("next_session") or {},
+                          fontsize=7.6, lh=0.0148, gap=0.004, width=112)
 
     y = _section(ax, y - 0.006, "Market commentary")
     y = _bullets(ax, y, spec["observations"], width=114, lh=0.0146, gap=0.004, fontsize=7.5)
