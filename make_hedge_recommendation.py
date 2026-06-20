@@ -16,6 +16,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 from matplotlib.backends.backend_pdf import PdfPages
+from pypdf import PdfReader, PdfWriter
 
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT / "src"))
@@ -23,6 +24,14 @@ import hedge_overlay as ho
 
 CHART = ROOT / "reports" / "rolling_1y_returns_modified.png"
 OUT = ROOT / "reports" / "hedge_overlay_recommendation.pdf"
+TMP = ROOT / "reports" / "_rec_core.pdf"
+# correlation / gap analysis appendices (built previously) to merge in after the recommendation
+APPENDICES = [
+    ("Appendix A — Correlation & Gap Analysis (full history 2016-2026)",
+     ROOT / "reports" / "corr_tails_by_horizon.pdf"),
+    ("Appendix B — Correlation & Gap Analysis (since-COVID, vol-normalized)",
+     ROOT / "reports" / "corr_tails_by_horizon_since_covid_volz.pdf"),
+]
 
 # ── regenerate the chart so the embedded copy is current ──────────────────────────
 import subprocess
@@ -41,12 +50,27 @@ pnl = {h: ((W * df["soxs_fwd_%dd" % h].reindex(fires) - RT) * BOOK).dropna() for
 p1 = pnl[1]
 j16 = (W * df["soxs_fwd_1d"].loc["2026-06-15"] - RT) * BOOK
 
+# ── June-16 case study numbers ────────────────────────────────────────────────────
+_T, _N = pd.Timestamp("2026-06-15"), pd.Timestamp("2026-06-16")
+_volz = ((df["spy_vol_trl_5d"] - df["spy_vol_trl_5d"].rolling(63).mean().shift(1))
+         / df["spy_vol_trl_5d"].rolling(63).std().shift(1))
+CS = dict(
+    qqq_up=df["qqq_trl_1d"].loc[_T] * 100, book_up=df["book_trl_1d"].loc[_T] * 100,
+    volz=_volz.loc[_T],
+    book_nx=df.loc[_N, "book_trl_1d"] * 100, top10=df.loc[_N, "top10_trl_1d"] * 100,
+    smh=df.loc[_N, "smh_trl_1d"] * 100, qqq=df.loc[_N, "qqq_trl_1d"] * 100,
+    spy=df.loc[_N, "spy_trl_1d"] * 100, spread=df.loc[_N, "spread_trl_1d"] * 100,
+    hed_smh=(-0.30 * df["smh_fwd_1d"].loc[_T] - 0.0010) * 100,
+    hed_soxs=(0.10 * df["soxs_fwd_1d"].loc[_T] - 0.0010) * 100, hed_usd=j16,
+    softened=(df["book_fwd_1d"].loc[_T] + (-0.30 * df["smh_fwd_1d"].loc[_T] - 0.0010)) * 100,
+)
+
 
 def _t(ax, x, y, s, **kw):
     ax.text(x, y, s, transform=ax.transAxes, va="top", parse_math=False, **kw)
 
 
-with PdfPages(OUT) as pdf:
+with PdfPages(TMP) as pdf:
     # ============ PAGE 1 — recommendation ============
     fig = plt.figure(figsize=(8.5, 11)); ax = fig.add_axes([0, 0, 1, 1]); ax.axis("off")
     ax.set_xlim(0, 1); ax.set_ylim(0, 1)
@@ -69,8 +93,9 @@ with PdfPages(OUT) as pdf:
         "FIRE if:   QQQ 1-day return >= +2%   AND   z(SPY 5d realized vol, 63d) >= 1.0",
         "THEN buy:  short-SMH ~30% notional (default)  OR  SOXS ~10% (matched -0.30 beta)",
     ])
-    y = section(y, "WHY IT WORKS", [
-        "- Targets the Jun-16 pattern: a sharp up day on surging vol -> next-day pullback.",
+    y = section(y, "WHAT IT TARGETS", [
+        "- Sharp up-days that occur while volatility is already elevated -- a combination",
+        "  that tends to mean-revert (pull back) the next session.",
         "- No single factor works alone (a QQQ up-day alone BOUNCES); the edge is the",
         "  INTERACTION of up-shock x elevated vol.",
         "- Best supporting signal (sensitivity): 5-day realized-vol z-score. Relative vol",
@@ -133,9 +158,46 @@ with PdfPages(OUT) as pdf:
         _t(ax, 0.04, yy, "%-12d %5d %4d | %+7.2f %+7.2f %+7.2f | %6.1f%% %+6.1f%% | %8s %6s %+7.2f%%" % (
             year, r["days"], r["on"], r["book_sh"], r["hed_sh"], r["d_sh"], r["book_dd"], r["d_dd"], ob, pdv, r["sleeve"]),
            fontsize=8.2, family="monospace", color=col); yy -= 0.020
-    _t(ax, 0.04, yy - 0.01, "Source: backtests/hedge_overlay_model_v4_summary.md  |  panel "
-       "model_v4_timeseries.csv (%s to %s)" % (df.index.min().date(), df.index.max().date()),
-       fontsize=7.5, color="#888", style="italic")
+    # --- June-16 example case study (boxed, lower portion of page 3) ---
+    cs = (
+        "EXAMPLE CASE STUDY  -  2026-06-16\n"
+        f"  Trigger @ 2026-06-15 close:  QQQ {CS['qqq_up']:+.1f}% up-shock,  "
+        f"SPY 5d-vol z = {CS['volz']:+.2f} (elevated)   ->  RULE FIRES\n"
+        f"  Next day 2026-06-16:  book {CS['book_nx']:+.2f}%  (leaders-led: top10 {CS['top10']:+.1f}%, "
+        f"SMH {CS['smh']:+.1f}%, QQQ {CS['qqq']:+.1f}%, SPY {CS['spy']:+.1f}%; spread {CS['spread']:+.1f}%)\n"
+        f"  Hedge result:  short-SMH 0.30 -> {CS['hed_smh']:+.2f}%   "
+        f"(SOXS 0.10 -> {CS['hed_soxs']:+.2f}%, ${CS['hed_usd']:+,.0f} on $100k)   "
+        f"->  the -3.8% book day softened to ~ {CS['softened']:+.1f}%"
+    )
+    ax.text(0.04, 0.30, cs, transform=ax.transAxes, va="top", ha="left",
+            family="monospace", fontsize=9, parse_math=False,
+            bbox=dict(boxstyle="round,pad=0.6", facecolor="#eef4fb",
+                      edgecolor="#0b3d91", linewidth=1.2))
     pdf.savefig(fig); plt.close(fig)
 
-print("wrote", OUT)
+    # --- appendix divider pages (one per merged correlation/gap PDF) ---
+    for title, _path in APPENDICES:
+        figd = plt.figure(figsize=(8.5, 11)); axd = figd.add_axes([0, 0, 1, 1]); axd.axis("off")
+        axd.set_xlim(0, 1); axd.set_ylim(0, 1)
+        axd.text(0.5, 0.6, title.split(" - ")[0].split(" — ")[0], ha="center", va="center",
+                 fontsize=22, fontweight="bold", color="#0b3d91")
+        axd.text(0.5, 0.52, title.split("—", 1)[-1].strip(), ha="center", va="center",
+                 fontsize=12, color="#333", wrap=True)
+        axd.text(0.5, 0.45, "(source: %s)" % _path.name, ha="center", va="center",
+                 fontsize=8.5, color="#888", style="italic")
+        pdf.savefig(figd); plt.close(figd)
+
+# ── merge: recommendation core + (divider, appendix pages) for each corr PDF ──────
+core = PdfReader(str(TMP))
+writer = PdfWriter()
+for p in core.pages[:3]:                       # cover, chart, tables+case-study
+    writer.add_page(p)
+for i, (_title, path) in enumerate(APPENDICES):
+    writer.add_page(core.pages[3 + i])         # divider page
+    if path.exists():
+        for p in PdfReader(str(path)).pages:
+            writer.add_page(p)
+with open(OUT, "wb") as fh:
+    writer.write(fh)
+TMP.unlink(missing_ok=True)
+print("wrote", OUT, "pages:", len(writer.pages))
