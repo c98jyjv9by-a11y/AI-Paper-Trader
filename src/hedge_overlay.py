@@ -161,13 +161,34 @@ def run(panel_path: Path = PANEL, cfg: HedgeConfig = None, out_prefix: Path = OU
     return dict(config=asdict(cfg), summary=summary, walk_forward=wf)
 
 
-def recommend(invested_value: float, cfg: HedgeConfig = None, panel_path: Path = PANEL,
-              as_of: str = None, up_override: float = None, volz_override: float = None) -> dict:
-    """Live sizing: given INVESTED capital (positions only, excl. cash), return the $ of the
-    hedge ETF to buy if the rule fires. Size = weight * invested_value, where weight is the
-    inverse-vol fraction (target_risk * sigma_book / sigma_hedge). Pass up_override/volz_override
-    to evaluate today's fresh signal; otherwise the latest date with complete panel inputs is used."""
+def current_exposure(scenario: str = "model_v4", as_of: str = None) -> dict:
+    """Live MARK-TO-MARKET exposure of the held book (sum of held_shares x latest price),
+    excluding cash. Reconstructs holdings from the scenario trade log and marks them at the
+    latest available close. This is the base the hedge sizes off — it moves with prices."""
+    import glob, yfinance as yf
+    f = sorted(glob.glob(str(ROOT / "backtests" / ("scenario_%s_*trades*.csv" % scenario))))[-1]
+    t = pd.read_csv(f, parse_dates=["date"])
+    if as_of:
+        t = t[t["date"] <= pd.Timestamp(as_of)]
+    t["signed"] = t.apply(lambda r: r["shares"] if str(r["action"]).upper() == "BUY" else -r["shares"], axis=1)
+    held = {k: v for k, v in t.groupby("ticker")["signed"].sum().items() if v > 1e-6}
+    px = yf.download(list(held), period="5d", auto_adjust=True, progress=False)["Close"].ffill().iloc[-1]
+    mv = {k: held[k] * float(px[k]) for k in held if k in px.index and pd.notna(px[k])}
+    return dict(market_value=float(sum(mv.values())), positions=mv, source=Path(f).name)
+
+
+def recommend(market_value: float = None, cfg: HedgeConfig = None, panel_path: Path = PANEL,
+              as_of: str = None, up_override: float = None, volz_override: float = None,
+              scenario: str = "model_v4") -> dict:
+    """Live sizing. Size = weight x CURRENT MARKET VALUE of the held positions (mark-to-market
+    exposure, excluding cash) -- NOT cost basis and NOT a constant. If market_value is None it is
+    computed live via current_exposure(). weight is the inverse-vol fraction
+    (target_risk * sigma_book / sigma_hedge). Pass up_override/volz_override for today's fresh signal."""
     cfg = cfg or HedgeConfig()
+    exposure_src = None
+    if market_value is None:
+        ex = current_exposure(scenario, as_of)
+        market_value, exposure_src = ex["market_value"], ex["source"]
     df = pd.read_csv(panel_path, parse_dates=["date"]).set_index("date")
     w_series = _sizing_weight(df, cfg)
     volz = _zscore(df[cfg.vol_factor], cfg.vol_lookback)
@@ -177,11 +198,11 @@ def recommend(invested_value: float, cfg: HedgeConfig = None, panel_path: Path =
     vz = volz_override if volz_override is not None else float(volz.loc[date])
     fires = (up >= cfg.up_threshold) and (vz >= cfg.vol_z_threshold)
     weight = float(w_series.loc[date])
-    dollars = weight * invested_value if fires else 0.0
+    dollars = weight * market_value if fires else 0.0
     return dict(date=str(date.date()), product=cfg.product, fires=fires,
-                qqq_up=up, vol_z=vz, weight=weight, invested=invested_value,
-                hedge_dollars=dollars,
-                note="size = weight x INVESTED capital (positions, excl. cash)")
+                qqq_up=up, vol_z=vz, weight=weight, market_value=market_value,
+                exposure_source=exposure_src, hedge_dollars=dollars,
+                note="size = weight x CURRENT MARKET VALUE of positions (mark-to-market, excl. cash)")
 
 
 def _fmt(row: dict) -> str:
@@ -254,8 +275,10 @@ def _cli(argv=None):
     p.add_argument("--target-risk", type=float, help="inverse-vol: hedge $-vol as fraction of book $-vol")
     p.add_argument("--vol-window", type=int, help="trailing window for sizing vols")
     p.add_argument("--weight", type=float, help="fixed-mode sleeve notional weight")
-    p.add_argument("--recommend", type=float, metavar="INVESTED",
-                   help="live mode: $ of INVESTED capital (positions, excl. cash) -> $ hedge to buy")
+    p.add_argument("--recommend", action="store_true",
+                   help="live mode: recommend $ of hedge to buy (sized off current position market value)")
+    p.add_argument("--market-value", type=float,
+                   help="recommend: current mark-to-market value of positions (excl. cash); auto-computed if omitted")
     p.add_argument("--qqq", type=float, help="recommend: override today's QQQ 1-day return (e.g. 0.025)")
     p.add_argument("--spy-vol-z", type=float, help="recommend: override today's SPY 5d-vol z")
     a = p.parse_args(argv)
@@ -268,15 +291,16 @@ def _cli(argv=None):
         v = getattr(a, k_arg)
         if v is not None:
             setattr(cfg, k_cfg, v)
-    if a.recommend is not None:
-        rec = recommend(a.recommend, cfg, Path(a.panel), up_override=a.qqq, volz_override=a.spy_vol_z)
+    if a.recommend:
+        rec = recommend(a.market_value, cfg, Path(a.panel), up_override=a.qqq, volz_override=a.spy_vol_z)
         print("HEDGE RECOMMENDATION  (as of %s, %s)" % (rec["date"], rec["product"]))
         print("  signal: QQQ 1d %+.2f%% (>= %.1f%%?)  |  SPY vol-z %+.2f (>= %.2f?)  ->  FIRES: %s"
               % (rec["qqq_up"] * 100, cfg.up_threshold * 100, rec["vol_z"], cfg.vol_z_threshold,
                  "YES" if rec["fires"] else "NO"))
-        print("  invested capital (ex-cash): $%s" % f"{rec['invested']:,.0f}")
+        src = (" [mark-to-market from %s]" % rec["exposure_source"]) if rec["exposure_source"] else ""
+        print("  current position market value (ex-cash): $%s%s" % (f"{rec['market_value']:,.0f}", src))
         if rec["fires"]:
-            print("  -> BUY $%s of %s   (%.1f%% of invested = inverse-vol weight)"
+            print("  -> BUY $%s of %s   (%.1f%% of current exposure = inverse-vol weight)"
                   % (f"{rec['hedge_dollars']:,.0f}", rec["product"], rec["weight"] * 100))
         else:
             print("  -> no hedge today (rule not triggered)")
