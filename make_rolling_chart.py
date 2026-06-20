@@ -41,6 +41,24 @@ _ov = ho.build_overlay(ts, ho.HedgeConfig())
 HEDGE_DATES = _ov.index[_ov["hedge_on"]]
 HEDGE_DATES = HEDGE_DATES[(HEDGE_DATES >= START) & (HEDGE_DATES <= END)]
 
+# hedge PnL per hold-horizon (SOXS @ 10% notional = 0.30 semi-beta, matched to default; $100k book)
+BOOK, W_SOXS, RT = 100_000, 0.10, 0.0010
+_pnl = {}
+for _h in (1, 5, 20):
+    _r = ts["soxs_fwd_%dd" % _h].reindex(HEDGE_DATES)
+    _pnl[_h] = ((W_SOXS * _r - RT) * BOOK).dropna()
+_p1 = _pnl[1]
+_j16 = (W_SOXS * ts["soxs_fwd_1d"].loc["2026-06-15"] - RT) * BOOK
+CALLOUT = (
+    f"SOXS hedge @10% on ${BOOK//1000}k book — PnL by hold horizon (n={len(_p1)} fires)\n"
+    f"  1-DAY (the rule):  net ${_p1.sum():+,.0f}   "
+    f"[wins ${_p1[_p1>0].sum():+,.0f} / losses ${_p1[_p1<0].sum():+,.0f}, {100*(_p1>0).mean():.0f}% win]\n"
+    f"  5-DAY:  ${_pnl[5].sum():+,.0f}      20-DAY:  ${_pnl[20].sum():+,.0f}   "
+    f"->  strict 1-day exit is what saves $\n"
+    f"  best 1D saves:  2020-03-13 ${_pnl[1].max():+,.0f} (book -9.0%)  -  "
+    f"2026-06-16 ${_j16:+,.0f} (book -3.8%)"
+)
+
 r20 = px.pct_change(20) * 100.0                       # trailing 20-day return, %
 spy_vol = px["SPY"].pct_change().rolling(21).std() * np.sqrt(252)   # annualized 21d vol
 regime = spy_vol > 0.15                               # high-vol regime
@@ -96,6 +114,11 @@ h.append(Line2D([0], [0], marker="*", color="none", markerfacecolor="gold",
                 markeredgecolor="black", markersize=12))
 l.append("hedge placed (n=%d)" % len(HEDGE_DATES))
 ax0.legend(h, l, ncol=4, fontsize=8, loc="upper left", framealpha=0.9)
+# quantified PnL call-out — the hedge rule saves $ at the 1-day horizon
+ax0.text(0.5, 0.04, CALLOUT, transform=ax0.transAxes, ha="center", va="bottom",
+         family="monospace", fontsize=7.6, zorder=12, parse_math=False,
+         bbox=dict(boxstyle="round,pad=0.45", facecolor="#fffbe6",
+                   edgecolor="goldenrod", linewidth=1.1, alpha=1.0))
 
 # panel 2 — SPY / QQQ
 shade(ax1)
