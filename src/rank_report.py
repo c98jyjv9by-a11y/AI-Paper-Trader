@@ -209,6 +209,25 @@ def _next_session_block(cfg, pdata, positions, held, pv, cash, em, rows_cur, sta
     the simulated book agrees with the report's held book."""
     ns = next_session_decision(cfg, pdata, start)
     buys, sells = ns["buys"], ns["sells"]
+    buys = [b for b in buys if b["ticker"] not in held]   # never queue a buy for a name already held
+    # queue the up-shock+vol SOXS hedge if it fires, sized off current position market value (ex-cash).
+    # Compute the signal from the latest available closes (the panel's ETF rows lag a day).
+    try:
+        import hedge_overlay as _ho, yfinance as _yf, numpy as _np
+        mv = max((pv or 0.0) - (cash or 0.0), 0.0)
+        px = _yf.download(["QQQ", "SPY", "SOXS"], period="1y", auto_adjust=True,
+                          progress=False)["Close"].dropna()
+        qup = float(px["QQQ"].pct_change().iloc[-1])
+        sv = px["SPY"].pct_change().rolling(5).std() * _np.sqrt(252)
+        volz = float(((sv - sv.rolling(63).mean().shift(1)) / sv.rolling(63).std().shift(1)).iloc[-1])
+        rec = _ho.recommend(market_value=mv, up_override=qup, volz_override=volz)
+        if rec.get("fires") and mv > 0:
+            spx = float(px["SOXS"].iloc[-1])
+            buys.append({"ticker": "SOXS", "shares": int(rec["hedge_dollars"] / spx) if spx else 0,
+                         "price": spx, "value": rec["hedge_dollars"],
+                         "reason": "hedge: %s gate (%.1f%% of position MV)" % (rec["tier"], rec["weight"] * 100)})
+    except Exception:
+        pass
     risk = cfg.get("risk", {})
     base_exp = float(cfg["portfolio"]["max_total_exposure"])
     cap = base_exp * (em or 1.0)

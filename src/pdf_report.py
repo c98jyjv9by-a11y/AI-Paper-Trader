@@ -479,26 +479,24 @@ def _commentary(d: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, List[str]]:
                        ", ".join(f"{t} ({s:.2f})" for t, s in armed) +
                        " — the engine will exit these automatically if they keep sliding.")
 
-    # ── Recommendations ──
+    # ── Recommendations — mirror the actual QUEUED transactions ──
     recs: List[str] = []
+    ns = d.get("next_session") or {}
+    qbuys = ns.get("buys") or []
+    qsells = ns.get("sells") or []
 
-    # Buy candidates: clear the persistence-entry bar and not already held
-    if entry_thr is not None:
-        cands = [r for r in rows_cur if r["score"] >= entry_thr and not r["held"]]
-        cands = sorted(cands, key=lambda r: -r["score"])[:5]
-        max_pct = cfg.get("portfolio", {}).get("max_position_pct")
-        size_note = ""
-        if max_pct and em:
-            size_note = f" Sized ~{max_pct*em*100:.1f}% of book (per-name cap × {em:.2f}× governor)."
-        if cands:
-            recs.append(
-                "BUY candidates (clear the >" + f"{entry_thr:.2f}" + " entry score, not held): " +
-                ", ".join(f"{r['ticker']} ({r['score']:.2f})" for r in cands) +
-                f". These trigger only on the {risk.get('score_entry_days', 3)}rd consecutive day above "
-                f"the bar; max {cfg.get('portfolio', {}).get('max_new_trades_per_day', 2)} new/day." + size_note)
-        else:
-            recs.append("No names clear the persistence-entry score bar — no new buys set up. "
-                        "Hold and let the book ride.")
+    if qbuys:
+        recs.append("QUEUED BUYS (decide tonight → next open): " +
+                    "; ".join(f"{b['ticker']} {b['shares']} sh ~{_money(b['value'])} [{b['reason']}]"
+                              for b in qbuys) + ".")
+    else:
+        recs.append("No buys queued — " + (ns.get("buy_reason") or "no unheld name qualified for entry."))
+
+    if qsells:
+        recs.append("QUEUED SELLS (next open): " +
+                    "; ".join(f"{s['ticker']} {s['shares']} sh [{s['reason']}]" for s in qsells) + ".")
+    elif ns.get("sell_reason"):
+        recs.append("No sells queued — " + ns["sell_reason"])
 
     # Rank surgers below the gate (watchlist, not actionable yet)
     surgers = sorted([r for r in rows_cur if (r.get("rank_chg") or 0) >= 8 and
@@ -508,11 +506,6 @@ def _commentary(d: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, List[str]]:
         recs.append("WATCHLIST — climbing fast but still below the entry bar: " +
                     ", ".join(f"{r['ticker']} (▲{r['rank_chg']}, {r['score']:.2f})" for r in surgers) +
                     ". No action; revisit if they push above the gate.")
-
-    # Exit posture
-    if stop_score is not None and pos is not None and not pos.empty:
-        recs.append("EXITS — let the engine fire stops on its own at the open; do not pre-empt "
-                    "score-gated holds that are still trending. No discretionary selling.")
 
     # Net stance
     if em is not None and spread is not None:
