@@ -95,10 +95,10 @@ with PdfPages(TMP) as pdf:
 
     y = 0.880
     y = section(y, "THE RULE  (decide at close T, hold T+1 only, exit next close)", [
-        "FIRE if:   QQQ 1-day return >= +2%   AND   z(SPY 5d realized vol, 63d) >= 1.0",
-        "THEN buy:  SOXS (long -3x inverse-semis ETF -- no shorting), sized INVERSE-VOL",
-        f"           to ~{avg_w*100:.0f}% of CURRENT position market value (mark-to-mkt, ex-cash);",
-        f"           hedge $-vol = 50% of book $-vol, scales with exposure & vol  =>  ~${avg_w*BOOK/1000:.0f}k per $100k exposure.",
+        "FIRE (two gates):  SOFT  QQQ>=+1.5% & z(SPY 5d vol,63d)>=0.75  -> HALF size",
+        "                   HARD  QQQ>=+2.0% & z>=1.00                   -> FULL size",
+        f"THEN buy:  SOXS (long -3x inverse semis; no shorting), inverse-vol sized off",
+        f"           CURRENT position market value (ex-cash); full ~{avg_w*100:.0f}% / half ~{avg_w*50:.0f}% of exposure.",
     ])
     y = section(y, "WHAT IT TARGETS", [
         "- Sharp up-days that occur while volatility is already elevated -- a combination",

@@ -5,11 +5,11 @@ This sits ON TOP of model_v4 and never modifies it. It consumes the precomputed 
 panel (backtests/model_v4_timeseries.csv) read-only — the book's daily return and the
 candidate hedge instruments' next-day returns — and applies a configurable end-of-day rule:
 
-    RULE (decide at close T, hold T+1 only, exit at close T+1):
-      if  qqq_trl_1d >= up_threshold        (QQQ had a big up day)
-      AND z(spy_vol_trl_5d) >= vol_z         (5-day realized vol elevated vs its recent norm)
-      then BUY a 1-day semis hedge (default SOXS, the long -3x inverse-semis ETF — no shorting;
-      short_smh / psq selectable), sized inverse-vol to the book's risk.
+    RULE (decide at close T, hold T+1 only, exit at close T+1) — TWO-GATE tiered sizing:
+      SOFT gate:  qqq_trl_1d >= 1.5%  AND  z(spy_vol_trl_5d) >= 0.75   -> HALF-size hedge
+      HARD gate:  qqq_trl_1d >= 2.0%  AND  z(spy_vol_trl_5d) >= 1.00   -> FULL-size hedge
+      Hedge = long SOXS (-3x inverse semis; no shorting), sized inverse-vol to the book's risk;
+      half-conviction (soft-only) fires get 50% of full size. (set tiered=False for single-gate.)
 
 Validated finding (see backtests/hedge_overlay_model_v4_summary.md): neither factor works
 alone — a QQQ up-day on its own *bounces*; it's the INTERACTION (up-shock while vol is already
@@ -49,9 +49,15 @@ PRODUCTS = {
 class HedgeConfig:
     # ---- trigger (the rule; change freely, model untouched) ----
     up_factor: str = "qqq_trl_1d"      # the "up-shock" measure (today's move)
-    up_threshold: float = 0.015        # fire when up_factor >= this (sweep-best: +1.5% QQQ day)
+    # ---- two-gate tiered trigger ----
+    #   SOFT gate (any fire): half-size hedge.  HARD gate (stronger): full-size hedge.
+    up_threshold: float = 0.015        # SOFT up-shock (sweep-best: +1.5% QQQ day)
     vol_factor: str = "spy_vol_trl_5d" # the supporting signal (best in sensitivity)
-    vol_z_threshold: float = 0.75      # fire when z(vol_factor) >= this (sweep-best)
+    vol_z_threshold: float = 0.75      # SOFT vol gate, z(vol_factor) (sweep-best)
+    tiered: bool = True                # True = two-gate (half on soft-only, full on hard)
+    hard_up_threshold: float = 0.020   # HARD up-shock -> full size
+    hard_vol_z_threshold: float = 1.00 # HARD vol gate -> full size
+    soft_weight_frac: float = 0.50     # fraction of full size on soft-only fires
     vol_lookback: int = 63             # trailing window for the vol z-score
     # ---- hedge sleeve ----
     product: str = "soxs"              # long inverse-ETF only (no shorting); SOXS = -3x semis
@@ -84,20 +90,35 @@ def _sizing_weight(df: pd.DataFrame, cfg: HedgeConfig) -> pd.Series:
     return w.clip(upper=cfg.weight_cap).fillna(0.0)
 
 
+def _gates(df: pd.DataFrame, cfg: HedgeConfig):
+    """Two-gate signal -> (soft fire mask, hard fire mask, size multiplier series).
+    soft-only fires get cfg.soft_weight_frac of full size; hard fires get full size."""
+    up = df[cfg.up_factor]
+    volz = _zscore(df[cfg.vol_factor], cfg.vol_lookback)
+    soft = ((up >= cfg.up_threshold) & (volz >= cfg.vol_z_threshold)).fillna(False)
+    hard = ((up >= cfg.hard_up_threshold) & (volz >= cfg.hard_vol_z_threshold)).fillna(False)
+    if cfg.tiered:
+        mult = pd.Series(np.where(hard, 1.0, np.where(soft, cfg.soft_weight_frac, 0.0)), index=df.index)
+    else:
+        mult = soft.astype(float)
+    return soft, hard, mult
+
+
 def build_overlay(df: pd.DataFrame, cfg: HedgeConfig) -> pd.DataFrame:
     """Return a frame with the signal, sleeve weight, hedge PnL, and overlaid daily return.
-    Read-only on df. Sleeve weight is a fraction of the (current) book, so it scales with book size."""
+    Read-only on df. Sleeve weight is a fraction of the (current) book, so it scales with book size.
+    Two-gate tiered sizing: half size on soft-only fires, full size when the hard gate also clears."""
     book = df[cfg.book_col]
-    up = df[cfg.up_factor] >= cfg.up_threshold
-    volz = _zscore(df[cfg.vol_factor], cfg.vol_lookback)
-    on = (up & (volz >= cfg.vol_z_threshold)).fillna(False)
+    soft, hard, mult = _gates(df, cfg)
+    on = soft                                            # any fire
     hedge_ret = PRODUCTS[cfg.product][0](df)
-    w = _sizing_weight(df, cfg)
+    w = _sizing_weight(df, cfg) * mult                   # effective weight (0 where no fire)
     rt = cfg.cost_bps / 1e4
     sleeve = np.where(on, w * hedge_ret - w * rt, 0.0)   # cost on the TRADED notional (w)
     out = pd.DataFrame(index=df.index)
     out["book_ret"] = book
     out["hedge_on"] = on
+    out["tier"] = np.where(hard, "full", np.where(soft, "half", ""))
     out["weight"] = np.where(on, w, 0.0)
     out["hedge_instr_ret"] = hedge_ret
     out["sleeve_pnl"] = sleeve
@@ -190,16 +211,23 @@ def recommend(market_value: float = None, cfg: HedgeConfig = None, panel_path: P
         ex = current_exposure(scenario, as_of)
         market_value, exposure_src = ex["market_value"], ex["source"]
     df = pd.read_csv(panel_path, parse_dates=["date"]).set_index("date")
-    w_series = _sizing_weight(df, cfg)
+    base_w = _sizing_weight(df, cfg)
     volz = _zscore(df[cfg.vol_factor], cfg.vol_lookback)
     valid = df[cfg.up_factor].notna() & volz.notna()
     date = pd.Timestamp(as_of) if as_of else df.index[valid][-1]
     up = up_override if up_override is not None else float(df[cfg.up_factor].loc[date])
     vz = volz_override if volz_override is not None else float(volz.loc[date])
-    fires = (up >= cfg.up_threshold) and (vz >= cfg.vol_z_threshold)
-    weight = float(w_series.loc[date])
-    dollars = weight * market_value if fires else 0.0
-    return dict(date=str(date.date()), product=cfg.product, fires=fires,
+    soft = (up >= cfg.up_threshold) and (vz >= cfg.vol_z_threshold)
+    hard = (up >= cfg.hard_up_threshold) and (vz >= cfg.hard_vol_z_threshold)
+    if cfg.tiered:
+        mult = 1.0 if hard else (cfg.soft_weight_frac if soft else 0.0)
+        tier = "FULL" if hard else ("HALF" if soft else None)
+    else:
+        mult = 1.0 if soft else 0.0
+        tier = "FULL" if soft else None
+    weight = float(base_w.loc[date]) * mult
+    dollars = weight * market_value if soft else 0.0
+    return dict(date=str(date.date()), product=cfg.product, fires=soft, tier=tier,
                 qqq_up=up, vol_z=vz, weight=weight, market_value=market_value,
                 exposure_source=exposure_src, hedge_dollars=dollars,
                 note="size = weight x CURRENT MARKET VALUE of positions (mark-to-market, excl. cash)")
@@ -221,8 +249,15 @@ def _write_summary(path, cfg, summary, wf, panel_path, df) -> None:
              "(%s to %s).\n" % (panel_path.name, df.index.min().date(), df.index.max().date()))
     L.append("## Rule (configurable in `HedgeConfig`)\n")
     L.append("```")
-    L.append("if  %s >= %+.3f            (up-shock)" % (cfg.up_factor, cfg.up_threshold))
-    L.append("AND z(%s, %dd) >= %.2f     (vol-surge supporting signal)" % (cfg.vol_factor, cfg.vol_lookback, cfg.vol_z_threshold))
+    if cfg.tiered:
+        L.append("SOFT gate (half size):  %s >= %+.3f  AND  z(%s,%dd) >= %.2f"
+                 % (cfg.up_factor, cfg.up_threshold, cfg.vol_factor, cfg.vol_lookback, cfg.vol_z_threshold))
+        L.append("HARD gate (full size):  %s >= %+.3f  AND  z(%s,%dd) >= %.2f"
+                 % (cfg.up_factor, cfg.hard_up_threshold, cfg.vol_factor, cfg.vol_lookback, cfg.hard_vol_z_threshold))
+        L.append("soft-only fires use %.0f%% of the full inverse-vol size." % (cfg.soft_weight_frac * 100))
+    else:
+        L.append("if  %s >= %+.3f            (up-shock)" % (cfg.up_factor, cfg.up_threshold))
+        L.append("AND z(%s, %dd) >= %.2f     (vol-surge supporting signal)" % (cfg.vol_factor, cfg.vol_lookback, cfg.vol_z_threshold))
     if cfg.sizing == "inverse_vol":
         L.append("then BUY %s, sized INVERSE-VOL: weight = %.2f * sigma_book / sigma_%s"
                  % (cfg.product, cfg.target_risk, cfg.product))
@@ -294,16 +329,17 @@ def _cli(argv=None):
     if a.recommend:
         rec = recommend(a.market_value, cfg, Path(a.panel), up_override=a.qqq, volz_override=a.spy_vol_z)
         print("HEDGE RECOMMENDATION  (as of %s, %s)" % (rec["date"], rec["product"]))
-        print("  signal: QQQ 1d %+.2f%% (>= %.1f%%?)  |  SPY vol-z %+.2f (>= %.2f?)  ->  FIRES: %s"
+        print("  soft gate: QQQ %+.2f%% (>=%.1f%%) & vol-z %+.2f (>=%.2f)   hard gate: QQQ>=%.1f%% & vol-z>=%.2f"
               % (rec["qqq_up"] * 100, cfg.up_threshold * 100, rec["vol_z"], cfg.vol_z_threshold,
-                 "YES" if rec["fires"] else "NO"))
+                 cfg.hard_up_threshold * 100, cfg.hard_vol_z_threshold))
+        print("  -> TIER: %s" % (rec["tier"] or "none (no fire)"))
         src = (" [mark-to-market from %s]" % rec["exposure_source"]) if rec["exposure_source"] else ""
         print("  current position market value (ex-cash): $%s%s" % (f"{rec['market_value']:,.0f}", src))
         if rec["fires"]:
-            print("  -> BUY $%s of %s   (%.1f%% of current exposure = inverse-vol weight)"
-                  % (f"{rec['hedge_dollars']:,.0f}", rec["product"], rec["weight"] * 100))
+            print("  -> BUY $%s of %s   (%s size: %.1f%% of current exposure)"
+                  % (f"{rec['hedge_dollars']:,.0f}", rec["product"], rec["tier"], rec["weight"] * 100))
         else:
-            print("  -> no hedge today (rule not triggered)")
+            print("  -> no hedge today (neither gate triggered)")
         return
     res = run(Path(a.panel), cfg)
     print("config:", res["config"])
