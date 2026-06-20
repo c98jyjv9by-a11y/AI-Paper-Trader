@@ -83,8 +83,8 @@ def shade(ax):
         ax.axvspan(lo, hi, color="peachpuff", alpha=0.45, lw=0, zorder=0)
 
 # ── figure ───────────────────────────────────────────────────────────────────────
-fig, (ax0, ax1, ax2) = plt.subplots(3, 1, figsize=(12, 10.5), sharex=True)
-fig.subplots_adjust(hspace=0.28)
+fig, (ax0, ax1, ax2) = plt.subplots(3, 1, figsize=(12, 11.6), sharex=True)
+fig.subplots_adjust(hspace=0.30, top=0.855)   # top margin reserved for the PnL call-out banner
 
 # panel 1 — book (main series) vs long-exposure benchmarks (MTUM & SMH removed)
 shade(ax0)
@@ -114,11 +114,11 @@ h.append(Line2D([0], [0], marker="*", color="none", markerfacecolor="gold",
                 markeredgecolor="black", markersize=12))
 l.append("hedge placed (n=%d)" % len(HEDGE_DATES))
 ax0.legend(h, l, ncol=4, fontsize=8, loc="upper left", framealpha=0.9)
-# quantified PnL call-out — the hedge rule saves $ at the 1-day horizon
-ax0.text(0.5, 0.04, CALLOUT, transform=ax0.transAxes, ha="center", va="bottom",
-         family="monospace", fontsize=7.6, zorder=12, parse_math=False,
-         bbox=dict(boxstyle="round,pad=0.45", facecolor="#fffbe6",
-                   edgecolor="goldenrod", linewidth=1.1, alpha=1.0))
+# quantified PnL call-out — placed in the reserved top margin, clear of the chart lines
+fig.text(0.5, 0.975, CALLOUT, ha="center", va="top",
+         family="monospace", fontsize=8.5, zorder=12, parse_math=False,
+         bbox=dict(boxstyle="round,pad=0.5", facecolor="#fffbe6",
+                   edgecolor="goldenrod", linewidth=1.2, alpha=1.0))
 
 # panel 2 — SPY / QQQ
 shade(ax1)
