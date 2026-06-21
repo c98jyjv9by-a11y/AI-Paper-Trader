@@ -552,14 +552,17 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
     # portfolio vs benchmarks (trailing windows from the run's equity)
     P = eq.copy(); P["date"] = pd.to_datetime(P["date"]); P = P.set_index("date")["total_portfolio_value"]
     spy, qqq = close["SPY"], close["QQQ"]
-    anchors = {"1D": P.index[-2], "5D": P.index[-6] if len(P) >= 6 else P.index[0],
+    anchors = {"1D": P.index[-2] if len(P) >= 2 else P.index[0],
+               "5D": P.index[-6] if len(P) >= 6 else P.index[0],
                "MTD": pd.Timestamp(mark.year, mark.month, 1)}
     stats = {w: {"port": _win_ret(P, a), "spy": _win_ret(spy, a), "qqq": _win_ret(qqq, a)}
              for w, a in anchors.items()}
+    _spy_s = spy[spy.index >= pd.Timestamp(start)]   # robust when start is at/after the data edge
+    _qqq_s = qqq[qqq.index >= pd.Timestamp(start)]    # (weekend / brand-new account: start == today)
     stats[f"Since {start.isoformat()}"] = {
         "port": pv / starting - 1,
-        "spy": float(spy.iloc[-1]) / float(spy[spy.index >= pd.Timestamp(start)].iloc[0]) - 1,
-        "qqq": float(qqq.iloc[-1]) / float(qqq[qqq.index >= pd.Timestamp(start)].iloc[0]) - 1,
+        "spy": float(spy.iloc[-1]) / float((_spy_s if len(_spy_s) else spy).iloc[0]) - 1,
+        "qqq": float(qqq.iloc[-1]) / float((_qqq_s if len(_qqq_s) else qqq).iloc[0]) - 1,
     }
 
     return {

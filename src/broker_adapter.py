@@ -117,7 +117,7 @@ class AlpacaPaper:
         out = []
         for o in self._get(f"{self.host}/v2/orders", params):
             fp = o.get("filled_avg_price")
-            out.append({"client_order_id": o.get("client_order_id"), "symbol": o["symbol"],
+            out.append({"id": o.get("id"), "client_order_id": o.get("client_order_id"), "symbol": o["symbol"],
                         "side": o["side"], "status": o["status"],
                         "filled_qty": float(o.get("filled_qty") or 0),
                         "fill_price": float(fp) if fp else None,
@@ -136,6 +136,14 @@ class AlpacaPaper:
         r = requests.post(f"{self.host}/v2/orders", headers=self._hdr, json=order, timeout=20)
         r.raise_for_status()
         return r.json()
+
+    def cancel(self, order_id: str, *, confirm: bool = True) -> Dict[str, Any]:
+        """Cancel ONE open order (paper). Guarded like submit (needs BROKER_ADAPTER_ALLOW_SUBMIT=yes)."""
+        if not (confirm and os.environ.get(SUBMIT_ENV, "").lower() == "yes"):
+            return {"dry_run": True, "would_cancel": order_id}
+        import requests
+        r = requests.delete(f"{self.host}/v2/orders/{order_id}", headers=self._hdr, timeout=20)
+        return {"canceled": order_id, "status": r.status_code}
 
 
 # ── order building (pure / dry-run) ────────────────────────────────────────────────
@@ -160,6 +168,32 @@ def build_orders(intended: List[Dict[str, Any]], prices: Dict[str, Dict[str, flo
             "client_order_id": f"mv4-{asof}-{side}-{sym}",          # idempotent per day/side/symbol
             "_plan": {"role": role, "ref_mid": px, "est_value": round(qty * px, 2)},
         })
+    return orders
+
+
+def build_reconcile_orders(targets: Dict[str, float], current: Dict[str, float],
+                           prices: Dict[str, Dict[str, float]], collars: Dict[str, Dict[str, float]],
+                           asof: str, retry: bool = False) -> List[Dict[str, Any]]:
+    """RECONCILE-TO-TARGET: trade only the difference between the target book {sym:shares} and the
+    broker's current {sym:shares}, as LIMIT orders with a per-symbol collar (tif=day).
+      buy limit  = ref_mid * (1 + collar)      sell limit = ref_mid * (1 - collar)
+    `retry=True` uses each symbol's wider retry collar. This nets the hedge roll and never
+    re-buys names already held."""
+    orders = []
+    for s in sorted(set(targets) | set(current)):
+        tgt, cur = int(round(targets.get(s, 0))), int(round(current.get(s, 0)))
+        delta = tgt - cur
+        ref = (prices.get(s) or {}).get("mid") or 0.0
+        if delta == 0 or not ref:
+            continue
+        coll = (collars.get(s) or {}).get("retry" if retry else "collar", 0.02)
+        side = "buy" if delta > 0 else "sell"
+        lim = ref * (1 + coll) if side == "buy" else ref * (1 - coll)
+        orders.append({"symbol": s, "qty": str(abs(delta)), "side": side, "type": "limit",
+                       "limit_price": round(lim, 2), "time_in_force": "day",
+                       "client_order_id": f"mv4-{asof}-{side}-{s}",
+                       "_plan": {"ref_mid": ref, "collar": coll, "target": tgt, "current": cur,
+                                 "est_value": round(abs(delta) * ref, 2)}})
     return orders
 
 

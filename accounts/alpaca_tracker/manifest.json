@@ -1,0 +1,24 @@
+{
+  "name": "alpaca_tracker",
+  "scenario": "model_v4",
+  "status": "frozen",
+  "inception": "2026-06-21",
+  "frozen_through": "2026-06-21",
+  "live_through": "2026-06-21",
+  "starting_value": 100000.0,
+  "ending_value": 100000.0,
+  "total_return": 0.0,
+  "n_trades": 0,
+  "n_positions": 0,
+  "broker": "alpaca_paper",
+  "ramp_up": {
+    "entry_score": 0.9,
+    "entry_size_pct": 0.085,
+    "hedge": true
+  },
+  "hashes": {
+    "trades.csv": "5fdd1f8fd3860e41e180c02e04f49bb8e19c07e0fde4957fb47a295b72a0ac28",
+    "equity.csv": "26ddb6c67b6ba52e79808fd5c0782616ddfea9ef5b4c27e29290ff2977f814cf",
+    "positions.csv": "820e6980a10998ec494f00ac7025170ea84592801dd2ebe6ffcef7c9dcd863de"
+  }
+}
