@@ -13,3 +13,8 @@ venv/
 
 # LLM response cache (may contain prompt content)
 reports/.llm_cache.jsonl
+
+# Broker runtime artifacts (regenerated; the valuable fills.csv/skips.csv stay tracked)
+backtests/collars.csv
+accounts/*/broker/cron.log
+accounts/*/broker/plan_*.json

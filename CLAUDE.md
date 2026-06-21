@@ -2,6 +2,45 @@
 
 Local Python paper-trading research agent. Recommends trades on U.S. equities and ETFs using momentum signals. **No live orders are ever placed.**
 
+## Active model & current state (read this first)
+
+**`model_v4` is THE active model.** It is the only model version in `config/scenarios/`; every
+account uses it. Older/experimental versions (v2, v3, v5, v6) and one-off scripts live in
+`archive/` (see `archive/README.md`) and are not wired into anything.
+
+- **Model** — `config/scenarios/model_v4.yaml`. 83-name semis/AI/tech momentum book; composite
+  score 0–1, buy gate 0.70 (+ persistence buy at >0.90 for 3 days); equal-weight full deployment,
+  max total exposure 0.75, ≤2 new trades/day; Barroso vol governor (target 0.35); score-gated
+  7.5% stop; 30-day max hold suppressed until score<0.80. **Do NOT change v4's ticker list** —
+  broad-universe runs (`make_cycle_test.py`) are test-only.
+- **Hedge overlay** — `src/hedge_overlay.py`. A standalone **overlay that sits ON TOP of model_v4
+  and never modifies it.** Signal: QQQ 1-day up-shock + SPY 5d-vol z-spike → buy long **SOXS**
+  (−3× inverse semis, 1-day hold, **never shorting**) sized inverse-vol; two-gate hybrid
+  (soft=half / hard=full). Validated as the only working "June-16-pullback" hedge.
+- **Accounts** — `accounts/<name>/` is an append-only ledger system (immutable frozen core +
+  `continuation/` living layer; SHA-256 manifest integrity via `account-verify`). Active accounts:
+  `primary` (main paper book), `tracker` (frictionless ramp-up sim, assumes 10bp cost),
+  `alpaca_tracker` (**broker-driven** go-forward book — ledger synced from real Alpaca paper fills).
+- **Broker integration (Alpaca paper, paper-only + submit-guarded)** —
+  `src/broker_adapter.py` (REST client; refuses non-paper host; `submit`/`cancel` inert unless
+  `confirm=True` AND env `BROKER_ADAPTER_ALLOW_SUBMIT=yes`),
+  `src/broker_sync.py` (reconcile-to-target **limit** orders with **data-driven per-instrument
+  collars** from the 2y overnight-gap distribution → `backtests/collars.csv`; realized-slippage
+  log; broker→ledger sync; `create_broker_account`), and
+  `src/broker_cron.py` (cron wrapper: phases open/retry/close/auto, self-guards on the ET market
+  clock; **dry-run unless `--live`**). Schedule: `deploy/mv4_crontab.txt` (times in CT = ET−1).
+  Daily flow: `open` (submit) → `retry` (re-price unfilled at the wider collar, then skip) →
+  `close` (reconcile fills/slippage + render EOD).
+- **Research artifacts** — `reports/` (dated EOD/status PDFs+md) and `backtests/` (dated
+  CSVs/md) are generated outputs; regenerate, don't hand-edit. Current report/PDF tooling:
+  `make_model_v4_guide.py`, `make_hedge_recommendation.py`, `make_rolling_chart.py`,
+  `make_cycle_test.py`.
+
+**Standing constraints:** paper trading only (no live orders); never mutate the base live-state
+files `data/{trade_log.csv,positions.csv,portfolio_state.json}`; API keys live ONLY in gitignored
+`.env` (never commit — verify with `git ls-files | grep -E '(^|/)\.env$|llm_cache'`); commit only
+when asked; pushes to GitHub must be run by the user (they fail in the agent environment).
+
 ## Running
 
 All runners share one entry point — `python run.py <command>` (see `python run.py -h`):

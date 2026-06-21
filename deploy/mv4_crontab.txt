@@ -1,0 +1,7 @@
+# ── model_v4 alpaca_tracker paper session (PAPER ONLY) ───────────────────────────
+# Times are America/Chicago (= ET-1, constant year-round). The wrapper ALSO self-guards
+# on the live ET market clock, so off-calendar runs no-op. Logs: account cron.log + /tmp.
+# open 9:25 ET (8:25 CT) · retry 10:05 ET (9:05 CT) · close 16:10 ET (15:10 CT)
+25 8  * * 1-5  cd /Users/david/PyCharmMiscProject/ai-paper-trader && /Users/david/PyCharmMiscProject/.venv/bin/python src/broker_cron.py --phase open  --account alpaca_tracker --live >> /tmp/mv4_cron.log 2>&1
+5  9  * * 1-5  cd /Users/david/PyCharmMiscProject/ai-paper-trader && /Users/david/PyCharmMiscProject/.venv/bin/python src/broker_cron.py --phase retry --account alpaca_tracker --live >> /tmp/mv4_cron.log 2>&1
+10 15 * * 1-5  cd /Users/david/PyCharmMiscProject/ai-paper-trader && /Users/david/PyCharmMiscProject/.venv/bin/python src/broker_cron.py --phase close --account alpaca_tracker        >> /tmp/mv4_cron.log 2>&1
