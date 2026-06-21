@@ -193,6 +193,35 @@ def compute_targets(name: str, cli: ba.AlpacaPaper,
 
 
 # ── session steps ──────────────────────────────────────────────────────────────────
+_LIVE_STATUSES = {"new", "accepted", "pending_new", "partially_filled",
+                  "accepted_for_bidding", "held", "calculated"}
+
+
+def _dedupe_order_ids(cli: ba.AlpacaPaper, asof: str, orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Alpaca requires client_order_id to be globally unique (forever — even vs canceled orders).
+    So: (1) if a LIVE order for this symbol/side already exists today, drop the new one (idempotent —
+    re-running won't duplicate); (2) otherwise suffix the id with the next attempt index so a fresh
+    submit after a cancel/reject doesn't collide. Read-only; degrades gracefully if the lookup fails."""
+    prior: Dict[tuple, list] = {}
+    try:
+        for st in ("open", "closed"):
+            for o in cli.orders(status=st):
+                coid = o.get("client_order_id") or ""
+                if coid.startswith(f"mv4-{asof}-"):
+                    prior.setdefault((o["symbol"], o["side"]), []).append(o)
+    except Exception:
+        return orders                                   # no broker view -> leave base ids as-is
+    out = []
+    for o in orders:
+        hits = prior.get((o["symbol"], o["side"].lower()), [])
+        if any(h.get("status") in _LIVE_STATUSES for h in hits):
+            continue                                    # already working -> don't re-submit
+        if hits:
+            o["client_order_id"] = f"{o['client_order_id']}-{len(hits) + 1}"
+        out.append(o)
+    return out
+
+
 def submit_session(name: str, cli: ba.AlpacaPaper = None, submit: bool = False,
                    prequeue: bool = False, retry: bool = False) -> Dict[str, Any]:
     """Build the day's RECONCILE-TO-TARGET plan (limit orders with data-driven per-symbol collars),
@@ -208,6 +237,7 @@ def submit_session(name: str, cli: ba.AlpacaPaper = None, submit: bool = False,
     prices = cli.latest_prices(delta_syms) if delta_syms else {}
     collars = compute_collars(delta_syms, cache_day=asof)
     orders = ba.build_reconcile_orders(targets, current, prices, collars, asof, retry=retry)
+    orders = _dedupe_order_ids(cli, asof, orders)   # idempotent: skip live dupes, make ids unique
     refs = {o["client_order_id"]: o["_plan"]["ref_mid"] for o in orders}
     (_broker_dir(name) / f"plan_{asof}.json").write_text(json.dumps(
         {"asof": asof, "retry": retry, "refs": refs,
