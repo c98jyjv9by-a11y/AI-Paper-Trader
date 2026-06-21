@@ -73,10 +73,13 @@ def ledger_from_broker(positions: List[Dict[str, Any]], cash: float, equity: flo
                        prior_entry_dates: Optional[Dict[str, str]] = None) -> Dict[str, pd.DataFrame]:
     """Build continuation positions + an equity row from a broker snapshot (broker = truth)."""
     ped = prior_entry_dates or {}
+    _pcols = ["ticker", "shares", "entry_price", "entry_date", "current_price",
+              "highest_price", "lowest_price"]
     pos = pd.DataFrame([{
         "ticker": p["ticker"], "shares": p["qty"], "entry_price": p["avg_entry"],
         "entry_date": ped.get(p["ticker"], asof), "current_price": p["price"],
-        "highest_price": p["price"], "lowest_price": p["price"]} for p in positions])
+        "highest_price": p["price"], "lowest_price": p["price"]} for p in positions],
+        columns=_pcols)   # keep the header even when the broker book is empty (fresh account)
     open_val = float(sum(p["market_value"] for p in positions))
     eq = pd.DataFrame([{"date": asof, "cash": cash, "open_positions_value": open_val,
                         "total_portfolio_value": equity, "realized_pnl_to_date": 0.0,
