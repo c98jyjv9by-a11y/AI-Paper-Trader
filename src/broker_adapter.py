@@ -108,6 +108,22 @@ class AlpacaPaper:
     def clock(self) -> Dict[str, Any]:
         return self._get(f"{self.host}/v2/clock")
 
+    def orders(self, status: str = "closed", after: Optional[str] = None,
+               limit: int = 500) -> List[Dict[str, Any]]:
+        """Recent orders (default closed/filled) with actual fill price & time, for reconciliation."""
+        params = {"status": status, "limit": limit, "direction": "desc", "nested": "false"}
+        if after:
+            params["after"] = after
+        out = []
+        for o in self._get(f"{self.host}/v2/orders", params):
+            fp = o.get("filled_avg_price")
+            out.append({"client_order_id": o.get("client_order_id"), "symbol": o["symbol"],
+                        "side": o["side"], "status": o["status"],
+                        "filled_qty": float(o.get("filled_qty") or 0),
+                        "fill_price": float(fp) if fp else None,
+                        "submitted_at": o.get("submitted_at"), "filled_at": o.get("filled_at")})
+        return out
+
     # ── orders (guarded) ──────────────────────────────────────────────────────────
     def submit(self, order: Dict[str, Any], *, confirm: bool = False) -> Dict[str, Any]:
         """Submit ONE order to the paper endpoint. Inert unless confirm=True AND
