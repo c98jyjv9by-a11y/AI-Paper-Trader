@@ -80,26 +80,53 @@ def ledger_from_broker(positions: List[Dict[str, Any]], cash: float, equity: flo
     return {"positions": pos, "equity": eq}
 
 
+def submit_window(clk: Dict[str, Any], prequeue: bool = False, far_hours: float = 20.0) -> Dict[str, Any]:
+    """Decide whether it's a sensible moment to SEND market-on-open/close orders.
+    Pure & testable. Returns {ok, reason}. The intended window is "market closed, next open
+    imminent" (evening/pre-open). Blocks when the market is open (MOO/MOC would queue for the
+    NEXT session, not today) or when the next open is far away (weekend/holiday) unless prequeue."""
+    from datetime import datetime as _dt
+    try:
+        now = _dt.fromisoformat(clk["timestamp"]); nopen = _dt.fromisoformat(clk["next_open"])
+        hrs = (nopen - now).total_seconds() / 3600.0
+    except Exception:
+        hrs = None
+    if clk.get("is_open"):
+        return {"ok": bool(prequeue), "reason": "market is OPEN — MOO/MOC queue for the NEXT auction, "
+                "not today; run after the close (or --prequeue to queue anyway)."}
+    if hrs is not None and hrs > far_hours:
+        return {"ok": bool(prequeue), "reason": "next open is %s (~%.0fh away, weekend/holiday) — "
+                "submitting this early may be rejected by the broker; use --prequeue to queue deliberately."
+                % (clk.get("next_open"), hrs)}
+    return {"ok": True, "reason": "market closed, next open imminent — valid pre-open window."}
+
+
 # ── session steps ──────────────────────────────────────────────────────────────────
-def submit_session(name: str, cli: ba.AlpacaPaper = None, submit: bool = False) -> Dict[str, Any]:
+def submit_session(name: str, cli: ba.AlpacaPaper = None, submit: bool = False,
+                   prequeue: bool = False) -> Dict[str, Any]:
     """Build the day's order plan from the account queue, persist the decision reference
-    prices (for later slippage), and optionally submit (guarded)."""
+    prices (for later slippage), and optionally submit — guarded by a clock/calendar window."""
     cli = cli or ba.AlpacaPaper()
+    clk = cli.clock()
     intended = ba.queue_from_account(name)
     prices = cli.latest_prices([it["ticker"] for it in intended]) if intended else {}
-    asof = cli.clock().get("timestamp", datetime.utcnow().isoformat())[:10]
+    asof = clk.get("timestamp", datetime.utcnow().isoformat())[:10]
     orders = ba.build_orders(intended, prices, asof)
     refs = {o["client_order_id"]: o["_plan"]["ref_mid"] for o in orders}
     (_broker_dir(name) / f"plan_{asof}.json").write_text(json.dumps(
         {"asof": asof, "refs": refs, "orders": [{k: v for k, v in o.items() if not k.startswith("_")}
                                                  for o in orders]}, indent=2))
+    win = submit_window(clk, prequeue)
+    if submit and not win["ok"]:
+        return {"asof": asof, "n_orders": len(orders), "submitted": 0, "dry_run": True,
+                "blocked": True, "reason": win["reason"], "orders": orders}
     results = []
     for o in orders:
         payload = {k: v for k, v in o.items() if not k.startswith("_")}
         results.append(cli.submit(payload, confirm=submit))
     sent = sum(1 for r in results if not r.get("dry_run"))
     return {"asof": asof, "n_orders": len(orders), "submitted": sent,
-            "dry_run": sent == 0, "orders": orders}
+            "dry_run": sent == 0, "window": win["reason"], "orders": orders}
 
 
 def reconcile_session(name: str, cli: ba.AlpacaPaper = None) -> Dict[str, Any]:
@@ -160,13 +187,17 @@ def _cli(argv=None):
     p.add_argument("--account", required=True)
     p.add_argument("--submit-plan", action="store_true", help="build + save the order plan")
     p.add_argument("--submit", action="store_true", help="actually send (needs BROKER_ADAPTER_ALLOW_SUBMIT=yes)")
+    p.add_argument("--prequeue", action="store_true", help="allow submitting outside the pre-open window (weekend/holiday)")
     p.add_argument("--reconcile", action="store_true", help="pull fills, log slippage, sync ledger from broker")
     p.add_argument("--slippage", action="store_true", help="print realized-slippage summary")
     a = p.parse_args(argv)
     if a.submit_plan:
-        r = submit_session(a.account, submit=a.submit)
-        print("PLAN %s: %d orders, %s" % (r["asof"], r["n_orders"],
-              "DRY-RUN (nothing sent)" if r["dry_run"] else f"{r['submitted']} submitted"))
+        r = submit_session(a.account, submit=a.submit, prequeue=a.prequeue)
+        if r.get("blocked"):
+            print("PLAN %s: %d orders — NOT submitted. %s" % (r["asof"], r["n_orders"], r["reason"]))
+        else:
+            print("PLAN %s: %d orders, %s" % (r["asof"], r["n_orders"],
+                  "DRY-RUN (nothing sent)" if r["dry_run"] else f"{r['submitted']} submitted"))
     if a.reconcile:
         r = reconcile_session(a.account)
         print("RECONCILED %s: %d fills, avg slippage %s bps, equity $%,.0f, %d positions" % (
