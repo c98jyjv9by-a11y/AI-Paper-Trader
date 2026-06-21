@@ -200,8 +200,8 @@ def _cli(argv=None):
                   "DRY-RUN (nothing sent)" if r["dry_run"] else f"{r['submitted']} submitted"))
     if a.reconcile:
         r = reconcile_session(a.account)
-        print("RECONCILED %s: %d fills, avg slippage %s bps, equity $%,.0f, %d positions" % (
-            r["asof"], r["fills"], r["avg_slippage_bps"], r["equity"], r["positions"]))
+        print(f"RECONCILED {r['asof']}: {r['fills']} fills, avg slippage {r['avg_slippage_bps']} bps, "
+              f"equity ${r['equity']:,.0f}, {r['positions']} positions")
     if a.slippage:
         print("SLIPPAGE SUMMARY:", json.dumps(slippage_summary(a.account), indent=2))
 

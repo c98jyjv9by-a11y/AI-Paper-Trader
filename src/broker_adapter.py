@@ -209,8 +209,8 @@ def _cli(argv=None):
     cli = AlpacaPaper()
     if a.status or not (a.plan):
         acct = cli.account()
-        print("PAPER ACCOUNT  status=%s  equity=$%,.0f  cash=$%,.0f  buying_power=$%,.0f"
-              % (acct["status"], acct["equity"], acct["cash"], acct["buying_power"]))
+        print(f"PAPER ACCOUNT  status={acct['status']}  equity=${acct['equity']:,.0f}  "
+              f"cash=${acct['cash']:,.0f}  buying_power=${acct['buying_power']:,.0f}")
         pos = cli.positions()
         print("positions (%d):" % len(pos))
         for q in sorted(pos, key=lambda x: -x["market_value"]):
