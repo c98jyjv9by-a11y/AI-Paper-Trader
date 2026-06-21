@@ -136,24 +136,30 @@ def compute_collars(symbols: List[str], cache_day: Optional[str] = None) -> Dict
 
 
 def submit_window(clk: Dict[str, Any], prequeue: bool = False, far_hours: float = 20.0) -> Dict[str, Any]:
-    """Decide whether it's a sensible moment to SEND market-on-open/close orders.
-    Pure & testable. Returns {ok, reason}. The intended window is "market closed, next open
-    imminent" (evening/pre-open). Blocks when the market is open (MOO/MOC would queue for the
-    NEXT session, not today) or when the next open is far away (weekend/holiday) unless prequeue."""
+    """Decide whether it's a sensible moment to SEND the day's first-attempt reconcile orders.
+    Pure & testable. Returns {ok, reason}. The first attempt is LIMIT-ON-OPEN/CLOSE (opg/cls),
+    which targets the next auction, so the clean window is "market closed and the next open is on
+    the SAME ET calendar day" (the pre-open window). Blocks when the market is OPEN (on-open/close
+    orders belong to the auctions; intraday top-ups go through the retry path's day orders) and
+    when today is NOT a trading day (weekend/holiday — an on-open order *may* not survive until the
+    next session). Both blocks are overridable with prequeue (e.g. deliberate weekend pre-staging)."""
     from datetime import datetime as _dt
     try:
         now = _dt.fromisoformat(clk["timestamp"]); nopen = _dt.fromisoformat(clk["next_open"])
         hrs = (nopen - now).total_seconds() / 3600.0
+        same_session_day = now.date() == nopen.date()
     except Exception:
-        hrs = None
+        hrs, same_session_day = None, True   # can't parse clock -> don't hard-block on the date check
     if clk.get("is_open"):
-        return {"ok": bool(prequeue), "reason": "market is OPEN — MOO/MOC queue for the NEXT auction, "
-                "not today; run after the close (or --prequeue to queue anyway)."}
-    if hrs is not None and hrs > far_hours:
-        return {"ok": bool(prequeue), "reason": "next open is %s (~%.0fh away, weekend/holiday) — "
-                "submitting this early may be rejected by the broker; use --prequeue to queue deliberately."
-                % (clk.get("next_open"), hrs)}
-    return {"ok": True, "reason": "market closed, next open imminent — valid pre-open window."}
+        return {"ok": bool(prequeue), "reason": "market is OPEN — on-open/close orders are for the "
+                "auctions; submit pre-open, or use the retry path for intraday day orders "
+                "(or --prequeue to send anyway)."}
+    if not same_session_day or (hrs is not None and hrs > far_hours):
+        return {"ok": bool(prequeue), "reason": "next open is %s (~%s away) — today is NOT a trading "
+                "session, so an on-open order may not survive until then; submit during the pre-open "
+                "window on a trading day, or use --prequeue to pre-stage for the next open deliberately."
+                % (clk.get("next_open"), "%.0fh" % hrs if hrs is not None else "?")}
+    return {"ok": True, "reason": "market closed, today's open imminent — valid pre-open window."}
 
 
 # ── target book (reconcile-to-target) ───────────────────────────────────────────────
@@ -209,7 +215,9 @@ def submit_session(name: str, cli: ba.AlpacaPaper = None, submit: bool = False,
          "orders": [{k: v for k, v in o.items() if not k.startswith("_")} for o in orders],
          "detail": [dict(symbol=o["symbol"], side=o["side"], qty=o["qty"],
                          limit_price=o["limit_price"], **o["_plan"]) for o in orders]}, indent=2))
-    win = submit_window(clk, prequeue)
+    # retry orders are intraday DAY limits (submitted while the market is open), so they bypass the
+    # pre-open/on-open window guard that governs the first (opg/cls) attempt.
+    win = submit_window(clk, prequeue=prequeue or retry)
     if submit and not win["ok"]:
         return {"asof": asof, "n_orders": len(orders), "submitted": 0, "dry_run": True,
                 "blocked": True, "reason": win["reason"], "orders": orders}
@@ -352,9 +360,9 @@ def _cli(argv=None):
                   "DRY-RUN (nothing sent)" if r["dry_run"] else f"{r['submitted']} submitted"))
         for o in r.get("orders", []):
             pl = o["_plan"]
-            print("  %-4s %-6s qty %-5s  limit $%-8.2f  collar %.1f%%  (tgt %d / now %d)  ~$%-8.0f" % (
-                o["side"].upper(), o["symbol"], o["qty"], o["limit_price"], pl["collar"] * 100,
-                pl["target"], pl["current"], pl["est_value"]))
+            print("  %-4s %-6s qty %-5s  %-3s limit $%-8.2f  collar %.1f%%  (tgt %d / now %d)  ~$%-8.0f" % (
+                o["side"].upper(), o["symbol"], o["qty"], pl.get("tif", o["time_in_force"]),
+                o["limit_price"], pl["collar"] * 100, pl["target"], pl["current"], pl["est_value"]))
     if a.retry:
         r = retry_unfilled(a.account)
         print("RETRY %s: canceled %d, resubmitted %d, still unfilled %d" % (

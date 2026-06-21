@@ -134,7 +134,14 @@ class AlpacaPaper:
                     "why": f"submission disabled (need confirm=True and {SUBMIT_ENV}=yes)"}
         import requests
         r = requests.post(f"{self.host}/v2/orders", headers=self._hdr, json=order, timeout=20)
-        r.raise_for_status()
+        if not r.ok:
+            # Surface Alpaca's JSON reason instead of a bare status code. The most common 422
+            # here is a duplicate client_order_id — i.e. this order was already submitted today
+            # (client_order_id is idempotent per day/side/symbol), so re-running the same plan
+            # the same day is rejected by design rather than double-submitting.
+            raise requests.HTTPError(
+                f"Alpaca rejected {order.get('side')} {order.get('qty')} {order.get('symbol')} "
+                f"(HTTP {r.status_code}): {r.text}", response=r)
         return r.json()
 
     def cancel(self, order_id: str, *, confirm: bool = True) -> Dict[str, Any]:
@@ -189,11 +196,15 @@ def build_reconcile_orders(targets: Dict[str, float], current: Dict[str, float],
         coll = (collars.get(s) or {}).get("retry" if retry else "collar", 0.02)
         side = "buy" if delta > 0 else "sell"
         lim = ref * (1 + coll) if side == "buy" else ref * (1 - coll)
+        # First attempt: LIMIT-ON-OPEN (buy) / LIMIT-ON-CLOSE (sell) — targets the next auction, so
+        # it can be pre-staged (incl. weekend via --prequeue) and fills at the open within the collar.
+        # Retry pass: a plain DAY limit — an intraday working order at the wider collar.
+        tif = "day" if retry else ("opg" if side == "buy" else "cls")
         orders.append({"symbol": s, "qty": str(abs(delta)), "side": side, "type": "limit",
-                       "limit_price": round(lim, 2), "time_in_force": "day",
+                       "limit_price": round(lim, 2), "time_in_force": tif,
                        "client_order_id": f"mv4-{asof}-{side}-{s}",
                        "_plan": {"ref_mid": ref, "collar": coll, "target": tgt, "current": cur,
-                                 "est_value": round(abs(delta) * ref, 2)}})
+                                 "tif": tif, "est_value": round(abs(delta) * ref, 2)}})
     return orders
 
 

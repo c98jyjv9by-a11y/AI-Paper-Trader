@@ -96,8 +96,8 @@ def run_phase(name: str, phase: str, live: bool = False, prequeue: bool = False)
             for o in r.get("orders", []):
                 pl = o["_plan"]
                 _log(name, f"    {o['side'].upper():4} {o['symbol']:6} qty {o['qty']:>5} "
-                           f"limit ${o['limit_price']:<8.2f} collar {pl['collar']*100:.1f}% "
-                           f"(tgt {pl['target']}/now {pl['current']})")
+                           f"{pl.get('tif', o['time_in_force']):>3} limit ${o['limit_price']:<8.2f} "
+                           f"collar {pl['collar']*100:.1f}% (tgt {pl['target']}/now {pl['current']})")
 
         elif phase == "retry":
             if not clk.get("is_open"):
