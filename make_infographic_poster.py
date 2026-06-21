@@ -27,7 +27,7 @@ img1 = mpimg.imread(_imgs[0]) if _imgs else None
 img2 = mpimg.imread(_imgs[1]) if len(_imgs) > 1 else None
 imgH1 = 0.86 * W * (img1.shape[0] / img1.shape[1]) if img1 is not None else 0
 imgH2 = 0.86 * W * (img2.shape[0] / img2.shape[1]) if img2 is not None else 0
-H = 36.7 + imgH1 + imgH2          # base layout height + the two screenshot heights
+H = 38.0 + imgH1 + imgH2          # base layout height + the two screenshot heights
 
 
 def T(ax, x, y, s, fs=11, c=NAVY, b=False, ha="center", va="center", it=False):
@@ -156,14 +156,19 @@ for i, r in enumerate(rails):
 cy -= 1.9
 
 # ── DAILY CYCLE ───────────────────────────────────────────────────────────────────────
-slabel(ax, cy - 0.4, "The daily rhythm (automatic, every weekday)", AMBER); cy -= 1.0
+slabel(ax, cy - 0.4, "The daily rhythm — automatic, every weekday", AMBER); cy -= 0.95
+box(ax, 0.7, cy - 0.62, 8.6, 0.62, AMBER)
+T(ax, 5, cy - 0.33, "SET-AND-FORGET:  a scheduler (cron) runs all three steps by itself, Mon–Fri — you just review the results",
+  fs=9.2, c="white", b=True)
+cy -= 1.45
 ax.plot([1.4, 8.6], [cy, cy], color=GRAY, lw=3, zorder=1)
-marks = [(2.0, BLUE, "Pre-open", "SUBMIT", ["Send the day's", "orders"]),
-         (5.0, TEAL, "After open", "RETRY", ["Re-price unfilled", "once, else skip"]),
-         (8.0, NAVY, "After close", "RECONCILE", ["Record fills,", "measure slippage"])]
-for x, c, when, what, ls in marks:
+marks = [(2.0, BLUE, "Pre-open", "~9:25a ET", "SUBMIT", ["Send the day's", "orders"]),
+         (5.0, TEAL, "Just after open", "~10:05a ET", "RETRY", ["Re-price unfilled", "once, else skip"]),
+         (8.0, NAVY, "After close", "~4:10p ET", "RECONCILE", ["Record fills,", "measure slippage"])]
+for x, c, when, tm, what, ls in marks:
     ax.add_patch(Circle((x, cy), 0.15, fc=c, ec="white", lw=2, zorder=3))
-    T(ax, x, cy + 0.3, when, fs=9.2, c=GRAY, b=True)
+    T(ax, x, cy + 0.52, when, fs=9.0, c=GRAY, b=True)
+    T(ax, x, cy + 0.27, tm, fs=8.6, c=c, b=True)
     arrow(ax, x, cy - 0.16, x, cy - 0.42, c=c, lw=1.8)
     chip(ax, x - 1.35, cy - 2.05, 2.7, 1.55, what, ls, c, tfs=12, bfs=9)
 cy -= 2.45

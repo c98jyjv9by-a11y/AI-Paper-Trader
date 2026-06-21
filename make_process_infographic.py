@@ -206,16 +206,23 @@ pages.append(fig)
 fig, ax = _fig()
 header(ax, "THE DAILY RHYTHM", "What happens automatically, every weekday")
 
+# set-and-forget scheduling banner
+box(ax, 0.8, 10.35, 8.4, 0.78, AMBER)
+T(ax, 5, 10.86, "SET-AND-FORGET", fs=11.5, c="white", b=True)
+T(ax, 5, 10.5, "a scheduler (cron) runs all three steps by itself, Mon–Fri — you just review the results",
+  fs=9.5, c="#fff3e3")
+
 # timeline
 ax.plot([1.2, 8.8], [9.4, 9.4], color=GRAY, lw=3, zorder=1)
 marks = [
-    (1.8, BLUE, "Pre-open", "SUBMIT", ["The day's orders are", "sent to the broker"]),
-    (5.0, TEAL, "After the open", "RETRY", ["Anything unfilled is", "re-priced once a little", "wider — else skipped"]),
-    (8.2, NAVY, "After the close", "RECONCILE", ["Record real fills,", "measure slippage,", "update + report"]),
+    (1.8, BLUE, "Pre-open", "~9:25a ET", "SUBMIT", ["The day's orders are", "sent to the broker"]),
+    (5.0, TEAL, "Just after open", "~10:05a ET", "RETRY", ["Anything unfilled is", "re-priced once a little", "wider — else skipped"]),
+    (8.2, NAVY, "After the close", "~4:10p ET", "RECONCILE", ["Record real fills,", "measure slippage,", "update + report"]),
 ]
-for x, c, when, what, ls in marks:
+for x, c, when, tm, what, ls in marks:
     ax.add_patch(Circle((x, 9.4), 0.16, fc=c, ec="white", lw=2, zorder=3))
-    T(ax, x, 9.95, when, fs=10, c=GRAY, b=True)
+    T(ax, x, 10.0, when, fs=10, c=GRAY, b=True)
+    T(ax, x, 9.72, tm, fs=8.8, c=c, b=True)
     chip(ax, x - 1.35, 6.9, 2.7, 1.95, what, ls, c, title_fs=13, body_fs=9)
     arrow(ax, x, 9.2, x, 8.9, c=c, lw=2)
 
