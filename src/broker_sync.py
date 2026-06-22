@@ -227,7 +227,7 @@ def submit_session(name: str, cli: ba.AlpacaPaper = None, submit: bool = False,
     """Build the day's RECONCILE-TO-TARGET plan (limit orders with data-driven per-symbol collars),
     persist the decision references + collars (for slippage & the retry pass), and optionally submit
     — guarded by a clock/calendar window. `retry=True` rebuilds unfilled deltas at the wider collar."""
-    cli = cli or ba.AlpacaPaper()
+    cli = cli or ba.AlpacaPaper(account=name)
     clk = cli.clock()
     asof = clk.get("timestamp", _utcnow())[:10]
     current = {p["ticker"]: p["qty"] for p in cli.positions()}
@@ -262,7 +262,7 @@ def retry_unfilled(name: str, cli: ba.AlpacaPaper = None) -> Dict[str, Any]:
     """RETRY-ONCE-WIDER: cancel any still-open limit orders from today's plan and resubmit the
     remaining delta at each symbol's wider retry collar; anything still unfilled after this is
     SKIPPED (logged). Call once, after the first plan has had time to work."""
-    cli = cli or ba.AlpacaPaper()
+    cli = cli or ba.AlpacaPaper(account=name)
     asof = cli.clock().get("timestamp", _utcnow())[:10]
     open_orders = [o for o in cli.orders(status="open")]
     todays = [o for o in open_orders if (o.get("client_order_id") or "").startswith(f"mv4-{asof}-")]
@@ -283,9 +283,12 @@ def retry_unfilled(name: str, cli: ba.AlpacaPaper = None) -> Dict[str, Any]:
 
 
 def create_broker_account(name: str, scenario: str = "model_v4", starting: float = 100000.0,
-                          ramp_up: Optional[Dict[str, Any]] = None, asof: Optional[str] = None) -> Dict[str, Any]:
+                          ramp_up: Optional[Dict[str, Any]] = None, asof: Optional[str] = None,
+                          broker_keys: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """Create a fresh broker-driven account: an empty frozen ledger (cash only, no positions) that
-    reconcile_session() then drives forward from the real Alpaca fills (broker = source of truth)."""
+    reconcile_session() then drives forward from the real Alpaca fills (broker = source of truth).
+    `broker_keys` = {"key_env": "...", "secret_env": "..."} names the .env vars holding THIS
+    account's Alpaca paper keys, so multiple accounts can each use their own credentials."""
     d = _acct_dir(name); d.mkdir(parents=True, exist_ok=True)
     asof = asof or _utcnow()[:10]
     pd.DataFrame(columns=["date", "action", "ticker", "shares", "price", "trade_value", "reason",
@@ -303,6 +306,8 @@ def create_broker_account(name: str, scenario: str = "model_v4", starting: float
            "frozen_through": asof, "live_through": asof, "starting_value": starting,
            "ending_value": starting, "total_return": 0.0, "n_trades": 0, "n_positions": 0,
            "broker": "alpaca_paper",
+           "broker_keys": broker_keys or {"key_env": "APCA_API_KEY_ID_FIRST",
+                                          "secret_env": "APCA_API_SECRET_KEY_FIRST"},
            "ramp_up": ramp_up or {"entry_score": 0.9, "entry_size_pct": 0.085, "hedge": True},
            "hashes": {}}
     for f in ["trades.csv", "equity.csv", "positions.csv"]:
@@ -314,7 +319,7 @@ def create_broker_account(name: str, scenario: str = "model_v4", starting: float
 def reconcile_session(name: str, cli: ba.AlpacaPaper = None) -> Dict[str, Any]:
     """Pull the broker's actual fills + positions; log realized slippage vs the saved plan
     references; rewrite the account's continuation ledger from the broker (source of truth)."""
-    cli = cli or ba.AlpacaPaper()
+    cli = cli or ba.AlpacaPaper(account=name)
     asof = cli.clock().get("timestamp", datetime.utcnow().isoformat())[:10]
     bdir = _broker_dir(name)
 
@@ -374,13 +379,16 @@ def _cli(argv=None):
     p.add_argument("--slippage", action="store_true", help="print realized-slippage summary")
     p.add_argument("--retry", action="store_true", help="cancel unfilled orders + resubmit at the wider retry collar")
     p.add_argument("--create-account", action="store_true", help="create a fresh broker-driven ramp-up account")
+    p.add_argument("--key-env", help="env-var NAME holding this account's APCA key id (e.g. APCA_API_KEY_ID_NEW)")
+    p.add_argument("--secret-env", help="env-var NAME holding this account's APCA secret key")
     a = p.parse_args(argv)
     if a.create_account:
-        man = create_broker_account(a.account)
-        print("CREATED broker account '%s' (scenario=%s, $%s cash, ramp_up entry>=%.2f). "
+        bk = {"key_env": a.key_env, "secret_env": a.secret_env} if (a.key_env and a.secret_env) else None
+        man = create_broker_account(a.account, broker_keys=bk)
+        print("CREATED broker account '%s' (scenario=%s, $%s cash, ramp_up entry>=%.2f, keys=%s). "
               "Broker now drives the ledger via --reconcile." % (
               man["name"], man["scenario"], format(int(man["starting_value"]), ","),
-              man["ramp_up"]["entry_score"]))
+              man["ramp_up"]["entry_score"], man["broker_keys"]["key_env"]))
     if a.submit_plan:
         r = submit_session(a.account, submit=a.submit, prequeue=a.prequeue)
         if r.get("blocked"):

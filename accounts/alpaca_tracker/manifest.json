@@ -23,5 +23,9 @@
     "continuation/equity.csv": "99394119ee191e33404251178af8875b7705364ce59486aa74513e5bbdef9271",
     "continuation/positions.csv": "820e6980a10998ec494f00ac7025170ea84592801dd2ebe6ffcef7c9dcd863de"
   },
-  "live_value": 100000.0
+  "live_value": 100000.0,
+  "broker_keys": {
+    "key_env": "APCA_API_KEY_ID_FIRST",
+    "secret_env": "APCA_API_SECRET_KEY_FIRST"
+  }
 }

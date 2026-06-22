@@ -74,7 +74,7 @@ def run_phase(name: str, phase: str, live: bool = False, prequeue: bool = False)
     if live:
         import os
         os.environ[ba.SUBMIT_ENV] = "yes"          # explicit opt-in to live paper submission
-    cli = ba.AlpacaPaper()
+    cli = ba.AlpacaPaper(account=name)
     clk = cli.clock()
     asof = clk.get("timestamp", bs._utcnow())[:10]
 

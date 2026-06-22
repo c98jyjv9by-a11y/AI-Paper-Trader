@@ -50,18 +50,56 @@ def _load_env() -> None:
             os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
 
 
+# Default env-var names to try, in order, when an account doesn't name its own. Supports the
+# original single-account setup (bare names) and the renamed "_FIRST" original.
+DEFAULT_KEY_ENVS = ("APCA_API_KEY_ID", "APCA_API_KEY_ID_FIRST")
+DEFAULT_SECRET_ENVS = ("APCA_API_SECRET_KEY", "APCA_API_SECRET_KEY_FIRST")
+
+
+def _first_env(names) -> Optional[str]:
+    for n in names:
+        v = os.environ.get(n)
+        if v:
+            return v
+    return None
+
+
+def resolve_keys(account: Optional[str] = None, key: Optional[str] = None, secret: Optional[str] = None,
+                 key_env: Optional[str] = None, secret_env: Optional[str] = None):
+    """Resolve (key, secret) for a paper account. Precedence: explicit key/secret → explicit
+    env-var NAMES → the account manifest's `broker_keys` {key_env, secret_env} → DEFAULT_*_ENVS.
+    Lets multiple paper accounts each carry their own APCA_* keys in .env."""
+    _load_env()
+    if key and secret:
+        return key, secret
+    kenv, senv = key_env, secret_env
+    if account and (not kenv or not senv):
+        try:
+            from account import load_manifest
+            bk = (load_manifest(account) or {}).get("broker_keys") or {}
+            kenv = kenv or bk.get("key_env"); senv = senv or bk.get("secret_env")
+        except Exception:
+            pass
+    k = key or (os.environ.get(kenv) if kenv else _first_env(DEFAULT_KEY_ENVS))
+    s = secret or (os.environ.get(senv) if senv else _first_env(DEFAULT_SECRET_ENVS))
+    return k, s
+
+
 class AlpacaPaper:
-    """Thin Alpaca paper-API client (read-only by default)."""
+    """Thin Alpaca paper-API client (read-only by default). Pass `account` to use that account's
+    own keys (from its manifest's broker_keys), or `key_env`/`secret_env` to name .env vars."""
 
     def __init__(self, key: Optional[str] = None, secret: Optional[str] = None,
-                 host: str = PAPER_HOST):
+                 host: str = PAPER_HOST, account: Optional[str] = None,
+                 key_env: Optional[str] = None, secret_env: Optional[str] = None):
         if host != PAPER_HOST:
             raise ValueError(f"refusing non-paper host {host!r}; this adapter is paper-only.")
-        _load_env()
-        self.key = key or os.environ.get("APCA_API_KEY_ID")
-        self.secret = secret or os.environ.get("APCA_API_SECRET_KEY")
+        self.account_name = account                    # NOT `account` — that's the account() method
+        self.key, self.secret = resolve_keys(account, key, secret, key_env, secret_env)
         if not (self.key and self.secret):
-            raise RuntimeError("Missing Alpaca keys — set APCA_API_KEY_ID / APCA_API_SECRET_KEY in .env")
+            raise RuntimeError(
+                f"Missing Alpaca keys for account={account!r}. Set its broker_keys in the manifest "
+                "or APCA_API_KEY_ID / APCA_API_SECRET_KEY (or *_FIRST) in .env")
         self.host = host
         try:
             import requests  # noqa: F401
@@ -251,7 +289,7 @@ def _cli(argv=None):
     p.add_argument("--submit", action="store_true", help="actually send orders (also needs %s=yes)" % SUBMIT_ENV)
     a = p.parse_args(argv)
 
-    cli = AlpacaPaper()
+    cli = AlpacaPaper(account=a.account)
     if a.status or not (a.plan):
         acct = cli.account()
         print(f"PAPER ACCOUNT  status={acct['status']}  equity=${acct['equity']:,.0f}  "
