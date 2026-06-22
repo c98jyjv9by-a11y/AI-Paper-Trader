@@ -353,22 +353,31 @@ def _attribution_takeaways(d, retf, top, bottom):
     return out or ["(insufficient data for attribution)"]
 
 
-def _intraday_table(ax, y, title, tickers, intra, cps, retf):
+def _intraday_table(ax, y, title, tickers, intra, cps, retf, meta=None):
     y = P._section(ax, y, title)
     if not tickers:
         ax.text(0.075, y, "(none)", color=P.MIDGREY, fontsize=7.2, va="top")
         return y - 0.018
-    cols = ["Ticker"] + [lbl for _, lbl in cps] + ["Latest"]
+    meta = meta or {}                                 # {ticker: (prior_close_score, current_score)}
+    cols = ["Ticker", "Score→now"] + [lbl for _, lbl in cps] + ["Latest"]
     n = len(cps)
-    rem = 1 - 0.13 - 0.13
-    cw = ([0.13] + [rem / n] * n + [0.13]) if n else [0.5, 0.5]
+    rem = 1 - 0.12 - 0.15 - 0.10
+    cw = ([0.12, 0.15] + [rem / n] * n + [0.10]) if n else [0.4, 0.2, 0.4]
     by_cp = {hhmm: [] for hhmm, _ in cps}
     lat = []
     specs = []
     for t in tickers:
         rec = (intra or {}).get(t, {})
         seq = [rec.get(h) for h, _ in cps] + [retf(t) if retf else None]
-        specs.append(_row(t, seq))                    # value sign-coloured, no arrows
+        lbl, cells, vcolors, gl = _row(t, seq)        # value sign-coloured, no arrows
+        pr, cu = meta.get(t, (None, None))             # prior-close → current composite score
+        if pr is not None and cu is not None:
+            scell = f"{pr:.2f}→{cu:.2f}"; scol = _score_trend_color(scell)
+        elif pr is not None:
+            scell = f"{pr:.2f}"; scol = P.MIDGREY
+        else:
+            scell = "—"; scol = P.MIDGREY
+        specs.append((lbl, [scell] + cells, [scol] + vcolors, [None] + gl))
         for h, _ in cps:
             if rec.get(h) is not None:
                 by_cp[h].append(rec.get(h))
@@ -377,7 +386,8 @@ def _intraday_table(ax, y, title, tickers, intra, cps, retf):
     # AVG row: value sign-coloured + a per-cell ▲/▼/– arrow for change vs the prior checkpoint.
     avg_seq = [sum(by_cp[h]) / len(by_cp[h]) if by_cp[h] else None for h, _ in cps] \
         + [sum(lat) / len(lat) if lat else None]
-    specs.append(_row("AVG", avg_seq, trend=True))
+    al, ac, av, ag = _row("AVG", avg_seq, trend=True)
+    specs.append((al, [""] + ac, ["#1f2a3a"] + av, [None] + ag))
     return _render_rows(ax, y, cols, cw, specs, {len(specs) - 1}, row_h=0.016, fs=6.8, hfs=6.5)
 
 
@@ -426,9 +436,12 @@ def paths_body(ax, d):
                  "mean; value colour = +/− ; ▲/▼ on AVG = change vs the prior hour (green up / "
                  "red down).", width=112)
     y -= 0.008
-    y = _intraday_table(ax, y, f"Prior Top {tn} (by EOD score)", top, intra, cps, retf)
-    y = _intraday_table(ax, y - 0.006, f"Prior Bottom {tn} (by EOD score)", bottom, intra, cps, retf)
-    y = _intraday_table(ax, y - 0.006, f"Currently held ({len(held)})", held, intra, cps, retf)
+    _ps = {r["ticker"]: r["score"] for r in (d.get("rows") or [])}        # prior-close score
+    _cs = {r["ticker"]: r["score"] for r in (d.get("rows_cur") or [])}    # current score
+    meta = {t: (_ps.get(t), _cs.get(t)) for t in set(_ps) | set(_cs)}     # then→now per ticker
+    y = _intraday_table(ax, y, f"Prior Top {tn} (by EOD score)", top, intra, cps, retf, meta)
+    y = _intraday_table(ax, y - 0.006, f"Prior Bottom {tn} (by EOD score)", bottom, intra, cps, retf, meta)
+    y = _intraday_table(ax, y - 0.006, f"Currently held ({len(held)})", held, intra, cps, retf, meta)
 
 
 def _page_attribution(pdf, d, cfg):
