@@ -700,6 +700,34 @@ def retry_unfilled(name: str, cli: ba.AlpacaPaper = None) -> Dict[str, Any]:
             "still_unfilled": len(skipped)}
 
 
+def flatten_overlay(name: str, cli: ba.AlpacaPaper = None, submit: bool = False,
+                    sym: str = REBOUND_SYM) -> Dict[str, Any]:
+    """Force-exit any REMAINING overlay position (`sym`, default TQQQ) — for when the scheduled
+    close-of-day (`cls`) exit didn't fully fill (submitted after the LOC cutoff, partial, or rejected).
+    CANCELS any working order for `sym` first (so we don't double-sell a still-pending exit), then
+    submits a MARKETABLE day-ext sell for the actual live position. Guarded: dry-run unless submit=True
+    AND env BROKER_ADAPTER_ALLOW_SUBMIT=yes."""
+    cli = cli or ba.AlpacaPaper(account=name)
+    canceled = 0
+    for o in (cli.orders(status="open") or []):           # cancel working orders -> avoid double-sell
+        if o.get("symbol") == sym:
+            cli.cancel(o["id"], confirm=submit)
+            canceled += 1
+    pos = next((p for p in (cli.positions() or []) if p.get("ticker") == sym), None)
+    qty = int(round(float(pos["qty"]))) if pos else 0
+    if qty <= 0:                                           # already flat -> nothing to do
+        return {"account": name, "sym": sym, "qty": 0, "canceled": canceled, "submitted": False, "order": None}
+    q = (cli.latest_prices([sym]) or {}).get(sym) or {}
+    px = q.get("bid") or q.get("mid") or pos.get("price")
+    lim = round(float(px) * 0.97, 2) if px else None       # 3% through the bid -> crosses now
+    ts = _utcnow().replace(":", "").replace("-", "").replace("T", "")
+    order = {"symbol": sym, "qty": str(qty), "side": "sell", "type": "limit", "limit_price": lim,
+             "time_in_force": "day", "extended_hours": True, "client_order_id": f"flat-{sym}-{name}-{ts[:14]}"}
+    res = cli.submit(order, confirm=submit)
+    return {"account": name, "sym": sym, "qty": qty, "limit": lim, "canceled": canceled,
+            "submitted": bool(submit and isinstance(res, dict) and res.get("id")), "order": res}
+
+
 def create_broker_account(name: str, scenario: str = "model_v4", starting: float = 100000.0,
                           ramp_up: Optional[Dict[str, Any]] = None, asof: Optional[str] = None,
                           broker_keys: Optional[Dict[str, str]] = None,
@@ -872,6 +900,9 @@ def _cli(argv=None):
     p.add_argument("--reconcile", action="store_true", help="pull fills, log slippage, sync ledger from broker")
     p.add_argument("--slippage", action="store_true", help="print realized-slippage summary")
     p.add_argument("--retry", action="store_true", help="cancel unfilled orders + resubmit at the wider retry collar")
+    p.add_argument("--flatten-overlay", action="store_true",
+                   help="force-exit any REMAINING TQQQ overlay position MARKETABLE (cancels working "
+                        "orders first) — for when the scheduled cls exit didn't fully fill; with --submit to send")
     p.add_argument("--create-account", action="store_true", help="create a fresh broker-driven ramp-up account")
     p.add_argument("--key-env", help="env-var NAME holding this account's APCA key id (e.g. APCA_API_KEY_ID_NEW)")
     p.add_argument("--secret-env", help="env-var NAME holding this account's APCA secret key")
@@ -964,6 +995,15 @@ def _cli(argv=None):
         r = retry_unfilled(a.account)
         print("RETRY %s: canceled %d, resubmitted %d, still unfilled %d" % (
             r["asof"], r["canceled"], r["resubmitted"], r["still_unfilled"]))
+    if a.flatten_overlay:
+        r = flatten_overlay(a.account, submit=a.submit)
+        if r["qty"] == 0:
+            print("FLATTEN-OVERLAY %s: no %s position (canceled %d working order(s))"
+                  % (a.account, r["sym"], r["canceled"]))
+        else:
+            tag = "SUBMITTED" if r["submitted"] else "DRY-RUN (nothing sent)"
+            print("FLATTEN-OVERLAY %s: SELL %s %d @ <=%.2f marketable day-ext — %s (canceled %d working order(s))"
+                  % (a.account, r["sym"], r["qty"], r["limit"] or 0, tag, r["canceled"]))
     if a.reconcile:
         r = reconcile_session(a.account)
         print(f"RECONCILED {r['asof']}: {r['fills']} fills, avg slippage {r['avg_slippage_bps']} bps, "

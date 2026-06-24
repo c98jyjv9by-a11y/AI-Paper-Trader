@@ -224,3 +224,37 @@ def test_combo_top_held_on_non_monthly_week(monkeypatch):
     assert t["A"] == 999 and t["B"] == 111              # TOP kept untouched on a non-monthly week
     assert t["Y"] == 225 and t["Z"] == 225              # BOTTOM re-sized weekly (0.9*100k/4 = 22.5k/$100)
     assert "W" not in t                                  # stale bottom name flattened
+
+
+class _FlatCli:
+    def __init__(self, qty=313, open_orders=None):
+        self.qty = qty
+        self._open = open_orders if open_orders is not None else \
+            [{"id": "o1", "symbol": "TQQQ"}, {"id": "o2", "symbol": "AAPL"}]
+        self.canceled, self.submitted = [], []
+    def orders(self, status="closed"): return self._open
+    def positions(self):
+        return [{"ticker": "TQQQ", "qty": float(self.qty), "price": 70.0}] if self.qty else []
+    def latest_prices(self, syms): return {s: {"bid": 70.0, "mid": 70.0} for s in syms}
+    def cancel(self, oid, confirm=True):
+        if confirm: self.canceled.append(oid)
+    def submit(self, order, confirm=False):
+        self.submitted.append(order)
+        return {"id": "x1"} if confirm else {"note": "dry-run"}
+
+
+def test_flatten_overlay_cancels_then_sells_full_position():
+    cli = _FlatCli(qty=313)
+    r = bs.flatten_overlay("topten", cli=cli, submit=True)
+    assert cli.canceled == ["o1"]                          # only the TQQQ working order (not AAPL)
+    o = cli.submitted[0]
+    assert o["symbol"] == "TQQQ" and o["side"] == "sell" and o["qty"] == "313"
+    assert o["extended_hours"] is True and o["limit_price"] == round(70 * 0.97, 2)
+    assert r["qty"] == 313 and r["submitted"] is True and r["canceled"] == 1
+
+
+def test_flatten_overlay_no_position_no_sell():
+    cli = _FlatCli(qty=0)
+    r = bs.flatten_overlay("topten", cli=cli, submit=True)
+    assert cli.canceled == ["o1"]                          # still cancels the stale TQQQ order
+    assert cli.submitted == [] and r["qty"] == 0 and r["submitted"] is False

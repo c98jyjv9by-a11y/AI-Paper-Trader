@@ -39,7 +39,10 @@ account uses it. Older/experimental versions (v2, v3, v5, v6) and one-off script
   cash instead (no book sale). When it stops firing TQQQ
   leaves the target so the reconcile flattens it next session
   (= the 1-day exit) — the TQQQ **sell is forced to `cls` (market-on-close), even in `--extended-hours` mode**,
-  so the exit only ever happens at the close, never intraday. The model decision never sees TQQQ (excluded like the hedge), so it isn't stop-managed.
+  so the exit only ever happens at the close, never intraday. If a `cls` exit doesn't fully fill (e.g. submitted
+  after the ~15:50 ET LOC cutoff, partial, or rejected), **`broker_sync.py --flatten-overlay --account <a> [--submit]`**
+  (`flatten_overlay`) cancels any working TQQQ order and MARKETABLE-exits the remaining live position (day-ext,
+  ~3% through the bid) — the after-hours safety net to fully clear the sleeve. The model decision never sees TQQQ (excluded like the hedge), so it isn't stop-managed.
   On by default for the trackers; opt out with manifest `rebound: false`. `python src/rebound_overlay.py
   [--recommend [--live …]]`. Tuning analysis in `research/make_model_v4_rebound*.py` / `research/make_model_v4_{reverse,defense}.py`.
 - **Accounts** — `accounts/<name>/` is an append-only ledger system (immutable frozen core +
