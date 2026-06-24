@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import yfinance as yf
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).parent.parent
 OUT = ROOT / "reports" / "model_v4_reverse.pdf"
 TX, W = 0.0010, 0.45
 HOLDS = [1, 3, 5, 10, 20]

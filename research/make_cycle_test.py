@@ -17,7 +17,7 @@ from datetime import date
 from pathlib import Path
 import numpy as np, pandas as pd, yfinance as yf
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 from scenarios import build_config, load_scenario
 from backtest import load_config, fetch_backtest_data, run_backtest, compute_metrics

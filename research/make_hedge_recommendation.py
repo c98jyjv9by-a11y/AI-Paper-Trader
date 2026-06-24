@@ -18,7 +18,7 @@ import matplotlib.image as mpimg
 from matplotlib.backends.backend_pdf import PdfPages
 from pypdf import PdfReader, PdfWriter
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 import hedge_overlay as ho
 

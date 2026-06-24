@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import yfinance as yf
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).parent.parent
 OUT = ROOT / "reports" / "model_v4_rebound_sweep.pdf"
 TX, W0 = 0.0010, 0.45
 WIN = {"FULL": ("2016-06-20", "2026-06-18"), "TRAIN": ("2018-06-22", "2022-06-22"),

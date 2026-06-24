@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import yfinance as yf
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).parent.parent
 OUT = ROOT / "reports" / "levetf_shock.pdf"
 SHOCK, GATE, TX = 0.02, 0.75, 0.0010
 WINDOWS = {"FULL 2016-2026": ("2016-06-20", "2026-06-18"),

@@ -14,7 +14,7 @@ import matplotlib.image as mpimg
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.patches import FancyBboxPatch, Circle
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).parent.parent
 OUT = ROOT / "reports" / "model_v4_infographic_poster.pdf"
 EX = ROOT / "examples"
 

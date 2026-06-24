@@ -10,7 +10,7 @@ buy TQQQ (+3x QQQ) for the 1-day rebound.
       CRASH (full):  + top10_trl_1d <= -3%  AND  bottom10_trl_1d > 0   (escalate size, if tiered)
       then BUY TQQQ at `weight` of the held book (crash -> `weight_cap`), hold 1 day, exit next close.
 
-Tuned (make_model_v4_rebound_sweep.py + make_volfactor_compare.py): QQQ 5d-vol gate is the only robust
+Tuned (research/make_model_v4_rebound_sweep.py + research/make_volfactor_compare.py): QQQ 5d-vol gate is the only robust
 region — ΔSharpe ~+0.06 full / +0.07 train / +0.03 test, MaxDD -39% vs -40%, worst-day unchanged at -9%
 (NO tail blowout), ~3-4 fires/yr, 65% win. (QQQ vol beats SPY here by catching Nasdaq-concentrated crashes.) The `spread < 0` filter is what selects the mean-reverting setups and skips the
 trend-continuation knives that wreck a naive down-shock buy. Honest scope: a SMALL, robust, tail-neutral

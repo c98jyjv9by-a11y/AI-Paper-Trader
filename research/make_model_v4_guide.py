@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import FancyBboxPatch
 from matplotlib.backends.backend_pdf import PdfPages
 
-OUT = Path(__file__).parent / "reports" / "model_v4_guidebook.pdf"
+OUT = Path(__file__).parent.parent / "reports" / "model_v4_guidebook.pdf"
 NAVY, GREEN, RED, GREY, INK = "#0b3d91", "#0a5d00", "#8a1a1a", "#666666", "#1f2a3a"
 
 

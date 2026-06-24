@@ -16,11 +16,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).parent / "src"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 import hedge_overlay as ho
 import rebound_overlay as ro
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).parent.parent
 df = pd.read_csv(ROOT / "backtests" / "model_v4_timeseries.csv", parse_dates=["date"]).set_index("date")
 dfr = ro._add_instrument(df, ro.ReboundConfig())
 WIN = {"FULL": ("2016-06-20", "2026-06-18"), "TRAIN": ("2018-06-22", "2022-06-22"),

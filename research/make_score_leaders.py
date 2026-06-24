@@ -6,7 +6,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 warnings.filterwarnings("ignore")
-sys.path.insert(0, str(Path(__file__).parent / "src"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 import pandas as pd
 
 from backtest import load_config, fetch_backtest_data
@@ -14,7 +14,7 @@ from scenarios import load_scenario, build_config
 from signals import calculate_signals, rank_candidates
 from rank_report import _build_ticker_weights, _SIGNAL_WINDOW
 
-cfg = build_config(load_config(Path(__file__).parent / "config"), load_scenario("model_v4"))
+cfg = build_config(load_config(Path(__file__).parent.parent / "config"), load_scenario("model_v4"))
 uni = cfg["tickers"]
 w = cfg["signals"].get("weights")
 tw = _build_ticker_weights(cfg) or None

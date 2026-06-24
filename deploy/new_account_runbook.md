@@ -148,5 +148,5 @@ which is dry-run unless `--live`). Times are CT = ET−1.
 - **`.env` is gitignored** and holds keys only — never commit it; commit only when asked; pushes are run by the user.
 - **Never** mutate `data/{trade_log.csv,positions.csv,portfolio_state.json}` (base live-state).
 - Paper only — no live orders without `BROKER_ADAPTER_ALLOW_SUBMIT=yes`.
-- New score_rebalance strategies should be validated in backtest first (see `make_freq_compare.py` /
-  the `make_zscore_*` family) before being trusted live — frictionless backtests are survivorship-biased.
+- New score_rebalance strategies should be validated in backtest first (see `research/make_freq_compare.py` /
+  the `research/make_zscore_*` family) before being trusted live — frictionless backtests are survivorship-biased.

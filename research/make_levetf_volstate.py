@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import yfinance as yf
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).parent.parent
 OUT = ROOT / "reports" / "levetf_volstate.pdf"
 TX = 0.0010                                  # 10 bp per switch
 THR = 0.0                                    # vol_z threshold (high vs low regime)

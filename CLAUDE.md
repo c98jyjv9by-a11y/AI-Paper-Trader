@@ -13,13 +13,13 @@ account uses it. Older/experimental versions (v2, v3, v5, v6) and one-off script
   max total exposure 0.90, ≤2 new trades/day; Barroso vol governor (target 0.35); score-gated
   15% stop (fires only when score<0.90), no take-profit (let winners run), 90-day max hold
   suppressed until score<0.80. **Do NOT change v4's ticker list** —
-  broad-universe runs (`make_cycle_test.py`) are test-only.
+  broad-universe runs (`research/make_cycle_test.py`) are test-only.
 - **Hedge overlay** — `src/hedge_overlay.py`. A standalone **overlay that sits ON TOP of model_v4
   and never modifies it.** Signal: QQQ 1-day up-shock + SPY 5d-vol z-spike → buy long **SOXS**
   (−3× inverse semis, 1-day hold, **never shorting**) sized inverse-vol; two-gate hybrid
   (soft=half / hard=full). Validated as the only working "June-16-pullback" hedge.
 - **Rebound overlay** — `src/rebound_overlay.py`. The standalone **mirror image** of the hedge (sits ON
-  TOP of model_v4, never modifies it). Trigger (`ReboundConfig`, tuned via `make_model_v4_rebound_sweep.py`):
+  TOP of model_v4, never modifies it). Trigger (`ReboundConfig`, tuned via `research/make_model_v4_rebound_sweep.py`):
   **QQQ −1d ≤ −2.5% AND `spread_trl_1d` < 0 (momentum signal inverting) AND z(**QQQ** 5d vol) ≥ 0.25 → buy
   TQQQ (+3×) at 50% of book, 1-day hold.** The `spread < 0` filter is the key — it selects the
   mean-reverting momentum-crash setups and skips trend-continuation knives. Small, robust, **tail-neutral**
@@ -34,14 +34,14 @@ account uses it. Older/experimental versions (v2, v3, v5, v6) and one-off script
   weight × held book). **Funding** (`rebound_funding`, default `trim`): cash first, then ROTATE — exit AT MOST
   `rebound_trim_max` (default **2**) holdings, the lowest by **5-day avg score** (`_avg_scores`, across all daily
   ranking snapshots whether held or not), to raise the shortfall; rest from cash, **overlay capped** if cash + 2
-  exits fall short (bounds turnover to 2 names). The trim sweep (`make_trim_funding_test.py`) confirmed ~50% stays
+  exits fall short (bounds turnover to 2 names). The trim sweep (`research/make_trim_funding_test.py`) confirmed ~50% stays
   near-optimal funded by rotation (costing ~0.02 ΔSharpe vs free cash). Set `cash` to cap the sleeve at available
   cash instead (no book sale). When it stops firing TQQQ
   leaves the target so the reconcile flattens it next session
   (= the 1-day exit) — the TQQQ **sell is forced to `cls` (market-on-close), even in `--extended-hours` mode**,
   so the exit only ever happens at the close, never intraday. The model decision never sees TQQQ (excluded like the hedge), so it isn't stop-managed.
   On by default for the trackers; opt out with manifest `rebound: false`. `python src/rebound_overlay.py
-  [--recommend [--live …]]`. Tuning analysis in `make_model_v4_rebound*.py` / `make_model_v4_{reverse,defense}.py`.
+  [--recommend [--live …]]`. Tuning analysis in `research/make_model_v4_rebound*.py` / `research/make_model_v4_{reverse,defense}.py`.
 - **Accounts** — `accounts/<name>/` is an append-only ledger system (immutable frozen core +
   `continuation/` living layer; SHA-256 manifest integrity via `account-verify`). Active accounts:
   `primary` (main paper book), `tracker` (frictionless ramp-up sim, assumes 10bp cost). **Broker-driven**
@@ -155,23 +155,23 @@ account uses it. Older/experimental versions (v2, v3, v5, v6) and one-off script
   to rebuild the sizing panel; `broker_sync.HEDGE_SYM` is `SQQQ` too.)
 - **Research artifacts** — `reports/` (dated EOD/status PDFs+md) and `backtests/` (dated
   CSVs/md) are generated outputs; regenerate, don't hand-edit. Current report/PDF tooling:
-  `make_model_v4_guide.py`, `make_hedge_recommendation.py`, `make_rolling_chart.py`,
-  `make_cycle_test.py`, `make_levetf_corr_tails.py` (the **corr_tails-by-horizon** report, rebuilt to ask
+  `research/make_model_v4_guide.py`, `research/make_hedge_recommendation.py`, `research/make_rolling_chart.py`,
+  `research/make_cycle_test.py`, `research/make_levetf_corr_tails.py` (the **corr_tails-by-horizon** report, rebuilt to ask
   *which trailing **model_v4 metrics** (scores/spread/baskets/vol from `model_v4_timeseries.csv`) predict
   forward **TQQQ** and **SQQQ** moves* — analysed separately per ETF, target = the ETF's own price return;
   correlation heatmap + tail UP/DN-gap call-outs → `reports/corr_tails_levetf.pdf`. The original model_v4
-  corr_tails generator was a lost one-off). `make_levetf_volstate.py` backtests the **vol-state tilt** that
+  corr_tails generator was a lost one-off). `research/make_levetf_volstate.py` backtests the **vol-state tilt** that
   finding implies (TQQQ-or-cash by QQQ realized-vol z-score; the robust rule is **risk-OFF** — hold TQQQ in
   calm, cash in vol spikes — not buy-the-stress; never hold SQQQ) → `reports/levetf_volstate.pdf`.
-  `make_levetf_shock.py` backtests a 1-day vol-gated **shock-reversal** (buy TQQQ if QQQ −1d<−2% & rel-vol≥0.75;
+  `research/make_levetf_shock.py` backtests a 1-day vol-gated **shock-reversal** (buy TQQQ if QQQ −1d<−2% & rel-vol≥0.75;
   buy SQQQ if +2% & rel-vol≥0.75; hold 1d) → `reports/levetf_shock.pdf` — strong in 2018-2022 (Sharpe 1.2) but
-  loses in 2022-2026 (regime-dependent, does NOT survive OOS). `make_model_v4_defense.py` compares two
+  loses in 2022-2026 (regime-dependent, does NOT survive OOS). `research/make_model_v4_defense.py` compares two
   same-day sell-off defenses on the model_v4 book — **A** a fast (10d) de-risk-to-cash governor vs **B** a
   structural 1-day SQQQ tranche (QQQ −2% & <200d MA & vol-z≥0.75) — vs no overlay → `reports/model_v4_defense.pdf`.
   Finding: **A** (cash) is the only one that defends (volatile-window Sharpe 0.74→0.82, MaxDD −34%→−29%,
   worst-day −9%→−6%); **B** (inverse ETF) *hurts* in stress and only 39% of fires win — buying SQQQ into
   sell-offs sells the bottom. Defend with exposure reduction, not inverse ETFs.
-  `make_model_v4_reverse.py` tests the hedge **in reverse** (down-shock → buy TQQQ for the rebound) as a
+  `research/make_model_v4_reverse.py` tests the hedge **in reverse** (down-shock → buy TQQQ for the rebound) as a
   model_v4 overlay, sweeping the TQQQ hold length → `reports/model_v4_reverse.pdf`. The 1-day bounce edge is
   real (60% win, +1.24%/bet) and boosts raw return, but it's **leverage, not alpha** — full-sample Sharpe is
   flat and tail risk worsens (worst-day −9%→−22%); **1-day hold is best, longer holds are strictly worse**

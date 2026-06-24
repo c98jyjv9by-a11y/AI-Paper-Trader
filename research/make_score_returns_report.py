@@ -8,7 +8,7 @@ import datetime as dt
 from pathlib import Path
 
 warnings.filterwarnings("ignore")
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 import numpy as np
 import pandas as pd
