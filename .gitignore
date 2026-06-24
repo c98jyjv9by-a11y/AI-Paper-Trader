@@ -18,3 +18,28 @@ reports/.llm_cache.jsonl
 backtests/collars.csv
 accounts/*/broker/cron.log
 accounts/*/broker/plan_*.json
+
+# Generated reports — regenerated outputs; nothing reads them back (keep a .gitkeep)
+reports/*
+!reports/.gitkeep
+
+# Generated backtest OUTPUTS (regenerable; not read as inputs). model_v4 inputs
+# (timeseries, daily_scores*, rankings_model_v4*, scenario_model_v4_*_{equity,trades})
+# and the model_v4 research summaries stay tracked.
+backtests/status_*
+backtests/backtest_*
+backtests/rank_report_*
+backtests/signal_screen*
+backtests/signal_calibration*
+backtests/ticker_override_*
+backtests/*_sensitivity.csv
+backtests/*_diagnostics.csv
+backtests/scenario_model_v2_*
+backtests/scenario_model_v3_*
+backtests/scenario_davids_model_*
+backtests/scenario_levi_test_*
+backtests/scenario_LevEtf_*
+backtests/model_v2_*
+backtests/rankings_model_v2_*
+backtests/rankings_model_v3_*
+backtests/rankings_LevEtf_*

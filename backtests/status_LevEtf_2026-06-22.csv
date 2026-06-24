@@ -1,3 +1,0 @@
-rank,ticker,score,clears_gate,rank_close_px,mark_px,return,held
-1,TQQQ,1.0,True,82.87000274658203,82.58000183105469,-0.003499467912583154,True
-2,SQQQ,0.5,False,36.75,36.93000030517578,0.004897967487776267,False
