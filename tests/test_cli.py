@@ -28,7 +28,7 @@ import main as agent
 def captured(monkeypatch):
     calls = {}
     monkeypatch.setattr(backtest, "run", lambda s, e, o=None: calls.update(cmd="backtest", s=s, e=e, o=o))
-    monkeypatch.setattr(experiments, "run", lambda s, e, o=None: calls.update(cmd="experiments", s=s, e=e, o=o))
+    monkeypatch.setattr(experiments, "run", lambda s, e, o=None, scenario=None: calls.update(cmd="experiments", s=s, e=e, o=o, scenario=scenario))
     monkeypatch.setattr(ticker_experiments, "run", lambda s, e: calls.update(cmd="ticker", s=s, e=e))
     monkeypatch.setattr(signal_calibration, "run",
                         lambda s, e, objective="total_return": calls.update(cmd="calibrate", s=s, e=e, objective=objective))

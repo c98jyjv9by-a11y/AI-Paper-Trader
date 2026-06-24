@@ -56,7 +56,8 @@ def _cmd_backtest(args: argparse.Namespace) -> None:
 def _cmd_experiments(args: argparse.Namespace) -> None:
     import experiments
     s, e = _dates(args)
-    experiments.run(s, e, Path(args.output) if args.output else None)
+    experiments.run(s, e, Path(args.output) if args.output else None,
+                    scenario=getattr(args, "scenario", None))
 
 
 def _cmd_ticker_experiments(args: argparse.Namespace) -> None:
@@ -179,6 +180,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     e = sub.add_parser("experiments", help="Strategy experiment profiles")
     _add_dates(e, with_output=True)
+    e.add_argument("--scenario", default=None,
+                   help="optional: overlay config/scenarios/<name>.yaml (universe + rules) first")
     e.set_defaults(func=_cmd_experiments)
 
     t = sub.add_parser("ticker-experiments",
@@ -310,6 +313,45 @@ def build_parser() -> argparse.ArgumentParser:
     md.add_argument("--out")
     md.set_defaults(func=_cmd_midday)
 
+    ms = sub.add_parser("midday-summary",
+                        help="One consolidated Midday Pulse summary across the model_v4 scenario + the broker accounts (topten/copymodel/rampup)")
+    ms.add_argument("--end", metavar="YYYY-MM-DD", help="the in-progress day to mark to (default: today)")
+    ms.add_argument("--accounts", nargs="*", help="override the default account list (topten/copymodel/rampup)")
+    ms.add_argument("--prepost", action="store_true",
+                    help="mark books to the latest extended-hours (pre/post-market) print")
+    ms.add_argument("--no-pdf", action="store_true", help="summary only; skip each book's midday PDF")
+    ms.add_argument("--out")
+    ms.set_defaults(func=_cmd_midday_summary)
+
+    es = sub.add_parser("eod-summary",
+                        help="One consolidated End-of-Day summary across the model_v4 scenario + the broker accounts (topten/copymodel/rampup)")
+    es.add_argument("--end", metavar="YYYY-MM-DD", help="the close to mark to (default: today)")
+    es.add_argument("--accounts", nargs="*", help="override the default account list (topten/copymodel/rampup)")
+    es.add_argument("--prepost", action="store_true",
+                    help="mark books to the latest extended-hours (pre/post-market) print")
+    es.add_argument("--no-pdf", action="store_true", help="summary only; skip each book's EOD PDF")
+    es.add_argument("--out")
+    es.set_defaults(func=_cmd_eod_summary)
+
+    sn = sub.add_parser("snapshot",
+                        help="One-page PDF performance snapshot (total return + vs-benchmark) across model_v4 + the Alpaca accounts")
+    sn.add_argument("--end", metavar="YYYY-MM-DD", help="as-of date (default: today)")
+    sn.add_argument("--window", default="1D",
+                    help="window for the return + P&L columns: 1D (default), 5D/10D/1M/3M/6M/1Y, MTD, YTD, or an int of trading days")
+    sn.add_argument("--accounts", nargs="*", help="override the default account list (topten/copymodel/rampup)")
+    sn.add_argument("--out")
+    sn.set_defaults(func=_cmd_snapshot)
+
+    ic = sub.add_parser("intraday-check",
+                        help="One-shot intraday trade check: live overlay signals (rebound/hedge) + dry-run account plans")
+    ic.add_argument("--accounts", nargs="+", help="override the default account list (topten/copymodel/rampup)")
+    ic.add_argument("--qqq", type=float, help="rebound what-if: override QQQ 1-day return")
+    ic.add_argument("--spread", type=float, help="rebound what-if: override momentum spread")
+    ic.add_argument("--vol-z", type=float, help="rebound what-if: override QQQ vol z")
+    ic.add_argument("--extended-hours", action="store_true", help="extended-hours marketable-limit plan")
+    ic.add_argument("--summary", action="store_true", help="also print the cross-book midday table")
+    ic.set_defaults(func=_cmd_intraday_check)
+
     return parser
 
 
@@ -401,6 +443,52 @@ def _cmd_midday(args: argparse.Namespace) -> None:
                          Path(args.out) if args.out else None, account=args.account,
                          prepost=args.prepost)
     print(f"Wrote {out}")
+
+
+def _cmd_midday_summary(args: argparse.Namespace) -> None:
+    import midday_summary
+    out, rows = midday_summary.run(
+        end=date.fromisoformat(args.end) if args.end else None,
+        output=Path(args.out) if args.out else None,
+        accounts=args.accounts or None,
+        prepost=args.prepost, want_pdf=not args.no_pdf)
+    ok = sum(1 for r in rows if not r.get("error"))
+    print(f"Wrote {out}  ({ok}/{len(rows)} books)")
+    for r in rows:
+        if r.get("error"):
+            print(f"  ! {r['label']}: {r['error']}")
+
+
+def _cmd_eod_summary(args: argparse.Namespace) -> None:
+    import eod_summary
+    out, rows = eod_summary.run(
+        end=date.fromisoformat(args.end) if args.end else None,
+        output=Path(args.out) if args.out else None,
+        accounts=args.accounts or None, prepost=args.prepost, want_pdf=not args.no_pdf)
+    ok = sum(1 for r in rows if not r.get("error"))
+    print(f"Wrote {out}  ({ok}/{len(rows)} books)")
+    for r in rows:
+        if r.get("error"):
+            print(f"  ! {r['label']}: {r['error']}")
+
+
+def _cmd_intraday_check(args: argparse.Namespace) -> None:
+    import intraday_check
+    intraday_check.run(getattr(args, "accounts", None), args.qqq, args.spread, args.vol_z,
+                       args.extended_hours, args.summary)
+
+
+def _cmd_snapshot(args: argparse.Namespace) -> None:
+    import snapshot
+    out, rows = snapshot.run(
+        end=date.fromisoformat(args.end) if args.end else None,
+        output=Path(args.out) if args.out else None,
+        accounts=args.accounts or None, window=args.window)
+    ok = sum(1 for r in rows if not r.get("error"))
+    print(f"Wrote {out}  ({ok}/{len(rows)} books)")
+    for r in rows:
+        if r.get("error"):
+            print(f"  ! {r['label']}: {r['error']}")
 
 
 def main(argv: Optional[List[str]] = None) -> None:

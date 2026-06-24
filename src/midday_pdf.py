@@ -18,11 +18,14 @@ Read-only w.r.t. data/.
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 import textwrap
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+log = logging.getLogger(__name__)
 
 import matplotlib
 matplotlib.use("Agg")
@@ -284,6 +287,7 @@ def _attribution_table(ax, y, d, cps, intra, retf, top, bottom):
     bot_i = add(_row(f"Bottom {len(bottom)} avg", bb, trend=True))
     add(hdr("◆ SIGNAL — is the ranking predicting?"), header=True)
     sig_i = add(_row("◆ Signal (Spread)", sig, trend=True), hi_row=True)
+    dwseq = None
     if holds:
         mseq, dseq, dwseq = sleeve(True), sleeve(False), dw_path()
         add(hdr("HELD BOOK — Signal Attribution"), header=True)
@@ -294,6 +298,40 @@ def _attribution_table(ax, y, d, cps, intra, retf, top, bottom):
                    for j in range(len(dwseq))]
             add(_row("  Sizing effect", siz, trend=True))
         add(_row("Book ($-wt) = Σ", dwseq, trend=True), emph_row=True)
+
+    # Overlay hedge suggested off the prior close — shown whenever it fired. The hedge instrument is
+    # now fetched intraday (anchored to its prior close), so the Hedge row shows a full intraday path;
+    # the book+hedge total and the hedge's marginal contribution are value-weighted at each checkpoint.
+    hed = d.get("hedge")
+    if hed and hed.get("fires") and hed.get("today") is not None:
+        add(hdr("OVERLAY HEDGE — suggested off prior close"), header=True)
+        hticker = hed.get("ticker", "SQQQ")
+        hpath = [at(hticker, h) for h, _ in cps]                       # SQQQ intraday vs its prior close
+        hed_seq = hpath + [hed["today"]]
+        add(_row(f"Hedge ({hed.get('tier', '')}, {(hed.get('weight') or 0) * 100:.1f}% wt)", hed_seq,
+                 trend=True))
+        # value-weight the hedge into the book at each checkpoint: combined = (1-wₕ)·book + wₕ·hedge,
+        # wₕ = hedge value / (book value + hedge value). Latest is tied exactly to held_dw / held_dw_book.
+        hdw, bdw = d.get("held_dw"), d.get("held_dw_book")
+        hv = float(hed.get("value") or 0.0)
+        _pos = d.get("positions")
+        book_val = (sum(float(p["shares"]) * float(p["current_price"]) for _, p in _pos.iterrows())
+                    if (_pos is not None and not _pos.empty) else 0.0)
+        wh = hv / (book_val + hv) if (book_val + hv) else 0.0
+        bk = dwseq if dwseq is not None else ([None] * len(cps) + [bdw])
+        comb_seq, contrib_seq = [], []
+        for j in range(len(cps) + 1):
+            bv, hvv = bk[j], hed_seq[j]
+            if bv is None or hvv is None:
+                comb_seq.append(bv); contrib_seq.append(None)
+            else:
+                c = (1 - wh) * bv + wh * hvv
+                comb_seq.append(c); contrib_seq.append(c - bv)
+        if hdw is not None:                                           # tie the Latest column exactly
+            comb_seq[-1] = hdw
+            contrib_seq[-1] = (hdw - bdw) if bdw is not None else contrib_seq[-1]
+        add(_row("  → hedge contribution", contrib_seq, trend=True))
+        add(_row("Book incl. hedge ($-wt) = Σ", comb_seq, trend=True), emph_row=True)
 
     # Signal-reversion flag: 2 consecutive hourly declines in the spread. Box those 2 columns +
     # the one before; ★ the cells driving the drop (signal itself, fading leaders, bid laggards).
@@ -323,7 +361,12 @@ def _attribution_takeaways(d, retf, top, bottom):
         return sum(v) / len(v) if v else None
     t, b = lat_avg(top), lat_avg(bottom)
     sig = (t - b) if (t is not None and b is not None) else None
-    book = d.get("held_dw")
+    book = d.get("held_dw")                       # total incl. hedge (ties to the held-book TOTAL row)
+    book_model = d.get("held_dw_book")            # model book only (pre-hedge), for the sleeve split
+    hed = d.get("hedge")
+    hedge_c = ((book - book_model) if (book is not None and book_model is not None
+                                       and hed and hed.get("fires")) else None)
+    _hsfx = f" + Hedge {P._pct(hedge_c)}" if hedge_c is not None else ""
     out = []
     if sig is not None:
         out.append(f"Momentum signal {'WORKING' if sig > 0 else 'INVERTED'} today: "
@@ -331,20 +374,22 @@ def _attribution_takeaways(d, retf, top, bottom):
     holds, _ma, _da = _held_sleeves(d)
     avail = [h for h in holds if retf and retf(h["t"]) is not None]
     if avail:
+        _base = book_model if book_model is not None else book      # decompose the MODEL book
         if SLEEVE_WEIGHT == "equal":
             n = len(avail)
             mc = sum(retf(h["t"]) for h in avail if h["mom"]) / n
             dc = sum(retf(h["t"]) for h in avail if not h["mom"]) / n
-            siz = (book - (mc + dc)) if book is not None else None
+            siz = (_base - (mc + dc)) if _base is not None else None
             out.append(f"Book {P._pct(book)} = Momentum (eq-wt) {P._pct(mc)} + Decoupled {P._pct(dc)} "
-                       f"+ Sizing {P._pct(siz)} — Sizing is what dollar-weighting (letting winners run) "
-                       f"added vs holding the names equal-weight.")
+                       f"+ Sizing {P._pct(siz)}{_hsfx} — Sizing is what dollar-weighting (letting winners "
+                       f"run) added vs equal-weight"
+                       + ("; Hedge is the overlay's drag/cushion." if hedge_c is not None else "."))
         else:                                                          # cap-weighted: pools sum to Book
             den = sum(h["w"] for h in avail)
             mc = sum(h["w"] * retf(h["t"]) for h in avail if h["mom"]) / den if den else None
             dc = sum(h["w"] * retf(h["t"]) for h in avail if not h["mom"]) / den if den else None
-            out.append(f"Book {P._pct(book)} = Momentum {P._pct(mc)} + Decoupled {P._pct(dc)} "
-                       f"(cap-weighted contributions — the bigger, winning positions dominate).")
+            out.append(f"Book {P._pct(book)} = Momentum {P._pct(mc)} + Decoupled {P._pct(dc)}{_hsfx} "
+                       f"(cap-weighted contributions; Hedge = the overlay's marginal effect).")
     if book is not None and t is not None:
         diff = book - t
         out.append(f"Mix effect: Book − Top-{len(top)} = {P._pct(diff)} — "
@@ -353,7 +398,7 @@ def _attribution_takeaways(d, retf, top, bottom):
     return out or ["(insufficient data for attribution)"]
 
 
-def _intraday_table(ax, y, title, tickers, intra, cps, retf, meta=None):
+def _intraday_table(ax, y, title, tickers, intra, cps, retf, meta=None, with_avg=True, row_h=0.016):
     y = P._section(ax, y, title)
     if not tickers:
         ax.text(0.075, y, "(none)", color=P.MIDGREY, fontsize=7.2, va="top")
@@ -384,11 +429,15 @@ def _intraday_table(ax, y, title, tickers, intra, cps, retf, meta=None):
         if seq[-1] is not None:
             lat.append(seq[-1])
     # AVG row: value sign-coloured + a per-cell ▲/▼/– arrow for change vs the prior checkpoint.
-    avg_seq = [sum(by_cp[h]) / len(by_cp[h]) if by_cp[h] else None for h, _ in cps] \
-        + [sum(lat) / len(lat) if lat else None]
-    al, ac, av, ag = _row("AVG", avg_seq, trend=True)
-    specs.append((al, [""] + ac, ["#1f2a3a"] + av, [None] + ag))
-    return _render_rows(ax, y, cols, cw, specs, {len(specs) - 1}, row_h=0.016, fs=6.8, hfs=6.5)
+    # Skipped (with_avg=False) for tiny tables like the 2-name benchmarks block, where it's redundant.
+    emph = set()
+    if with_avg:
+        avg_seq = [sum(by_cp[h]) / len(by_cp[h]) if by_cp[h] else None for h, _ in cps] \
+            + [sum(lat) / len(lat) if lat else None]
+        al, ac, av, ag = _row("AVG", avg_seq, trend=True)
+        specs.append((al, [""] + ac, ["#1f2a3a"] + av, [None] + ag))
+        emph = {len(specs) - 1}
+    return _render_rows(ax, y, cols, cw, specs, emph, row_h=row_h, fs=6.8, hfs=6.5)
 
 
 def _cps_for(d):
@@ -439,9 +488,15 @@ def paths_body(ax, d):
     _ps = {r["ticker"]: r["score"] for r in (d.get("rows") or [])}        # prior-close score
     _cs = {r["ticker"]: r["score"] for r in (d.get("rows_cur") or [])}    # current score
     meta = {t: (_ps.get(t), _cs.get(t)) for t in set(_ps) | set(_cs)}     # then→now per ticker
-    y = _intraday_table(ax, y, f"Prior Top {tn} (by EOD score)", top, intra, cps, retf, meta)
-    y = _intraday_table(ax, y - 0.006, f"Prior Bottom {tn} (by EOD score)", bottom, intra, cps, retf, meta)
-    y = _intraday_table(ax, y - 0.006, f"Currently held ({len(held)})", held, intra, cps, retf, meta)
+    # Benchmarks first — SPY/QQQ intraday paths (already fetched), for context on the held paths below.
+    # Compact (no AVG row); the three score tables below use a slightly tighter row to fit the extra
+    # block on one page without overlapping the footer.
+    rh = 0.0152
+    y = _intraday_table(ax, y, "Benchmarks — SPY / QQQ", ["SPY", "QQQ"], intra, cps, retf, meta,
+                        with_avg=False, row_h=rh)
+    y = _intraday_table(ax, y - 0.005, f"Prior Top {tn} (by EOD score)", top, intra, cps, retf, meta, row_h=rh)
+    y = _intraday_table(ax, y - 0.005, f"Prior Bottom {tn} (by EOD score)", bottom, intra, cps, retf, meta, row_h=rh)
+    y = _intraday_table(ax, y - 0.005, f"Currently held ({len(held)})", held, intra, cps, retf, meta, row_h=rh)
 
 
 def _page_attribution(pdf, d, cfg):
@@ -542,18 +597,22 @@ def _page2(pdf, d, cfg):
     y = P.render_current_book(ax, y, P.enrich_holdings(d),
                               npos=(0 if pos is None or pos.empty else len(pos)),
                               pv=d.get("pv"), cash=d.get("cash"), univ=d.get("univ_avg"),
-                              held_dw=d.get("held_dw"))
+                              held_dw=d.get("held_dw"), hedge=d.get("hedge"))
 
-    # Today's transactions so far
+    # Today's transactions so far (+ the overlay hedge, bought at the prior close, if it fired)
     tt = d.get("today_trades") or []
-    y = P._section(ax, y - 0.012, f"Today's transactions so far ({d['mark']})")
-    if not tt:
+    hed = d.get("hedge")
+    rows_tx = [[x["action"], x["ticker"], str(x["shares"]), P._money(x["price"], 2), x["reason"],
+                ("—" if x["pnl"] is None else P._money(x["pnl"]))] for x in tt]
+    if hed and hed.get("fires") and hed.get("shares"):
+        rows_tx.append(["BUY", "hedge", str(int(hed["shares"])), P._money(hed["price"], 2),
+                        f"hedge ({hed.get('tier','')}) — bought at prior close {hed.get('as_of','')}", "—"])
+    y = P._section(ax, y - 0.012, f"Transactions — today + active hedge ({d['mark']})")
+    if not rows_tx:
         ax.text(0.075, y, "No transactions yet today.", color=P.MIDGREY, fontsize=8.6, va="top"); y -= 0.03
     else:
         y = P._table(ax, y, ["Action", "Ticker", "Shares", "Price", "Reason", "Realized P&L"],
-                     [[x["action"], x["ticker"], str(x["shares"]), P._money(x["price"], 2), x["reason"],
-                       ("—" if x["pnl"] is None else P._money(x["pnl"]))] for x in tt],
-                     [0.13, 0.13, 0.12, 0.14, 0.30, 0.18],
+                     rows_tx, [0.13, 0.13, 0.12, 0.14, 0.30, 0.18],
                      align=["left", "left", "right", "right", "left", "right"], fontsize=7.6)
 
     # Signal scoreboard — prior (EOD) ranking vs latest (live) ranking, and is the signal holding?
@@ -614,6 +673,18 @@ def _page2(pdf, d, cfg):
     pdf.savefig(fig); P.plt.close(fig)
 
 
+def report_path(scenario: str, account: Optional[str], mark) -> Path:
+    """Unified midday output path: reports/midday/midday_<book>_<mark>.pdf — scenario AND every
+    account land in the SAME folder. Account books are named by account (not scenario) so the
+    scenario and all trackers (all on model_v4) don't collide."""
+    root = Path(__file__).parent.parent
+    mdir = root / "reports" / "midday"
+    mdir.mkdir(parents=True, exist_ok=True)
+    stem = account or scenario
+    m = mark.isoformat() if hasattr(mark, "isoformat") else str(mark)
+    return mdir / f"midday_{stem}_{m}.pdf"
+
+
 def build_pdf(d: Dict[str, Any], cfg: Dict[str, Any], out_path: Path) -> Path:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with PdfPages(out_path) as pdf:
@@ -648,12 +719,15 @@ def run(scenario: Optional[str] = None, start: Optional[date] = None, end: Optio
     # Use the prior EOD snapshot + intraday paths; never write a provisional snapshot.
     d = rank_report.build_report(scenario, start, end, cfg=cfg, write_snapshot=False,
                                  account=account, prepost=prepost)
-    if output:
-        out = Path(output)
-    elif account:
-        out = root / "accounts" / account / "reports" / f"midday_{scenario}_{d['mark'].isoformat()}.pdf"
-    else:
-        out = root / "reports" / f"midday_{scenario}_{d['mark'].isoformat()}.pdf"
+    # Broker accounts: overlay the LIVE Alpaca book (real avg-entry + current price + equity) so the
+    # intraday returns reflect actual fills, not the (possibly 1-day-old) ledger. Live render only.
+    if account and end >= date.today():
+        try:
+            import broker_sync
+            broker_sync.apply_live_broker_marks(d, account)
+        except Exception as exc:
+            log.warning("live broker marks skipped for %s: %s", account, exc)
+    out = Path(output) if output else report_path(scenario, account, d["mark"])
     return build_pdf(d, cfg, out)
 
 

@@ -1,7 +1,24 @@
-# ── model_v4 alpaca_tracker paper session (PAPER ONLY) ───────────────────────────
+# ── model_v4 Alpaca paper sessions (PAPER ONLY) — accounts: topten/copymodel/rampup ──
 # Times are America/Chicago (= ET-1, constant year-round). The wrapper ALSO self-guards
 # on the live ET market clock, so off-calendar runs no-op. Logs: account cron.log + /tmp.
-# open 9:25 ET (8:25 CT) · retry 10:05 ET (9:05 CT) · close 16:10 ET (15:10 CT)
-25 8  * * 1-5  cd /Users/david/PyCharmMiscProject/ai-paper-trader && /Users/david/PyCharmMiscProject/.venv/bin/python src/broker_cron.py --phase open  --account alpaca_tracker --live >> /tmp/mv4_cron.log 2>&1
-5  9  * * 1-5  cd /Users/david/PyCharmMiscProject/ai-paper-trader && /Users/david/PyCharmMiscProject/.venv/bin/python src/broker_cron.py --phase retry --account alpaca_tracker --live >> /tmp/mv4_cron.log 2>&1
-10 15 * * 1-5  cd /Users/david/PyCharmMiscProject/ai-paper-trader && /Users/david/PyCharmMiscProject/.venv/bin/python src/broker_cron.py --phase close --account alpaca_tracker        >> /tmp/mv4_cron.log 2>&1
+# open 9:25 ET (8:25 CT) · retry 10:05 ET (9:05 CT) · midday 12:30 ET (11:30 CT) · close 16:10 ET (15:10 CT)
+PYBIN=/Users/david/PyCharmMiscProject/.venv/bin/python
+APP=/Users/david/PyCharmMiscProject/ai-paper-trader
+
+# open (submit) — one line per account
+25 8  * * 1-5  cd $APP && $PYBIN src/broker_cron.py --phase open  --account topten --live >> /tmp/mv4_cron.log 2>&1
+25 8  * * 1-5  cd $APP && $PYBIN src/broker_cron.py --phase open  --account copymodel --live >> /tmp/mv4_cron.log 2>&1
+25 8  * * 1-5  cd $APP && $PYBIN src/broker_cron.py --phase open  --account rampup --live >> /tmp/mv4_cron.log 2>&1
+
+# retry (re-price unfilled at the wider collar)
+5  9  * * 1-5  cd $APP && $PYBIN src/broker_cron.py --phase retry --account topten --live >> /tmp/mv4_cron.log 2>&1
+5  9  * * 1-5  cd $APP && $PYBIN src/broker_cron.py --phase retry --account copymodel --live >> /tmp/mv4_cron.log 2>&1
+5  9  * * 1-5  cd $APP && $PYBIN src/broker_cron.py --phase retry --account rampup --live >> /tmp/mv4_cron.log 2>&1
+
+# midday — one consolidated cross-book summary (scenario + topten/copymodel/rampup; renders each book's PDF)
+30 11 * * 1-5  cd $APP && $PYBIN run.py midday-summary >> /tmp/mv4_cron.log 2>&1
+
+# close (reconcile fills/slippage + sync ledger + EOD PDF)
+10 15 * * 1-5  cd $APP && $PYBIN src/broker_cron.py --phase close --account topten >> /tmp/mv4_cron.log 2>&1
+10 15 * * 1-5  cd $APP && $PYBIN src/broker_cron.py --phase close --account copymodel >> /tmp/mv4_cron.log 2>&1
+10 15 * * 1-5  cd $APP && $PYBIN src/broker_cron.py --phase close --account rampup >> /tmp/mv4_cron.log 2>&1

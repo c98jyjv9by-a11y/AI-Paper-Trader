@@ -203,6 +203,59 @@ def _persistence_candidates(pdata: pd.DataFrame, cfg: Dict[str, Any], held: set,
     return sorted(above or set())
 
 
+def _close_is_final(mark_date) -> bool:
+    """Is the mark date's official close available (not a mid-session provisional bar)? True for any
+    past trading day; for TODAY, only once the regular session has closed (≥ 16:00 ET). Used to gate
+    the EOD hedge exit so it doesn't 'sell at the close' while the market is still open."""
+    from datetime import datetime
+    try:
+        from zoneinfo import ZoneInfo
+        now_et = datetime.now(ZoneInfo("America/New_York"))
+    except Exception:
+        now_et = datetime.now()
+    md = mark_date.date() if hasattr(mark_date, "date") else mark_date
+    if md < now_et.date():
+        return True
+    if md == now_et.date():
+        return now_et.hour >= 16            # regular-session close is 16:00 ET
+    return False
+
+
+def _hedge_as_of(book_mv: float, pv: float, as_of_ts, mark_ts) -> Optional[Dict[str, Any]]:
+    """The overlay hedge (default SQQQ, -3x inverse QQQ — `HedgeConfig.product`) as SUGGESTED AT
+    `as_of_ts`'s close (the prior close → the hedge active over the session being viewed). PURCHASE
+    price = that prior close; `now` = the mark price; `today` = the move between them. Returns the
+    hedge dict or None when it didn't fire. The hedge ETF isn't in the model panel, so this pulls
+    QQQ/SPY/<hedge> from yfinance and evaluates the up-shock + vol-z gate as of that date (rolling
+    stats are shifted → no look-ahead)."""
+    try:
+        import hedge_overlay as _ho, yfinance as _yf, numpy as _np
+        hsym = (_ho.HedgeConfig().hedge_ticker or "SQQQ").upper()
+        px = _yf.download(["QQQ", "SPY", hsym], period="1y", auto_adjust=True,
+                          progress=False)["Close"].dropna()
+        if px.empty:
+            return None
+        asof = px.index.asof(pd.Timestamp(as_of_ts))
+        if pd.isna(asof):
+            return None
+        up = float(px["QQQ"].pct_change().loc[asof])
+        sv = px["SPY"].pct_change().rolling(5).std() * _np.sqrt(252)
+        volz = float(((sv - sv.rolling(63).mean().shift(1)) / sv.rolling(63).std().shift(1)).loc[asof])
+        rec = _ho.recommend(market_value=book_mv, up_override=up, volz_override=volz)
+        if not (rec.get("fires") and book_mv > 0):
+            return None
+        spx = float(px[hsym].loc[asof])                      # PURCHASE price = the prior close
+        now = float(px[hsym].asof(pd.Timestamp(mark_ts)))    # current / mark price
+        today = (now / spx - 1) if spx else None
+        return {"fires": True, "ticker": hsym, "shares": int(rec["hedge_dollars"] / spx) if spx else 0,
+                "price": spx, "now": now, "value": rec["hedge_dollars"], "weight": rec["weight"],
+                "tier": rec["tier"], "today": today, "navpct": (rec["hedge_dollars"] / pv) if pv else None,
+                "as_of": str(asof.date()),
+                "reason": "hedge: %s gate (%.1f%% of book MV)" % (rec["tier"], rec["weight"] * 100)}
+    except Exception:
+        return None
+
+
 def _next_session_block(cfg, pdata, positions, held, pv, cash, em, rows_cur, start,
                         ramp_up=None) -> Dict[str, Any]:
     """Queued decision for next session (decide at last close → fill next open), plus an
@@ -230,30 +283,41 @@ def _next_session_block(cfg, pdata, positions, held, pv, cash, em, rows_cur, sta
         ns = next_session_decision(cfg, pdata, start)
         buys, sells = ns["buys"], ns["sells"]
         buys = [b for b in buys if b["ticker"] not in held]   # never queue a buy for a name already held
-    # up-shock+vol SOXS hedge, sized off the book AFTER the queued buys (current MV + queued-buy notional).
-    # Signal from the latest available closes (the panel's ETF rows lag a day).
+    # up-shock+vol hedge (SQQQ, -3x inverse QQQ), sized off the book AFTER the queued buys (current MV +
+    # queued-buy notional). Signal from the latest available closes (the panel's ETF rows lag a day).
+    # When it fires we also surface a `hedge` dict (with the instrument's own session move) so the reports
+    # can show it as a held-book + attribution line item — "the hedge suggested from the prior close".
+    hedge = None
     if (ramp_up is None) or ramp_up.get("hedge", True):
         try:
             import hedge_overlay as _ho, yfinance as _yf, numpy as _np
+            _hsym = (_ho.HedgeConfig().hedge_ticker or "SQQQ").upper()
             mv = max((pv or 0.0) - (cash or 0.0), 0.0) + sum(b["value"] for b in buys)  # post-buy book
-            px = _yf.download(["QQQ", "SPY", "SOXS"], period="1y", auto_adjust=True,
+            px = _yf.download(["QQQ", "SPY", _hsym], period="1y", auto_adjust=True,
                               progress=False)["Close"].dropna()
             qup = float(px["QQQ"].pct_change().iloc[-1])
             sv = px["SPY"].pct_change().rolling(5).std() * _np.sqrt(252)
             volz = float(((sv - sv.rolling(63).mean().shift(1)) / sv.rolling(63).std().shift(1)).iloc[-1])
             rec = _ho.recommend(market_value=mv, up_override=qup, volz_override=volz)
             if rec.get("fires") and mv > 0:
-                spx = float(px["SOXS"].iloc[-1])
-                buys.append({"ticker": "SOXS", "shares": int(rec["hedge_dollars"] / spx) if spx else 0,
-                             "price": spx, "value": rec["hedge_dollars"],
-                             "reason": "hedge: %s gate (%.1f%% of post-buy book MV)" % (rec["tier"], rec["weight"] * 100)})
+                spx = float(px[_hsym].iloc[-1])
+                sh = int(rec["hedge_dollars"] / spx) if spx else 0
+                hedge_today = float(px[_hsym].pct_change().iloc[-1])     # the hedge's own session move
+                reason = "hedge: %s gate (%.1f%% of post-buy book MV)" % (rec["tier"], rec["weight"] * 100)
+                hedge = {"fires": True, "ticker": _hsym, "shares": sh, "price": spx,
+                         "value": rec["hedge_dollars"], "weight": rec["weight"], "tier": rec["tier"],
+                         "today": hedge_today, "navpct": (rec["hedge_dollars"] / pv) if pv else None,
+                         "reason": reason}
+                buys.append({"ticker": _hsym, "shares": sh, "price": spx,
+                             "value": rec["hedge_dollars"], "reason": reason})
         except Exception:
             pass
     if ramp_up:
         buy_reason = None if buys else ("No ramp-up entry: no unheld name scores >= %.2f." % float(ramp_up.get("entry_score", 0.9)))
         return {"buys": buys, "sells": sells, "buy_reason": buy_reason,
                 "sell_reason": "Ramp-up phase: accumulate only — exits follow model_v4 once ramp-up ends.",
-                "invested_frac": ((pv - cash) / pv) if pv else 0.0, "exposure_cap_frac": None}
+                "invested_frac": ((pv - cash) / pv) if pv else 0.0, "exposure_cap_frac": None,
+                "hedge": hedge}
     risk = cfg.get("risk", {})
     base_exp = float(cfg["portfolio"]["max_total_exposure"])
     cap = base_exp * (em or 1.0)
@@ -298,7 +362,7 @@ def _next_session_block(cfg, pdata, positions, held, pv, cash, em, rows_cur, sta
         sell_reason = "No exit triggered — " + "; ".join(bits) + "."
 
     return {"buys": buys, "sells": sells, "buy_reason": buy_reason, "sell_reason": sell_reason,
-            "invested_frac": invested, "exposure_cap_frac": cap}
+            "invested_frac": invested, "exposure_cap_frac": cap, "hedge": hedge}
 
 
 def _write_ranking_snapshot(root: Path, scenario: str, d, ranked_rows) -> None:
@@ -320,7 +384,8 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
                  eq: Optional[pd.DataFrame] = None, positions: Optional[pd.DataFrame] = None,
                  trades: Optional[pd.DataFrame] = None, fast: bool = False,
                  write_snapshot: Optional[bool] = None, with_intraday: Optional[bool] = None,
-                 account: Optional[str] = None, prepost: bool = False) -> Dict[str, Any]:
+                 account: Optional[str] = None, prepost: bool = False,
+                 at_close: bool = False) -> Dict[str, Any]:
     """Build the rank/status snapshot. The scenario run can pass its already-computed
     cfg/pdata/eq/positions to avoid re-fetching and re-running the backtest.
 
@@ -411,6 +476,60 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
     pv = float(eq["total_portfolio_value"].iloc[-1])
     cash = float(eq["cash"].iloc[-1])
     starting = float(cfg["portfolio"]["starting_value"])
+
+    # Overlay hedge suggested at the prior close (active over this session). Treat a fired hedge as a
+    # REAL trade made at the prior close: bought OUT OF CASH (cost = shares × prior-close price) and
+    # now marked to `now`. Cash drops by the cost, pv reflects its mark (pv += hedge P&L), the buy
+    # shows in recent transactions, and its return folds into BOTH held-book rollups. Computed HERE
+    # (before the intraday fetch) so the hedge instrument can be pulled intraday too.
+    _hedge = _hedge_as_of(max((pv or 0.0) - (cash or 0.0), 0.0), pv, rank_close, mark)
+    _hr = float(_hedge["today"]) if (_hedge and _hedge.get("today") is not None) else None
+    _hedge_trade = None
+    _hv = _hcost = _hpnl = 0.0
+    if _hedge and _hr is not None and _hedge.get("shares"):
+        _hcost = float(_hedge["shares"]) * float(_hedge["price"])                 # purchase at prior close
+        _hnow = float(_hedge["shares"]) * float(_hedge.get("now", _hedge["price"]))  # current mark
+        _hv = _hnow; _hpnl = _hnow - _hcost
+        _hedge["value"] = _hnow; _hedge["cost"] = _hcost
+        _hedge_trade = {"date": rank_close.date().isoformat(), "action": "BUY",
+                        "ticker": _hedge["ticker"], "shares": int(_hedge["shares"]),
+                        "price": float(_hedge["price"]), "reason": _hedge.get("reason", "hedge"),
+                        "pnl": None}
+
+    # Rebound overlay (standalone, model untouched): did the down-shock + signal<0 + vol-up combo fire
+    # at the PRIOR close? Surfaced as a SEPARATE status line (NOT folded into the book rollups) — a
+    # 1-day TQQQ buy. Panel-based trigger; session P&L (prior close -> mark) fetched only on a fire.
+    _rebound = None
+    try:
+        import rebound_overlay as _ro
+        _bmv = max((pv or 0.0) - (cash or 0.0), 0.0)
+        _ras = rank_close.isoformat() if hasattr(rank_close, "isoformat") else str(rank_close)
+        _rebound = _ro.recommend(market_value=_bmv, as_of=_ras)
+        if _rebound and _rebound.get("fires"):
+            import yfinance as _yf
+            _tp = _yf.download(_rebound["instrument"], start=(rank_close - pd.Timedelta(days=6)),
+                               end=(mark + pd.Timedelta(days=1)), auto_adjust=True, progress=False)["Close"]
+            _tp = (_tp if not hasattr(_tp, "columns") else _tp.iloc[:, 0]).dropna()
+            if len(_tp) >= 2:
+                _p0, _p1 = float(_tp.asof(rank_close)), float(_tp.iloc[-1])
+                if _p0:
+                    _rebound["ret"] = _p1 / _p0 - 1.0
+                    _rebound["pnl"] = _rebound["rebound_dollars"] * _rebound["ret"]
+    except Exception:
+        _rebound = None
+
+    # EOD EXIT: the hedge is a 1-DAY overlay — it's sold at the session's CLOSE. When the EOD report
+    # runs and the final close is available, record the SELL (realized P&L = mark − entry), mark the
+    # hedge closed, and book the proceeds back to cash (it's no longer a held position at day's end).
+    _hedge_sell = None
+    if at_close and _hedge and _hedge.get("shares") and _hr is not None and _close_is_final(mark):
+        _exit_px = float(_hedge.get("now", _hedge["price"]))
+        _hedge["closed"] = True
+        _hedge["exit_price"] = _exit_px
+        _hedge["realized_pnl"] = _hpnl
+        _hedge_sell = {"date": mark.date().isoformat(), "action": "SELL", "ticker": _hedge["ticker"],
+                       "shares": int(_hedge["shares"]), "price": _exit_px,
+                       "reason": "hedge exit — 1-day overlay sold at close", "pnl": _hpnl}
 
     # Extended-hours: re-mark the held book to the after-hours print and recompute portfolio
     # value (cash is unchanged; only the marked equity moves) so every "Now"/Value/%NAV/PV
@@ -507,6 +626,10 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
             # Anchor each needed ticker to its actual prior close (not just the snapshot rows),
             # so held names outside the top/bottom-N still get intraday checkpoints.
             pc_map = {t: _px(t, rank_close) for t in set(need) if _px(t, rank_close)}
+            # Include the overlay hedge instrument (not in the model panel) anchored to ITS prior
+            # close, so the hedge return shows intraday checkpoints too — not just a closing mark.
+            if _hedge and _hedge.get("ticker") and _hedge.get("price"):
+                need.append(_hedge["ticker"]); pc_map[_hedge["ticker"]] = float(_hedge["price"])
             intraday = intraday_returns(sorted(set(need)), mark.date(), pc_map)
         except Exception as exc:                          # intraday is a nicety; never fail the report
             log.warning("Intraday checkpoints skipped: %s", exc)
@@ -537,23 +660,32 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
         except Exception:
             _ramp_up_cfg = None
     n_gate = sum(1 for _, r in rf.iterrows() if (min_score is None or r["composite_score"] >= min_score))
-    # Dollar-weighted held-book return — weights by CURRENT market value so it equals the
-    # attribution table's Book row exactly: held_dw = Σ wᵢ·retᵢ, wᵢ = sharesᵢ·markᵢ /
-    # Σ(shares·mark), cash-excluded, retᵢ = return vs the prior close. (Single definition of
-    # the book return reused across the midday/EOD reports and the sleeve attribution.)
+    # Dollar-weighted held-book return — weights by CURRENT market value (cash-excluded), retᵢ =
+    # return vs the prior close. The hedge is added value-weighted (by its notional) so the TOTAL
+    # row of the held book ties out to book + hedge. (Single definition of the book return reused
+    # across the midday/EOD reports and the sleeve attribution.)
     def _mk(t):
         return close.loc[mark, t] if (t in close.columns and not pd.isna(close.loc[mark, t])) else None
     dw_num = sum(p["shares"] * _mk(p["ticker"]) * (ret(p["ticker"]) or 0.0)
                  for _, p in positions.iterrows() if _mk(p["ticker"]) is not None)
     dw_den = sum(p["shares"] * _mk(p["ticker"])
                  for _, p in positions.iterrows() if _mk(p["ticker"]) is not None)
+    held_dw_book = (dw_num / dw_den) if dw_den else None      # book-only (pre-hedge), for attribution
+    if _hr is not None and _hv > 0:
+        dw_num += _hv * _hr; dw_den += _hv
     held_dw = (dw_num / dw_den) if dw_den else None
 
-    # portfolio vs benchmarks (trailing windows from the run's equity)
+    # portfolio vs benchmarks (trailing windows). Anchor the windows to the PRICE CALENDAR
+    # (close.index), NOT the equity-curve dates: a brand-new account's equity series has only
+    # today's row(s), so anchoring to P.index[-2] would land on today itself and zero out every
+    # benchmark return. The price calendar always has the real prior closes, so SPY/QQQ are correct;
+    # the portfolio leg returns None (—) for windows older than the ledger (and the broker-marks
+    # overlay fills today's portfolio return from live equity/last_equity for broker accounts).
     P = eq.copy(); P["date"] = pd.to_datetime(P["date"]); P = P.set_index("date")["total_portfolio_value"]
     spy, qqq = close["SPY"], close["QQQ"]
-    anchors = {"1D": P.index[-2] if len(P) >= 2 else P.index[0],
-               "5D": P.index[-6] if len(P) >= 6 else P.index[0],
+    cal = close.index
+    anchors = {"1D": cal[-2] if len(cal) >= 2 else cal[0],
+               "5D": cal[-6] if len(cal) >= 6 else cal[0],
                "MTD": pd.Timestamp(mark.year, mark.month, 1)}
     stats = {w: {"port": _win_ret(P, a), "spy": _win_ret(spy, a), "qqq": _win_ret(qqq, a)}
              for w, a in anchors.items()}
@@ -564,22 +696,57 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
         "spy": float(spy.iloc[-1]) / float((_spy_s if len(_spy_s) else spy).iloc[0]) - 1,
         "qqq": float(qqq.iloc[-1]) / float((_qqq_s if len(_qqq_s) else qqq).iloc[0]) - 1,
     }
+    # Make the PORTFOLIO (session) returns HEDGE-INCLUSIVE: today's portfolio value reflects the
+    # overlay hedge's mark (pv + _hpnl), and the prior anchors held the hedge at cost (bought at the
+    # prior close → no P&L yet then), so scale each window's endpoint up by the hedge P&L. This lines
+    # "Session so far" / the window port column up with the Portfolio card and the held-book TOTAL.
+    if _hpnl and pv:
+        _bump = _hpnl / pv
+        for _w in list(stats.keys()):
+            _b = stats[_w].get("port")
+            if _b is not None:
+                stats[_w]["port"] = (1 + _bump) * (1 + _b) - 1
+
+    _ns = _next_session_block(cfg, pdata, positions, held, pv, cash,
+                              (float(eq["exposure_mult"].iloc[-1])
+                               if "exposure_mult" in eq.columns else 1.0),
+                              rows_cur, start, ramp_up=_ramp_up_cfg)
+
+    # DISPLAY cash/pv reflect the hedge trade (next_session above intentionally sized off the
+    # pre-hedge book). pv += the hedge's mark-to-market P&L either way; cash ↓ by the purchase cost
+    # while HELD, but when CLOSED at EOD the proceeds (mark value) come back to cash, leaving the
+    # hedge flat (cash net = original − cost + proceeds = original + P&L; no held hedge position).
+    _hedge_closed = bool(_hedge and _hedge.get("closed"))
+    _pv_disp = (pv or 0.0) + _hpnl
+    _cash_disp = (cash or 0.0) - _hcost + (_hv if _hedge_closed else 0.0)
+    if _hedge:
+        # a closed hedge holds 0 shares at day's end → no %NAV (its realized P&L is in the trades)
+        _hedge["navpct"] = 0.0 if _hedge_closed else ((_hedge.get("value") / _pv_disp) if _pv_disp else None)
+    _recent = _recent_trades(trades, 10)
+    if _hedge_trade:                                  # show the hedge buy among recent transactions
+        _recent = (_recent + [_hedge_trade])[-10:]
+    _today = _today_trades(
+        trades, _acct_asof or (str(eq["date"].iloc[-1]) if (eq is not None and len(eq))
+                               else mark.date().isoformat()))
+    if _hedge_sell:                                   # the EOD hedge exit shows among today's trades
+        _today = _today + [_hedge_sell]
 
     return {
         "scenario": scenario, "rank_close": rank_close.date(), "mark": mark.date(),
         "min_score": min_score, "rows": rows, "n": n, "top_n": top_n,
+        # held-book + attribution hedge line = the overlay suggested AT THE PRIOR CLOSE (the hedge
+        # active over THIS session), with its move into the mark. The NEXT-session hedge (to act on
+        # at the next open) stays separate in next_session.buys.
+        "hedge": _hedge,
+        "rebound": _rebound,                 # standalone rebound overlay status (separate sleeve, not folded in)
+        "held_dw_book": held_dw_book,        # book-only $-wt return (pre-hedge) — for the attribution split
         "snapshot_used": snapshot_used, "prepost": bool(mark_note), "mark_note": mark_note,
         # vol-targeting risk budget (latest bar): forecast vol + exposure multiplier
         # "today" = the account's live_through (authoritative, fixed) for accounts; else the
         # equity/mark date. Robust to price-mark/extended-hours shifts so the day's fills show.
-        "today_trades": _today_trades(
-            trades, _acct_asof or (str(eq["date"].iloc[-1]) if (eq is not None and len(eq))
-                                   else mark.date().isoformat())),
-        "recent_trades": _recent_trades(trades, 10),
-        "next_session": _next_session_block(cfg, pdata, positions, held, pv, cash,
-                                            (float(eq["exposure_mult"].iloc[-1])
-                                             if "exposure_mult" in eq.columns else 1.0),
-                                            rows_cur, start, ramp_up=_ramp_up_cfg),
+        "today_trades": _today,
+        "recent_trades": _recent,
+        "next_session": _ns,
         "target_vol": cfg.get("risk", {}).get("target_vol"),
         "forecast_vol": (float(eq["forecast_vol"].dropna().iloc[-1])
                          if "forecast_vol" in eq.columns and eq["forecast_vol"].notna().any() else None),
@@ -590,9 +757,15 @@ def build_report(scenario: str, start: date, end: date, top_n: int = 10,
         "advancers": advancers, "n_gate": n_gate,
         "rows_cur": rows_cur, "n_gate_cur": sum(1 for x in rows_cur if x["clears_gate"]),
         "intraday": intraday, "entry_scores": entry_scores,
-        "held_avg": (sum(held_rets) / len(held_rets)) if held_rets else None,
+        # equal-weight held-book return — the hedge is folded in as one extra equal line item
+        "held_avg": (((sum(held_rets) + (_hr if _hr is not None else 0.0)) /
+                      (len(held_rets) + (1 if _hr is not None else 0)))
+                     if (held_rets or _hr is not None) else None),
         "held_dw": held_dw,
-        "positions": positions, "pv": pv, "cash": cash, "ret": ret, "stats": stats,
+        "positions": positions, "pv": _pv_disp, "cash": _cash_disp, "ret": ret, "stats": stats,
+        # date-indexed series so callers (e.g. the snapshot) can compute ANY common trailing window:
+        # the book's equity curve and the SPY/QQQ closes (the price calendar = bench index).
+        "eq_series": P, "spy_series": spy, "qqq_series": qqq,
         "start": start, "end": end,
     }
 

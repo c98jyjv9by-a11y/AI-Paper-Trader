@@ -121,6 +121,9 @@ class AlpacaPaper:
         a = self._get(f"{self.host}/v2/account")
         return {"status": a.get("status"), "cash": float(a.get("cash", 0)),
                 "equity": float(a.get("equity", 0)), "buying_power": float(a.get("buying_power", 0)),
+                # last_equity = equity at the PRIOR trading day's close → real intraday portfolio
+                # return = equity / last_equity - 1 (works even for a 1-day-old ledger).
+                "last_equity": float(a.get("last_equity", 0)),
                 "is_paper": True, "blocked": a.get("trading_blocked")}
 
     def positions(self) -> List[Dict[str, Any]]:
@@ -218,12 +221,15 @@ def build_orders(intended: List[Dict[str, Any]], prices: Dict[str, Dict[str, flo
 
 def build_reconcile_orders(targets: Dict[str, float], current: Dict[str, float],
                            prices: Dict[str, Dict[str, float]], collars: Dict[str, Dict[str, float]],
-                           asof: str, retry: bool = False) -> List[Dict[str, Any]]:
+                           asof: str, retry: bool = False, extended: bool = False) -> List[Dict[str, Any]]:
     """RECONCILE-TO-TARGET: trade only the difference between the target book {sym:shares} and the
     broker's current {sym:shares}, as LIMIT orders with a per-symbol collar (tif=day).
       buy limit  = ref_mid * (1 + collar)      sell limit = ref_mid * (1 - collar)
-    `retry=True` uses each symbol's wider retry collar. This nets the hedge roll and never
-    re-buys names already held."""
+    `retry=True` uses each symbol's wider retry collar. `extended=True` is a FILL-NOW pass for the
+    pre/post-market session: a `tif=day, extended_hours=True` LIMIT whose collar price sits across the
+    spread (buy above / sell below the mid) so it's MARKETABLE and fills now — but the collar still
+    caps how far it can chase, so a name that gaps past the cap simply won't fill. This nets the hedge
+    roll and never re-buys names already held."""
     orders = []
     for s in sorted(set(targets) | set(current)):
         tgt, cur = int(round(targets.get(s, 0))), int(round(current.get(s, 0)))
@@ -231,30 +237,23 @@ def build_reconcile_orders(targets: Dict[str, float], current: Dict[str, float],
         ref = (prices.get(s) or {}).get("mid") or 0.0
         if delta == 0 or not ref:
             continue
-        coll = (collars.get(s) or {}).get("retry" if retry else "collar", 0.02)
+        coll = (collars.get(s) or {}).get("retry" if (retry or extended) else "collar", 0.02)
         side = "buy" if delta > 0 else "sell"
         lim = ref * (1 + coll) if side == "buy" else ref * (1 - coll)
         # First attempt: LIMIT-ON-OPEN (buy) / LIMIT-ON-CLOSE (sell) — targets the next auction, so
         # it can be pre-staged (incl. weekend via --prequeue) and fills at the open within the collar.
-        # Retry pass: a plain DAY limit — an intraday working order at the wider collar.
-        tif = "day" if retry else ("opg" if side == "buy" else "cls")
-        orders.append({"symbol": s, "qty": str(abs(delta)), "side": side, "type": "limit",
-                       "limit_price": round(lim, 2), "time_in_force": tif,
-                       "client_order_id": f"mv4-{asof}-{side}-{s}",
-                       "_plan": {"ref_mid": ref, "collar": coll, "target": tgt, "current": cur,
-                                 "tif": tif, "est_value": round(abs(delta) * ref, 2)}})
+        # Retry / extended-hours passes: a plain DAY limit (extended adds extended_hours so it works
+        # the pre/post-market book now, at the wider collar to cross the typically-wider AH spread).
+        tif = "day" if (retry or extended) else ("opg" if side == "buy" else "cls")
+        o = {"symbol": s, "qty": str(abs(delta)), "side": side, "type": "limit",
+             "limit_price": round(lim, 2), "time_in_force": tif,
+             "client_order_id": f"mv4-{asof}-{side}-{s}",
+             "_plan": {"ref_mid": ref, "collar": coll, "target": tgt, "current": cur,
+                       "tif": ("day-ext" if extended else tif), "est_value": round(abs(delta) * ref, 2)}}
+        if extended:
+            o["extended_hours"] = True              # fill in the current pre/post-market session
+        orders.append(o)
     return orders
-
-
-def reconcile(intended_book: Dict[str, float], broker_positions: List[Dict[str, Any]]) -> List[str]:
-    """Compare a target {ticker: shares} book vs the broker's actual positions; report diffs."""
-    have = {p["ticker"]: p["qty"] for p in broker_positions}
-    lines, names = [], sorted(set(intended_book) | set(have))
-    for t in names:
-        want, got = intended_book.get(t, 0.0), have.get(t, 0.0)
-        if abs(want - got) > 1e-6:
-            lines.append(f"  {t}: target {want:g} vs broker {got:g}  (Δ {want-got:+g})")
-    return lines or ["  (book matches broker)"]
 
 
 def queue_from_account(name: str) -> List[Dict[str, Any]]:
@@ -278,6 +277,51 @@ def queue_from_account(name: str) -> List[Dict[str, Any]]:
         out.append({"action": "SELL", "ticker": s["ticker"], "shares": s.get("shares"),
                     "role": "exit", "price": s.get("price")})
     return out
+
+
+def topn_from_account(name: str, top_n: int = 10) -> List[Dict[str, Any]]:
+    """The top-N names by *current* composite score for this account's scenario, as intended BUYs.
+    Reads the live ranking (rank_report's current-price ranking, `rows_cur`) — independent of the
+    ramp-up >0.9 gate that drives queue_from_account. Sizing is applied by the caller (it needs the
+    live account equity); each item carries the latest mark in `price`. Returns
+    [{action:'BUY', ticker, price, score, role:'entry'}] for the N highest current scores."""
+    sys.path.insert(0, str(ROOT / "src"))
+    import rank_report
+    from scenarios import build_config, load_scenario
+    from backtest import load_config
+    from account import load_manifest
+    man = load_manifest(name)
+    cfg = build_config(load_config(ROOT / "config"), load_scenario(man["scenario"]))
+    d = rank_report.build_report(man["scenario"], date.fromisoformat(man["inception"]),
+                                 date.fromisoformat(man.get("live_through", man["frozen_through"])),
+                                 cfg=cfg, account=name, top_n=top_n,
+                                 write_snapshot=False, with_intraday=False)
+    rows = sorted(d.get("rows_cur") or [], key=lambda r: r["rank"])[:top_n]
+    return [{"action": "BUY", "ticker": r["ticker"], "price": r.get("price"),
+             "score": r["score"], "role": "entry"} for r in rows]
+
+
+def score_gate_from_account(name: str, min_score: float = 0.9) -> List[Dict[str, Any]]:
+    """Names whose *current* composite score is >= `min_score` (the ramp-up gate), at current ranks,
+    as intended BUYs. Reads the live ranking (rank_report's current-price ranking, `rows_cur`) —
+    a score THRESHOLD, not a fixed count, so the set grows/shrinks with how many names clear the
+    gate. Each item carries the latest mark in `price`; sizing is applied by the caller. Returns
+    [{action:'BUY', ticker, price, score, role:'entry'}] sorted by current rank."""
+    sys.path.insert(0, str(ROOT / "src"))
+    import rank_report
+    from scenarios import build_config, load_scenario
+    from backtest import load_config
+    from account import load_manifest
+    man = load_manifest(name)
+    cfg = build_config(load_config(ROOT / "config"), load_scenario(man["scenario"]))
+    d = rank_report.build_report(man["scenario"], date.fromisoformat(man["inception"]),
+                                 date.fromisoformat(man.get("live_through", man["frozen_through"])),
+                                 cfg=cfg, account=name, write_snapshot=False, with_intraday=False)
+    rows = [r for r in (d.get("rows_cur") or [])
+            if r.get("score") is not None and r["score"] >= min_score]
+    rows = sorted(rows, key=lambda r: r["rank"])
+    return [{"action": "BUY", "ticker": r["ticker"], "price": r.get("price"),
+             "score": r["score"], "role": "entry"} for r in rows]
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────────────────

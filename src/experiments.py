@@ -531,18 +531,26 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--start", required=True, metavar="YYYY-MM-DD")
     p.add_argument("--end", required=True, metavar="YYYY-MM-DD")
     p.add_argument("--output", default=None, metavar="DIR")
+    p.add_argument("--scenario", default=None,
+                   help="optional: overlay config/scenarios/<name>.yaml (universe + rules) before running")
     return p.parse_args()
 
 
-def run(start_date: date, end_date: date, output: Optional[Path] = None) -> Dict[str, str]:
-    """Run the strategy-experiment profiles and write outputs."""
+def run(start_date: date, end_date: date, output: Optional[Path] = None,
+        scenario: Optional[str] = None) -> Dict[str, str]:
+    """Run the strategy-experiment profiles and write outputs. `scenario` (optional) overlays a
+    named scenario (config/scenarios/<name>.yaml) onto the base config first, so profiles run on
+    that scenario's universe/rules; default None = the base config (unchanged behavior)."""
     setup_logging()
     run_date = date.today()
     root = Path(__file__).parent.parent
     config = load_config(root / "config")
+    if scenario:
+        from scenarios import build_config, load_scenario
+        config = build_config(config, load_scenario(scenario))
     output_dir = output if output else root / "backtests"
 
-    log.info("=== AI Paper Trader Experiments ===")
+    log.info("=== AI Paper Trader Experiments%s ===", f" — scenario {scenario}" if scenario else "")
     price_data = fetch_backtest_data(config["tickers"], start_date, end_date)
 
     results = run_experiments(config, price_data, start_date, end_date)
@@ -574,7 +582,7 @@ def main() -> None:
     if end_date <= start_date:
         print("Error: --end must be after --start")
         sys.exit(1)
-    run(start_date, end_date, Path(args.output) if args.output else None)
+    run(start_date, end_date, Path(args.output) if args.output else None, scenario=args.scenario)
 
 
 if __name__ == "__main__":

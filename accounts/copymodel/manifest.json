@@ -1,0 +1,29 @@
+{
+  "name": "copymodel",
+  "scenario": "model_v4",
+  "status": "living",
+  "inception": "2026-06-22",
+  "frozen_through": "2026-06-22",
+  "live_through": "2026-06-24",
+  "starting_value": 100000.0,
+  "ending_value": 100000.0,
+  "total_return": 0.0,
+  "n_trades": 0,
+  "n_positions": 9,
+  "broker": "alpaca_paper",
+  "broker_keys": {
+    "key_env": "APCA_API_KEY_ID_EXACT",
+    "secret_env": "APCA_API_SECRET_KEY_EXACT"
+  },
+  "hashes": {
+    "trades.csv": "5fdd1f8fd3860e41e180c02e04f49bb8e19c07e0fde4957fb47a295b72a0ac28",
+    "equity.csv": "359ddb0200a9990c176a9436087f4088f46bff244bea02a4e3b9b7242ba0128f",
+    "positions.csv": "820e6980a10998ec494f00ac7025170ea84592801dd2ebe6ffcef7c9dcd863de",
+    "continuation/equity.csv": "b705f3112776e3afaf0d40df9d96f4da12b0b867d078c72b1396c010b2e705ae",
+    "continuation/positions.csv": "1741686d963b36f502bc0cf440db81970e032d610b31c072f3bbcc0e398a97e6"
+  },
+  "target_mode": {
+    "kind": "model_v4"
+  },
+  "live_value": 94735.74
+}

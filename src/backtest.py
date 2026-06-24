@@ -664,6 +664,16 @@ def run_backtest(
     score_entry_above = config.get("risk", {}).get("score_entry_above")
     score_entry_days = int(config.get("risk", {}).get("score_entry_days", 3))
     fund_by_rotation = bool(config.get("risk", {}).get("fund_by_rotation", False))
+    # Daily REBALANCE mode (default off): when `rebalance.top_n` is set, REPLACE all of model_v4's
+    # entry/exit machinery (gates, persistence, stops, max-hold, vol-trim) with a simple
+    # membership rebalance — each close the book = today's top-N ranked names. Sell names that left
+    # the top-N, buy names that entered, equal-weight (gross / N of portfolio value), executed as a
+    # simultaneous swap at the NEXT close (decide-at-close → fill-next-close, no look-ahead). Names
+    # that stay in the top-N ride untouched. The ranker/universe are unchanged from model_v4.
+    _rebal = config.get("rebalance") or {}
+    rebalance_mode = bool(_rebal.get("top_n"))
+    rebal_top_n = int(_rebal.get("top_n") or 0)
+    rebal_gross = float(_rebal.get("gross", config["portfolio"]["max_total_exposure"]))
     need_scores = (stop_loss_score_max is not None or max_hold_score_max is not None
                    or score_exit_below is not None or score_entry_above is not None)
     score_hist: Dict[str, List[Optional[float]]] = {}     # ticker -> recent composite scores
@@ -750,13 +760,37 @@ def run_backtest(
         bar_idx = sim_start_idx + offset
         today_prices: pd.Series = close.loc[bar_ts].dropna()
 
-        # ── 1. Fill pending buy orders (queued from yesterday's signals) ──────
-        #    Fill price = today's close + slippage (next-day execution assumption)
+        # ── 1. Fill pending orders (queued from yesterday's signals) ──────────
+        #    Fill price = today's close + slippage (next-day execution assumption).
+        #    SELL orders (rebalance dropouts) are filled FIRST so they free cash for the same
+        #    swap's BUYs; model_v4 only ever queues BUYs (action key absent → defaults to BUY).
         filled: List[Dict[str, Any]] = []
-        for order in pending_orders:
+        for order in sorted(pending_orders, key=lambda o: 0 if o.get("action") == "SELL" else 1):
             ticker = order["ticker"]
             if ticker not in today_prices.index:
                 log.debug("No price for %s on %s — order lapsed", ticker, bar_date)
+                continue
+            if order.get("action") == "SELL":
+                prow = positions[positions["ticker"] == ticker]
+                if prow.empty:
+                    continue
+                prow = prow.iloc[0]
+                shrs = int(prow["shares"])
+                sell_px = apply_slippage(float(today_prices[ticker]), "sell", slippage)
+                ep = float(prow["entry_price"])
+                tv = round(sell_px * shrs, 2)
+                pnl = round((sell_px - ep) * shrs, 2)
+                all_trades.append({
+                    "date": bar_date.isoformat(), "action": "SELL", "ticker": ticker,
+                    "shares": shrs, "price": sell_px, "trade_value": tv,
+                    "reason": order.get("reason", "rebalance_exit"), "realized_pnl": pnl,
+                    "holding_days": round((bar_date - prow["entry_date"]).days * 5 / 7, 1),
+                    "entry_price": ep, "highest_price": float(prow.get("highest_price", sell_px)),
+                    "lowest_price": float(prow.get("lowest_price", sell_px)),
+                })
+                cash += tv
+                realized_pnl += pnl
+                positions = positions[positions["ticker"] != ticker].reset_index(drop=True)
                 continue
             fill_price = apply_slippage(float(today_prices[ticker]), "buy", slippage)
             shares = order["shares"]
@@ -805,7 +839,7 @@ def run_backtest(
         #    Score as of today's close (data ≤ bar_idx) — same window the entry
         #    ranking uses, so it's "the score at that same time"; no look-ahead.
         current_scores = None
-        if need_scores or fund_by_rotation or vol_trim:
+        if (need_scores or fund_by_rotation or vol_trim) and not rebalance_mode:
             sl_now = price_data.iloc[max(0, bar_idx + 1 - _SIGNAL_WINDOW): bar_idx + 1]
             sig_now = calculate_signals(sl_now, tickers)
             if not sig_now.empty:
@@ -826,23 +860,26 @@ def run_backtest(
                                    if _streak_below(t, score_exit_below, score_exit_days)}
 
         # ── 3. Evaluate exits against today's close ───────────────────────────
-        exit_trades, positions = _evaluate_backtest_exits(
-            positions, bar_date, stop_loss, take_profit, max_holding, slippage,
-            trailing_stop=trailing_stop, ticker_overrides=ticker_overrides,
-            scores=current_scores, stop_loss_score_max=stop_loss_score_max,
-            max_hold_score_max=max_hold_score_max, score_decay_tickers=score_decay_tickers,
-        )
-        for e in exit_trades:
-            cash += e["trade_value"]
-            realized_pnl += e["realized_pnl"]
-            all_trades.append(e)
-            if "stop_loss" in str(e["reason"]):
-                if cooldown_days:
-                    stop_cooldown[e["ticker"]] = bar_idx
-                if reclaim_ma:
-                    awaiting_reclaim.add(e["ticker"])    # blocked until price reclaims its MA
-                if recover_pct:
-                    stop_recover_low[e["ticker"]] = float(e["price"])   # seed trough at the stop sale price
+        #    Rebalance mode owns its own exits (dropouts are sold via the next-close swap), so the
+        #    model_v4 stop/take/max-hold/score exits are skipped entirely here.
+        if not rebalance_mode:
+            exit_trades, positions = _evaluate_backtest_exits(
+                positions, bar_date, stop_loss, take_profit, max_holding, slippage,
+                trailing_stop=trailing_stop, ticker_overrides=ticker_overrides,
+                scores=current_scores, stop_loss_score_max=stop_loss_score_max,
+                max_hold_score_max=max_hold_score_max, score_decay_tickers=score_decay_tickers,
+            )
+            for e in exit_trades:
+                cash += e["trade_value"]
+                realized_pnl += e["realized_pnl"]
+                all_trades.append(e)
+                if "stop_loss" in str(e["reason"]):
+                    if cooldown_days:
+                        stop_cooldown[e["ticker"]] = bar_idx
+                    if reclaim_ma:
+                        awaiting_reclaim.add(e["ticker"])    # blocked until price reclaims its MA
+                    if recover_pct:
+                        stop_recover_low[e["ticker"]] = float(e["price"])   # seed trough at the stop sale price
 
         # ── 4. Portfolio value snapshot ───────────────────────────────────────
         equity = (
@@ -872,7 +909,7 @@ def run_backtest(
         #      * whole-position (default): sell whole lowest-score names to a gross target.
         #      * partial weak-only (vol_trim_score_below set): trim each held name with
         #        score < threshold by (1-mult), optionally only when momentum is inverting.
-        if vol_trim and exposure_mult < 0.999 and not positions.empty:
+        if vol_trim and not rebalance_mode and exposure_mult < 0.999 and not positions.empty:
             sc = current_scores or {}
             # Optional spread gate: only trim when the top-score quintile's trailing 5d return
             # is BELOW the bottom quintile's (momentum inverting — the crash regime).
@@ -945,8 +982,47 @@ def run_backtest(
                               if not positions.empty else 0.0)
                     portfolio_value = cash + equity
 
+        # ── 5R. Daily REBALANCE decision (membership-only top-N) ──────────────
+        #    Target book = today's top-N ranked names. Queue a SELL for each held name that left
+        #    the top-N and a BUY for each name that entered (equal-weight, gross / N of portfolio
+        #    value), to execute as a simultaneous swap at the next close. Stayers ride untouched.
+        if rebalance_mode and bar_idx + 1 < n_timestamps:
+            data_slice = price_data.iloc[max(0, bar_idx + 1 - _SIGNAL_WINDOW): bar_idx + 1]
+            signals = calculate_signals(data_slice, tickers)
+            if not signals.empty:
+                ranked = rank_candidates(signals, top_n=rebal_top_n, weights=weights,
+                                         ticker_weights=ticker_weights)
+                target = [t for t in ranked["ticker"].tolist()
+                          if t in close.columns and t in today_prices.index][:rebal_top_n]
+                target_set = set(target)
+                held = list(positions["ticker"]) if not positions.empty else []
+                held_set = set(held)
+                orders: List[Dict[str, Any]] = []
+                for t in held:                                       # dropouts → SELL next close
+                    if t not in target_set:
+                        orders.append({"action": "SELL", "ticker": t, "reason": "rebalance_exit"})
+                per_name_val = portfolio_value * (rebal_gross / rebal_top_n)
+                for t in target:                                     # entrants → BUY (equal-weight)
+                    if t not in held_set:
+                        px = float(today_prices[t])
+                        sh = int(per_name_val / px) if px > 0 else 0
+                        if sh > 0:
+                            orders.append({"action": "BUY", "ticker": t, "shares": sh,
+                                           "reason": "rebalance_entry"})
+                pending_orders = orders
+                if signal_sink is not None:
+                    scored_all = rank_candidates(signals, top_n=len(signals), weights=weights,
+                                                 ticker_weights=ticker_weights)
+                    for _, srow in scored_all.iterrows():
+                        signal_sink.append({
+                            "date": bar_date.isoformat(), "bar_idx": bar_idx, "ticker": srow["ticker"],
+                            "return_1d": srow.get("return_1d"), "return_5d": srow.get("return_5d"),
+                            "return_20d": srow.get("return_20d"), "vol_ratio": srow.get("vol_ratio"),
+                            "vol_adj_mom_20d": srow.get("vol_adj_mom_20d"),
+                            "composite_score": srow.get("composite_score")})
+
         # ── 5. Compute signals (no look-ahead) and queue entries for tomorrow ─
-        if bar_idx + 1 < n_timestamps:
+        if not rebalance_mode and bar_idx + 1 < n_timestamps:
             # Windowed tail ending at today's bar — never includes future data,
             # but bounds per-bar cost (see _SIGNAL_WINDOW).
             data_slice = price_data.iloc[max(0, bar_idx + 1 - _SIGNAL_WINDOW): bar_idx + 1]
@@ -1167,7 +1243,9 @@ def run_backtest(
 
 
 def next_session_decision(config: Dict[str, Any], price_data: pd.DataFrame,
-                          start: Optional[date] = None) -> Dict[str, Any]:
+                          start: Optional[date] = None, *,
+                          initial_positions: Optional[pd.DataFrame] = None,
+                          initial_cash: Optional[float] = None) -> Dict[str, Any]:
     """What the model would DECIDE at the last bar's close, to execute next session
     (after today's close / before tomorrow's open).
 
@@ -1192,8 +1270,16 @@ def next_session_decision(config: Dict[str, Any], price_data: pd.DataFrame,
     synth = price_data.loc[[last]].copy()
     synth.index = [nxt]
     pd2 = pd.concat([price_data, synth])
-    start = start or price_data.index[0].date()
-    trades, _eq, _pos = run_backtest(config, pd2, start, nxt.date())
+    if initial_positions is not None:
+        # SEEDED: run model_v4 ONE step from the GIVEN book (last close → synthetic next bar), so
+        # exits / exposure cap / rotation funding reflect the ACTUAL current positions + cash — not a
+        # fresh from-inception simulation. Needs >= _SIGNAL_WINDOW bars of history in `price_data`.
+        start = last.date()
+        trades, _eq, _pos = run_backtest(config, pd2, start, nxt.date(),
+                                         initial_positions=initial_positions, initial_cash=initial_cash)
+    else:
+        start = start or price_data.index[0].date()
+        trades, _eq, _pos = run_backtest(config, pd2, start, nxt.date())
 
     last_iso, nxt_iso = last.date().isoformat(), nxt.date().isoformat()
 

@@ -10,7 +10,8 @@ Commentary and recommendations are GENERATED from the run's data (signal spread,
 the volatility governor's exposure multiplier, weakest holds, gate-clearing buy
 candidates) — not hand-written — so the report is reproducible every run.
 
-Read-only with respect to data/. Writes reports/eod_<scenario>_<date>.pdf.
+Read-only with respect to data/. Writes reports/eod/eod_<book>_<date>.pdf (scenario and every
+account land in the same reports/eod/ folder; account books are named by account).
 
     # standalone (re-runs the scenario backtest to gather data):
     python src/pdf_report.py --scenario model_v4 --start 2026-01-01 --end 2026-06-16
@@ -359,14 +360,17 @@ def enrich_holdings(d: Dict[str, Any]) -> List[Dict[str, Any]]:
     return out
 
 
-def render_current_book(ax, y, holdings, *, npos, pv, cash, univ, held_dw, title=None):
+def render_current_book(ax, y, holdings, *, npos, pv, cash, univ, held_dw, title=None, hedge=None):
     """Render the rich held-positions table (Prior/Live rank, Δ today, Δ prior, entry→
     yesterday→today score path, days, entry, now, %NAV, unreal, today, Signal Today) + TOTAL.
-    %NAV is each position's share of market value; the header carries the cash balance."""
+    %NAV is each position's share of market value; the header carries the cash balance.
+    `hedge` (the SOXS overlay suggested off the close) is shown as a flagged line item below the
+    holdings whenever it fired — so it always appears if it was suggested from the prior close."""
     head = title or "Current book — today's moves (worst first)"
     y = _section(ax, y, f"{head}  ·  {npos} positions  "
                         f"(portfolio {_money(pv)}, cash {_money(cash)})")
-    if not holdings:
+    hed = hedge if (hedge and hedge.get("fires")) else None
+    if not holdings and not hed:
         ax.text(0.075, y, "No open positions.", color=MIDGREY, fontsize=8.0, va="top")
         return y - 0.024
 
@@ -383,6 +387,15 @@ def render_current_book(ax, y, holdings, *, npos, pv, cash, univ, held_dw, title
                       ("—" if h["days"] is None else str(h["days"])),
                       _money(h["entry"], 2), _money(h["now"], 2), _pct(h["navpct"]),
                       _pct(h["unreal"]), _pct(h["today"]), _signal_today(h["today"], univ)])
+    hedge_row_i = None
+    if hed:                                          # overlay hedge — a flagged line, not a model holding
+        hedge_row_i = len(hrows)
+        _hnow = hed.get("now", hed.get("price"))     # purchase = prior close (Entry); Now = mark/close price
+        _hsig = (f"overlay hedge ({hed.get('tier','')}) — SOLD at close" if hed.get("closed")
+                 else f"overlay hedge ({hed.get('tier','')})")
+        hrows.append(["hedge", "—", "—", "", "", "—", "1",
+                      _money(hed.get("price"), 2), _money(_hnow, 2),
+                      _pct(hed.get("navpct")), _pct(hed.get("today")), _pct(hed.get("today")), _hsig])
     book_unreal = (tot_now / tot_cost - 1) if tot_cost else None
     hrows.append(["TOTAL", "", "", "", "", "", "", "", "", _pct((tot_now / pv) if pv else None),
                   _pct(book_unreal), _pct(held_dw), ""])
@@ -393,6 +406,12 @@ def render_current_book(ax, y, holdings, *, npos, pv, cash, univ, held_dw, title
              "right", "right", "right", "right", "right", "left"]
 
     def cb(r, c, v):
+        if hedge_row_i is not None and r == hedge_row_i:   # hedge line: accent label, sign-colour returns
+            if c == 0:
+                return NAVY
+            if c in (10, 11):
+                return _ret_color(_parse_pct(v))
+            return MIDGREY
         if c in (3, 4):
             return _rk_color(v)
         if c == 5:
@@ -402,8 +421,11 @@ def render_current_book(ax, y, holdings, *, npos, pv, cash, univ, held_dw, title
         if c == 12:
             return _SIG_COLORS.get(v, "#1f2a3a")
         return "#1f2a3a"
+    emph = {len(hrows) - 1}
+    if hedge_row_i is not None:
+        emph.add(hedge_row_i)
     return _table(ax, y, cols, hrows, widths, align=align, row_h=0.018, fontsize=6.0,
-                  header_fontsize=5.9, emph_rows={len(hrows) - 1}, text_color=cb)
+                  header_fontsize=5.9, emph_rows=emph, text_color=cb)
 
 
 # ── Commentary generation (derived from the data) ─────────────────────────────────
@@ -539,13 +561,14 @@ def _cover_spec(d: Dict[str, Any], comm: Dict[str, List[str]]) -> Dict[str, Any]
         "univ_avg": d.get("univ_avg"), "held_dw": d.get("held_dw"),
         "n_positions": 0 if (pos is None or pos.empty) else len(pos),
         "next_session": d.get("next_session") or {}, "holdings": holdings, "rankings": rankings,
+        "hedge": d.get("hedge"), "rebound": d.get("rebound"),
         "today_trades": d.get("today_trades") or [],
         "observations": comm["observations"], "recommendations": comm["recommendations"],
         "mark_note": d.get("mark_note"),
     }
 
 
-def _render_cover(pdf, spec: Dict[str, Any], page: int = 1):
+def _render_cover(pdf, spec: Dict[str, Any], page: int = 1, with_commentary: bool = True):
     """Render one cover page from a picklable spec (used by both build_pdf and the series)."""
     fig, ax = _new_page(pdf)
     _banner(ax, spec["scenario"], spec["mark"], spec["rank_close"],
@@ -594,27 +617,63 @@ def _render_cover(pdf, spec: Dict[str, Any], page: int = 1):
         # AFTER today's trades — %NAV per position + cash carried in the header
         y = render_current_book(ax, y - 0.006, holdings, npos=spec.get("n_positions", 0), pv=pv,
                                 cash=cash, univ=univ, held_dw=held_dw,
-                                title="Current book — AFTER today's trades")
+                                title="Current book — AFTER today's trades", hedge=spec.get("hedge"))
     else:
         # --- normal day: current book + forward queue ---
         y = render_current_book(ax, y - 0.004, holdings, npos=spec.get("n_positions", 0),
-                                pv=pv, cash=cash, univ=univ, held_dw=held_dw)
+                                pv=pv, cash=cash, univ=univ, held_dw=held_dw, hedge=spec.get("hedge"))
         y = _section(ax, y - 0.006, "Queued for next session  (after today's close → next open)")
         y = _queued_block(ax, y, spec.get("next_session") or {},
                           fontsize=7.6, lh=0.0148, gap=0.004, width=112)
 
-    y = _section(ax, y - 0.006, "Market commentary")
-    y = _bullets(ax, y, spec["observations"], width=114, lh=0.0146, gap=0.004, fontsize=7.5)
-
-    y = _section(ax, y - 0.006, "Recommendations — tonight → next open")
-    y = _bullets(ax, y, spec["recommendations"], width=114, lh=0.0146, gap=0.004, fontsize=7.5)
+    # Market commentary + recommendations: inline on the cover for the cover-series harness, but the
+    # main EOD report (with_commentary=False) moves them to their own page for breathing room.
+    if with_commentary:
+        y = _section(ax, y - 0.006, "Market commentary")
+        y = _bullets(ax, y, spec["observations"], width=114, lh=0.0146, gap=0.004, fontsize=7.5)
+        y = _section(ax, y - 0.006, "Recommendations — tonight → next open")
+        y = _bullets(ax, y, spec["recommendations"], width=114, lh=0.0146, gap=0.004, fontsize=7.5)
 
     _footer(ax, page)
     pdf.savefig(fig); plt.close(fig)
 
 
+def _page_commentary(pdf, spec: Dict[str, Any], page: int = 2):
+    """Market commentary + recommendations on their own page (moved off the cover)."""
+    fig, ax = _new_page(pdf)
+    _banner(ax, spec["scenario"], spec["mark"], spec["rank_close"], "Market commentary & recommendations")
+    y = 0.90
+    y = _section(ax, y, "Market commentary")
+    y = _bullets(ax, y, spec.get("observations") or [], width=120, lh=0.020, gap=0.009, fontsize=8.8)
+    y = _section(ax, y - 0.02, "Recommendations — tonight → next open")
+    y = _bullets(ax, y, spec.get("recommendations") or [], width=120, lh=0.020, gap=0.009, fontsize=8.8)
+    # Rebound overlay status (standalone 1-day TQQQ rebound sleeve; model untouched). No '$' in the
+    # text — matplotlib parses $...$ as math; amounts are shown plainly to avoid that.
+    rb = spec.get("rebound")
+    if rb is not None:
+        import textwrap as _tw
+        y = _section(ax, y - 0.02, "Rebound overlay (1-day TQQQ)")
+        if rb.get("fires"):
+            pnl = rb.get("pnl")
+            pnl_s = "" if pnl is None else (f"  session P&L {('+' if pnl>=0 else '-')}{abs(round(pnl)):,} "
+                                            f"({_pct(rb.get('ret'))})")
+            msg = (f"FIRED ({rb.get('tier')}): QQQ {_pct(rb.get('qqq_down'))}, signal {_pct(rb.get('signal'))}, "
+                   f"vol-z {rb.get('vol_z'):+.2f} -> bought {rb.get('instrument')} "
+                   f"~{abs(round(rb.get('rebound_dollars') or 0)):,} ({rb.get('weight',0)*100:.0f}% of book).{pnl_s}")
+            col = _ret_color(rb.get("pnl"))
+        else:
+            msg = (f"Idle - no trigger (QQQ {_pct(rb.get('qqq_down'))}, signal {_pct(rb.get('signal'))}, "
+                   f"QQQ-vol-z {rb.get('vol_z'):+.2f}); fires on QQQ <= -2.5% & signal < 0 & QQQ-vol-z >= 0.25.")
+            col = MIDGREY
+        ax.text(0.06, y, _tw.fill(msg, 118), color=col, fontsize=8.4, va="top", parse_math=False)
+    _footer(ax, page)
+    pdf.savefig(fig); plt.close(fig)
+
+
 def _page_cover(pdf, d, cfg, comm):
-    _render_cover(pdf, _cover_spec(d, comm), page=1)
+    spec = _cover_spec(d, comm)
+    _render_cover(pdf, spec, page=1, with_commentary=False)   # cover ends after the held book/queue
+    _page_commentary(pdf, spec, page=2)                       # commentary + recs on their own page
 
 
 def _page_signals(pdf, d):
@@ -663,7 +722,7 @@ def _page_signals(pdf, d):
                [0.26, 0.15, 0.13, 0.13, 0.165, 0.165],
                align=["left", "right", "right", "right", "right", "right"], text_color=bcolor)
 
-    _footer(ax, 2)
+    _footer(ax, 3)
     pdf.savefig(fig); plt.close(fig)
 
 
@@ -725,7 +784,7 @@ def _page_rankings(pdf, d):
             "Δ prior = rank move on the prior day. Signal Today = return vs universe avg.",
             color=MIDGREY, fontsize=7.0, va="top", style="italic")
 
-    _footer(ax, 5)
+    _footer(ax, 6)
     pdf.savefig(fig); plt.close(fig)
 
 
@@ -736,7 +795,7 @@ def _page_attribution_eod(pdf, d, cfg):
     fig, ax = _new_page(pdf)
     _banner(ax, d["scenario"], d["mark"], d["rank_close"], "Attribution — session breakdown (official close)")
     MP.attribution_body(ax, d)
-    _footer(ax, 3)
+    _footer(ax, 4)
     pdf.savefig(fig); plt.close(fig)
 
 
@@ -746,7 +805,7 @@ def _page_paths_eod(pdf, d, cfg):
     fig, ax = _new_page(pdf)
     _banner(ax, d["scenario"], d["mark"], d["rank_close"], "Intraday return paths — to the official close")
     MP.paths_body(ax, d)
-    _footer(ax, 4)
+    _footer(ax, 5)
     pdf.savefig(fig); plt.close(fig)
 
 
@@ -782,7 +841,7 @@ def _page_activity(pdf, d):
                    align=["left", "left", "left", "right", "right", "left", "right"], fontsize=7.4,
                    text_color=lambda r, c, v: (_ret_color(_parse_money(v)) if c == 6 and v != "—" else "#1f2a3a"))
 
-    _footer(ax, 6)
+    _footer(ax, 7)
     pdf.savefig(fig); plt.close(fig)
 
 
@@ -801,17 +860,30 @@ def _parse_money(v: str) -> Optional[float]:
 
 
 # ── Entry points ──────────────────────────────────────────────────────────────
+def report_path(scenario: str, account: Optional[str], mark) -> Path:
+    """Unified EOD output path: reports/eod/eod_<book>_<mark>.pdf — scenario AND every account land
+    in the SAME folder. Account books are named by account (not scenario) so the scenario and all
+    trackers (all on model_v4) don't collide. (Account-FROZEN ledger copies still live under
+    accounts/<name>/reports/ — those are the hash-verified archival record, written by account.py.)"""
+    root = Path(__file__).parent.parent
+    edir = root / "reports" / "eod"
+    edir.mkdir(parents=True, exist_ok=True)
+    stem = account or scenario
+    m = mark.isoformat() if hasattr(mark, "isoformat") else str(mark)
+    return edir / f"eod_{stem}_{m}.pdf"
+
+
 def build_pdf(d: Dict[str, Any], cfg: Dict[str, Any], out_path: Path) -> Path:
     """Render the EOD PDF from a rank_report.build_report dict + scenario cfg."""
     comm = _commentary(d, cfg)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with PdfPages(out_path) as pdf:
-        _page_cover(pdf, d, cfg, comm)              # 1
-        _page_signals(pdf, d)                       # 2
-        _page_attribution_eod(pdf, d, cfg)          # 3
-        _page_paths_eod(pdf, d, cfg)                # 4
-        _page_rankings(pdf, d)                      # 5
-        _page_activity(pdf, d)                      # 6
+        _page_cover(pdf, d, cfg, comm)              # 1 cover + 2 commentary/recommendations
+        _page_signals(pdf, d)                       # 3
+        _page_attribution_eod(pdf, d, cfg)          # 4
+        _page_paths_eod(pdf, d, cfg)                # 5
+        _page_rankings(pdf, d)                      # 6
+        _page_activity(pdf, d)                      # 7
     return out_path
 
 
@@ -838,16 +910,21 @@ def run(scenario: Optional[str] = None, start: Optional[date] = None, end: Optio
     end = end or date.today()                       # default to today (EOD); start to that year's Jan 1
     start = start or date(end.year, 1, 1)
     cfg = build_config(_load_cfg(root / "config"), load_scenario(scenario))
+    # EOD render → exit the 1-day overlay hedge at the session close (guarded inside build_report so
+    # it only sells once the final close is available, not on a mid-session provisional bar).
     d = rank_report.build_report(scenario, start, end, cfg=cfg, account=account,
                                  write_snapshot=False if account else None, with_intraday=True,
-                                 prepost=prepost)
-    if output:
-        out = Path(output)
-    elif account:
-        # account-mode: render into the account's own reports/ folder (alongside the ledger)
-        out = root / "accounts" / account / "reports" / f"eod_{scenario}_{d['mark'].isoformat()}.pdf"
-    else:
-        out = root / "reports" / f"eod_{scenario}_{d['mark'].isoformat()}.pdf"
+                                 prepost=prepost, at_close=True)
+    # Broker accounts: overlay the LIVE Alpaca book (real fills + equity) and strip the synthetic
+    # overlay hedge (accounts don't trade it). Live render only — matches the midday path.
+    if account and end >= date.today():
+        try:
+            import broker_sync
+            broker_sync.apply_live_broker_marks(d, account)
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("live broker marks skipped for %s: %s", account, exc)
+    out = Path(output) if output else report_path(scenario, account, d["mark"])
     return build_pdf(d, cfg, out)
 
 

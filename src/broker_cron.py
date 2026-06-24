@@ -12,6 +12,9 @@ Phases:
           Skipped if the market isn't open.
   close   pull real fills, log realized slippage, sync the ledger from the broker (source of
           truth), and render the EOD PDF. Always safe to run (read + local sync).
+  midday  render the intraday Midday Pulse PDF from THIS account's own ledger, marked to the
+          latest (provisional) price. Read-only; never submits. --prepost marks to the latest
+          pre/post-market print.
   auto    pick open / retry / close from the current ET clock.
 
 SAFETY: submission stays inert unless --live is passed (which sets BROKER_ADAPTER_ALLOW_SUBMIT=yes
@@ -68,7 +71,8 @@ def _pick_phase(clk: dict) -> str:
     return "open" if win["ok"] else "close"
 
 
-def run_phase(name: str, phase: str, live: bool = False, prequeue: bool = False) -> int:
+def run_phase(name: str, phase: str, live: bool = False, prequeue: bool = False,
+              prepost: bool = False) -> int:
     """Run one phase. Returns a process exit code (0 ok/skip, 1 error)."""
     ba._load_env()
     if live:
@@ -117,6 +121,19 @@ def run_phase(name: str, phase: str, live: bool = False, prequeue: bool = False)
             _log(name, f"PHASE=close asof={asof}  EOD render {'OK' if eod.returncode == 0 else 'FAILED'}")
             if eod.returncode != 0:
                 _log(name, f"    eod stderr: {eod.stderr.strip()[:300]}")
+
+        elif phase == "midday":
+            # Intraday Midday Pulse from this account's OWN ledger (read-only; no submit).
+            cmd = [sys.executable, "run.py", "midday", "--account", name]
+            if prepost:
+                cmd.append("--prepost")
+            md = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True)
+            ok = md.returncode == 0
+            tail = md.stdout.strip().splitlines()[-1] if md.stdout.strip() else ""
+            _log(name, f"PHASE=midday asof={asof}  {'OK' if ok else 'FAILED'} — {tail}")
+            if not ok:
+                _log(name, f"    midday stderr: {md.stderr.strip()[:300]}")
+                return 1
         else:
             _log(name, f"unknown phase '{phase}'")
             return 1
@@ -129,13 +146,15 @@ def run_phase(name: str, phase: str, live: bool = False, prequeue: bool = False)
 def _cli(argv=None):
     p = argparse.ArgumentParser(description="Cron wrapper for the daily broker session")
     p.add_argument("--account", required=True)
-    p.add_argument("--phase", required=True, choices=["open", "retry", "close", "auto"])
+    p.add_argument("--phase", required=True, choices=["open", "retry", "close", "midday", "auto"])
     p.add_argument("--live", action="store_true",
                    help="actually submit (sets BROKER_ADAPTER_ALLOW_SUBMIT=yes); omit for a dry run")
     p.add_argument("--prequeue", action="store_true",
                    help="allow submitting outside the pre-open window (weekend/holiday)")
+    p.add_argument("--prepost", action="store_true",
+                   help="for --phase midday: mark the book to the latest pre/post-market print")
     a = p.parse_args(argv)
-    return run_phase(a.account, a.phase, live=a.live, prequeue=a.prequeue)
+    return run_phase(a.account, a.phase, live=a.live, prequeue=a.prequeue, prepost=a.prepost)
 
 
 if __name__ == "__main__":

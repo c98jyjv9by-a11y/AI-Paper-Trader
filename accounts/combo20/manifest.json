@@ -1,0 +1,37 @@
+{
+  "name": "combo20",
+  "scenario": "model_v4",
+  "status": "living",
+  "inception": "2026-06-24",
+  "frozen_through": "2026-06-24",
+  "live_through": "2026-06-24",
+  "starting_value": 100000.0,
+  "ending_value": 100000.0,
+  "total_return": 0.0,
+  "n_trades": 0,
+  "n_positions": 20,
+  "broker": "alpaca_paper",
+  "broker_keys": {
+    "key_env": "APCA_API_KEY_ID_COMBO20",
+    "secret_env": "APCA_API_SECRET_KEY_COMBO20"
+  },
+  "hashes": {
+    "trades.csv": "5fdd1f8fd3860e41e180c02e04f49bb8e19c07e0fde4957fb47a295b72a0ac28",
+    "equity.csv": "109040297f774a51e7f502733c2f178108e67507d775d64227c7ca85d94970cd",
+    "positions.csv": "820e6980a10998ec494f00ac7025170ea84592801dd2ebe6ffcef7c9dcd863de",
+    "continuation/equity.csv": "4d4ef0cfc058b6707538d4de1352848be4d41fa957715c309f0dff3c7b7872f0",
+    "continuation/positions.csv": "91b3b6470a992b86a3a2a6cc93f5db6f8126f438ae8692cc55cdc10b4f4c94a5"
+  },
+  "target_mode": {
+    "kind": "score_rebalance",
+    "rebalance": "weekly",
+    "gross": 0.9,
+    "top_n": 10,
+    "top_lookback_days": 60,
+    "top_refresh": "monthly",
+    "bottom_n": 10,
+    "bottom_lookback_days": 5,
+    "bottom_refresh": "weekly"
+  },
+  "live_value": 99952.04
+}

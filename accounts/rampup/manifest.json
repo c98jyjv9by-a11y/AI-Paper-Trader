@@ -1,0 +1,32 @@
+{
+  "name": "rampup",
+  "scenario": "model_v4",
+  "status": "living",
+  "inception": "2026-06-22",
+  "frozen_through": "2026-06-22",
+  "live_through": "2026-06-24",
+  "starting_value": 100000.0,
+  "ending_value": 100000.0,
+  "total_return": 0.0,
+  "n_trades": 0,
+  "n_positions": 6,
+  "broker": "alpaca_paper",
+  "broker_keys": {
+    "key_env": "APCA_API_KEY_ID_RAMP_UP",
+    "secret_env": "APCA_API_SECRET_KEY_RAMP_UP"
+  },
+  "hashes": {
+    "trades.csv": "5fdd1f8fd3860e41e180c02e04f49bb8e19c07e0fde4957fb47a295b72a0ac28",
+    "equity.csv": "359ddb0200a9990c176a9436087f4088f46bff244bea02a4e3b9b7242ba0128f",
+    "positions.csv": "820e6980a10998ec494f00ac7025170ea84592801dd2ebe6ffcef7c9dcd863de",
+    "continuation/equity.csv": "593ddac668b7cc2be7359375203b43a6a40a71b7114236a1edf06921a31a713f",
+    "continuation/positions.csv": "80cec19dcfce5b174c88cffa7ad297fce22d27668e553dbcb40522681daa2ea3"
+  },
+  "target_mode": {
+    "kind": "score_gate_rampup",
+    "min_score": 0.9,
+    "size_pct": 0.085,
+    "graduate_at": 0.75
+  },
+  "live_value": 96933.15
+}

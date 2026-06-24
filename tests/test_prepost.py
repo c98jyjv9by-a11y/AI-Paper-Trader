@@ -53,6 +53,8 @@ def _build(pdata, prepost, monkeypatch, ext=None, label="19:59 ET post-market", 
     if ext is not None:
         monkeypatch.setattr(R, "extended_hours_prices",
                             lambda tickers, **k: (ext, label, asof))
+    # isolate from the live overlay-hedge signal (a real yfinance pull) so pv/cash stay deterministic
+    monkeypatch.setattr(R, "_hedge_as_of", lambda *a, **k: None)
     eq, pos = _eq_pos(pdata)
     return R.build_report("t", pdata.index[0].date(), pdata.index[-1].date(), cfg=_cfg(),
                           pdata=pdata, eq=eq, positions=pos, trades=pd.DataFrame(),

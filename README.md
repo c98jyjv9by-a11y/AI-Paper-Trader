@@ -169,7 +169,7 @@ ai-paper-trader/
 │   ├── scenario_charts.py     # per-ticker annotated price charts (buy/sell vs hold)
 │   ├── rank_report.py         # scenario status & rank report (signal strength, held book vs SPY/QQQ)
 │   └── adaptive_backtest.py   # weekly per-ticker rotating-signal backtest
-├── tests/                     # 228 tests, no network calls (one file per module)
+├── tests/                     # 292 tests, no network calls (one file per module)
 ├── requirements.txt
 ├── .env.example
 └── CLAUDE.md
@@ -289,7 +289,7 @@ Changes take effect on the next run of any command.
 
 ## Tests
 
-228 tests, no network calls (all use synthetic data):
+292 tests, no network calls (all use synthetic data):
 
 ```bash
 pytest tests/ -v

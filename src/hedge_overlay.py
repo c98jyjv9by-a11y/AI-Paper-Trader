@@ -60,7 +60,9 @@ class HedgeConfig:
     soft_weight_frac: float = 0.50     # fraction of full size on soft-only fires
     vol_lookback: int = 63             # trailing window for the vol z-score
     # ---- hedge sleeve ----
-    product: str = "soxs"              # long inverse-ETF only (no shorting); SOXS = -3x semis
+    product: str = "soxs"              # SIZING-PANEL key (inverse-vol calibration only; see PRODUCTS)
+    hedge_ticker: str = "SQQQ"         # the instrument actually HELD / shown / traded (default -3x QQQ);
+                                       # decoupled from `product` so the sizing panel needn't be rebuilt
     sizing: str = "inverse_vol"        # "inverse_vol" (risk-targeted) or "fixed"
     target_risk: float = 0.50          # inverse_vol: hedge daily-vol as a fraction of book daily-vol
     vol_window: int = 20               # trailing window for the sizing vols

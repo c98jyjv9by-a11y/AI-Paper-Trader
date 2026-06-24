@@ -1,0 +1,36 @@
+name: LevEtf
+description: >
+  2-ticker leveraged-ETF scenario (TQQQ +3x QQQ / SQQQ -3x QQQ) running model_v4's
+  rules, pre-adapted for 3x leverage: auto per-name sizing, 25% stop, 0.60 vol target.
+  Isolated from model_v4 (separate universe + separate outputs).
+
+# ── UNIVERSE OVERRIDE — REPLACES config/universe.yaml wholesale (scenarios.py _REPLACE_WHOLE) ──
+tickers:
+  - TQQQ   # ProShares UltraPro QQQ — +3x Nasdaq-100
+  - SQQQ   # ProShares UltraPro Short QQQ — -3x Nasdaq-100
+
+# ── Capital sizing (deep-merged over base) ──
+portfolio:
+  max_position_pct: auto          # 0.90 / 2 = ~0.45 per name (vs model_v4's fixed 0.085) so 2 names deploy
+  max_total_exposure: 0.90
+  max_new_trades_per_day: 2
+
+signals:
+  min_composite_score: 0.70       # ranker orders the 2-name book each day
+
+# ── ALL-TICKER exit/risk overrides (cloned from model_v4; 2 fields adapted for 3x leverage) ──
+risk:
+  stop_loss: 0.25                 # widened for 3x ETFs (vs model_v4's 0.15 — a 5% QQQ move = 15% here)
+  take_profit: null               # no fixed profit cap — let winners run
+  trailing_stop: null
+  max_holding_days: 90
+  reentry_recover_pct: 0.10       # anti-falling-knife: re-entry blocked until +10% above the post-stop trough
+  stop_loss_score_max: 0.90       # stop fires only when composite score < 0.90
+  max_hold_score_max: 0.80        # max-hold suppressed until score < 0.80
+  score_entry_above: 0.90         # persistence buy: score > 0.90 for score_entry_days in a row
+  score_entry_days: 3
+  fund_by_rotation: true          # if cash short for a persistence buy, sell the weakest holding
+  target_vol: 0.60                # raised for high-vol 3x ETFs (vs model_v4's 0.35)
+  vol_lookback_days: 126          # Barroso ~6-month realized-vol forecast window
+  vol_exposure_floor: 0.3         # never de-risk below 30% of the base budget
+  vol_exposure_cap: 1.0           # de-risk only — no leverage above the base budget

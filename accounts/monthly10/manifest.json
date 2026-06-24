@@ -1,0 +1,34 @@
+{
+  "name": "monthly10",
+  "scenario": "model_v4",
+  "status": "living",
+  "inception": "2026-06-24",
+  "frozen_through": "2026-06-24",
+  "live_through": "2026-06-24",
+  "starting_value": 100000.0,
+  "ending_value": 100000.0,
+  "total_return": 0.0,
+  "n_trades": 0,
+  "n_positions": 10,
+  "broker": "alpaca_paper",
+  "broker_keys": {
+    "key_env": "APCA_API_KEY_ID_MONTHLY10",
+    "secret_env": "APCA_API_SECRET_KEY_MONTHLY10"
+  },
+  "hashes": {
+    "trades.csv": "5fdd1f8fd3860e41e180c02e04f49bb8e19c07e0fde4957fb47a295b72a0ac28",
+    "equity.csv": "109040297f774a51e7f502733c2f178108e67507d775d64227c7ca85d94970cd",
+    "positions.csv": "820e6980a10998ec494f00ac7025170ea84592801dd2ebe6ffcef7c9dcd863de",
+    "continuation/equity.csv": "47234301ea284275180691d2a312cb36615bac976d89e9c0e070b0ca011c6bf6",
+    "continuation/positions.csv": "40e5f9b42bcd84d3899ff1d2536475cb9b54939326009134ebbfdab4b1445f65"
+  },
+  "target_mode": {
+    "kind": "score_rebalance",
+    "lookback_days": 60,
+    "top_n": 10,
+    "bottom_n": 0,
+    "rebalance": "monthly",
+    "gross": 0.9
+  },
+  "live_value": 99934.93
+}
