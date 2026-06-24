@@ -72,6 +72,10 @@ account uses it. Older/experimental versions (v2, v3, v5, v6) and one-off script
   `src/intraday_check.py` (`run.py intraday-check [--accounts …] [--extended-hours] [--summary] [--qqq/--spread/--vol-z
   what-if]`) is the one-shot **intraday trade-determination** check: live overlay signals (rebound + hedge — fire/idle
   + gate values) and the **dry-run order plan** for each account (model reconcile + overlay buy with its funding), read-only.
+  `src/eod_accounts.py` (`run.py eod-accounts [--accounts …] [--end …] [--out …]`) renders a consolidated
+  **EOD PDF across ALL broker accounts** (`reports/eod_accounts_<date>.pdf`): a summary table (equity, day P&L $/%,
+  total %, #positions, #trades) + a brief **per-strategy description** + a page of **today's fills** per account,
+  pulled from each account's LIVE broker state.
 - **Broker integration (Alpaca paper, paper-only + submit-guarded)** —
   `src/broker_adapter.py` (REST client; refuses non-paper host; `submit`/`cancel` inert unless
   `confirm=True` AND env `BROKER_ADAPTER_ALLOW_SUBMIT=yes`),

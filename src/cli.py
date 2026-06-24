@@ -352,6 +352,13 @@ def build_parser() -> argparse.ArgumentParser:
     ic.add_argument("--summary", action="store_true", help="also print the cross-book midday table")
     ic.set_defaults(func=_cmd_intraday_check)
 
+    ea = sub.add_parser("eod-accounts",
+                        help="Consolidated EOD PDF: daily activity + P&L for all broker accounts, with strategy descriptions")
+    ea.add_argument("--accounts", nargs="+", help="override the account list (default: all 6 broker accounts)")
+    ea.add_argument("--end", metavar="YYYY-MM-DD", help="as-of date for fills/labels (default: today)")
+    ea.add_argument("--out", help="output PDF path (default reports/eod_accounts_<date>.pdf)")
+    ea.set_defaults(func=_cmd_eod_accounts)
+
     return parser
 
 
@@ -476,6 +483,12 @@ def _cmd_intraday_check(args: argparse.Namespace) -> None:
     import intraday_check
     intraday_check.run(getattr(args, "accounts", None), args.qqq, args.spread, args.vol_z,
                        args.extended_hours, args.summary)
+
+
+def _cmd_eod_accounts(args: argparse.Namespace) -> None:
+    import eod_accounts
+    r = eod_accounts.run(accounts=getattr(args, "accounts", None), end=args.end, out=args.out)
+    print("wrote", r["pdf"])
 
 
 def _cmd_snapshot(args: argparse.Namespace) -> None:
