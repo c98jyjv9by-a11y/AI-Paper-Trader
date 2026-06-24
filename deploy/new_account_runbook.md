@@ -39,6 +39,7 @@ Placeholder keys are fine for **creating** the account (no network), but Alpaca 
 | `score_gate_rampup` | Buy >`min_score` names, sell per model_v4, until `graduate_at` of cash deployed → full model_v4 | `min_score, size_pct, graduate_at` |
 | `score_rebalance` (single) | Rank universe by trailing-`lookback_days`-avg score; hold top_n (+bottom_n) equal-weight to `gross`; rebalance on first trading day of each week/month | `lookback_days, top_n, bottom_n, rebalance, gross` |
 | `score_rebalance` (staggered split) | Top sleeve `top_lookback_days`-score anchored to month start, re-traded monthly; bottom sleeve `bottom_lookback_days`-score re-sized weekly; account rebalances `rebalance` | `top_n, top_lookback_days, top_refresh, bottom_n, bottom_lookback_days, rebalance, gross` |
+| `zscore_reversal` | Mean reversion: BUY the `n` lowest by the `avg_window`-day avg of the `zscore_lookback`-day z-score; `rebalance` cadence (incl. `biweekly`); CASH when QQQ < `regime_ma`-day MA | `zscore_lookback, avg_window, n, rebalance, regime_ma, gross` (CLI: `--lookback-days --avg-window --top-n --rebalance --regime-ma`) |
 | seed-only: `top_n` / `model_equal` / `score_gate` | Initial basket then evolves; rarely used standalone now | see `broker_sync.py --help` |
 
 `score_rebalance` accounts carry **no** model_v4 rules and **no** hedge/rebound overlay.

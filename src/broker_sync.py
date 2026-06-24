@@ -390,8 +390,11 @@ def _is_rebalance_day(freq: str, cal) -> bool:
     if freq == "daily" or len(cal) < 2:
         return True
     cur, prev = cal[-1], cal[-2]
+    first_of_week = tuple(cur.isocalendar())[:2] != tuple(prev.isocalendar())[:2]
     if freq == "weekly":
-        return tuple(cur.isocalendar())[:2] != tuple(prev.isocalendar())[:2]
+        return first_of_week
+    if freq == "biweekly":                                      # first trading day of EVEN ISO weeks
+        return first_of_week and (cur.isocalendar()[1] % 2 == 0)
     if freq == "monthly":
         return (cur.year, cur.month) != (prev.year, prev.month)
     return True
@@ -512,6 +515,75 @@ def _score_rebalance_targets(name: str, cli: ba.AlpacaPaper, current: Dict[str, 
     return targets, refs                                           # picks only -> the rest flattens
 
 
+def _zscore_reversal_signal(scenario: str = "model_v4", zscore_lookback: int = 60, avg_window: int = 10):
+    """{ticker: signal} where signal = the trailing `avg_window`-day average of the per-ticker
+    `zscore_lookback`-day rolling z-score of the composite (z = (score - mean)/std). LIVE — recomputes
+    the daily cross-sectional scores then z + avg. Low signal = score most-fallen vs the name's own norm."""
+    import datetime as _dt
+    from backtest import load_config, fetch_backtest_data
+    from scenarios import load_scenario, build_config
+    from signals import calculate_signals, rank_candidates
+    from rank_report import _build_ticker_weights, _SIGNAL_WINDOW
+    cfg = build_config(load_config(ROOT / "config"), load_scenario(scenario))
+    uni, w = cfg["tickers"], cfg["signals"].get("weights")
+    tw = _build_ticker_weights(cfg) or None
+    end = _dt.date.today()
+    pdata = fetch_backtest_data(uni, end - _dt.timedelta(days=(zscore_lookback + avg_window) * 2 + 420), end)
+    rows = [dict(zip(rf["ticker"], rf["composite_score"]))
+            for ts in pdata["Close"].index[-(zscore_lookback + avg_window):]
+            for rf in [rank_candidates(calculate_signals(pdata.loc[:ts].iloc[-_SIGNAL_WINDOW:], uni),
+                                       top_n=len(uni), weights=w, ticker_weights=tw)]]
+    sdf = pd.DataFrame(rows)
+    z = (sdf - sdf.rolling(zscore_lookback).mean()) / sdf.rolling(zscore_lookback).std()
+    return z.rolling(avg_window).mean().iloc[-1].to_dict()
+
+
+def _qqq_above_ma(ma_days: int = 200) -> bool:
+    """Regime filter: is QQQ above its `ma_days`-day moving average right now? (uptrend -> trade)."""
+    import datetime as _dt
+    from backtest import fetch_backtest_data
+    end = _dt.date.today()
+    px = fetch_backtest_data(["QQQ"], end - _dt.timedelta(days=ma_days * 2 + 30), end)["Close"]
+    px = px["QQQ"] if hasattr(px, "columns") else px
+    return float(px.iloc[-1]) > float(px.rolling(ma_days).mean().iloc[-1])
+
+
+def _zscore_reversal_targets(name: str, cli: ba.AlpacaPaper, current: Dict[str, float],
+                             tm: Dict[str, Any]) -> "tuple[Dict[str,int], Dict[str,float]]":
+    """Mean-reversion book (`target_mode: {kind: zscore_reversal, zscore_lookback, avg_window, n,
+    rebalance, regime_ma, gross}`): BUY the `n` LOWEST-signal names (most-fallen vs their own
+    `zscore_lookback`-day z norm, averaged `avg_window` days), equal-weight to `gross` of equity,
+    rebalanced on the `rebalance` cadence (e.g. biweekly). REGIME FILTER: if `regime_ma` is set and QQQ
+    is below its regime_ma-day MA, go to CASH (empty target -> reconcile flattens the book). No overlay."""
+    import os
+    force = os.environ.get("BROKER_REBALANCE_FORCE_TODAY", "").lower() in ("1", "yes", "true")
+    held = {t: int(round(s)) for t, s in (current or {}).items()
+            if int(round(s)) > 0 and t not in (HEDGE_SYM, REBOUND_SYM)}
+    cal = _recent_trading_days()
+    if held and not force and not _is_rebalance_day(tm.get("rebalance", "biweekly"), cal):
+        return held, {}                                            # not a rebalance day -> hold
+    ma = int(tm.get("regime_ma", 0) or 0)
+    if ma and not _qqq_above_ma(ma):
+        return {}, {}                                              # downtrend -> cash (flatten everything)
+    scenario = (load_manifest(name) or {}).get("scenario", "model_v4")
+    sig = _zscore_reversal_signal(scenario, int(tm.get("zscore_lookback", 60)), int(tm.get("avg_window", 10)))
+    ranked = sorted((t for t in sig if pd.notna(sig[t])), key=lambda t: sig[t])   # ascending -> lowest z first
+    picks = ranked[:int(tm.get("n", 10))]
+    if not picks:
+        return held, {}
+    equity = float(cli.account().get("equity") or 0.0)
+    per = float(tm.get("gross", 0.90)) * equity / len(picks)
+    quotes = cli.latest_prices(picks) or {}
+    targets: Dict[str, int] = {}
+    refs: Dict[str, float] = {}
+    for t in picks:
+        px = (quotes.get(t) or {}).get("mid") or (quotes.get(t) or {}).get("last")
+        if px and float(px) > 0:
+            refs[t] = float(px)
+            targets[t] = int(per / float(px))
+    return targets, refs
+
+
 def compute_targets(name: str, cli: ba.AlpacaPaper,
                     current: Optional[Dict[str, float]] = None) -> "tuple[Dict[str,int], Dict[str,float]]":
     """TARGET book {symbol: shares} for the next session, computed from the broker's actual book.
@@ -542,6 +614,9 @@ def compute_targets(name: str, cli: ba.AlpacaPaper,
     names. Returns (targets, ref_prices)."""
     current = current if current is not None else {p["ticker"]: p["qty"] for p in cli.positions()}
     tm = (load_manifest(name) or {}).get("target_mode") or {}
+    if tm.get("kind") == "zscore_reversal":
+        # buy the n lowest-z (most-fallen) names, regime-gated to cash in QQQ downtrends. No overlay.
+        return _zscore_reversal_targets(name, cli, current or {}, tm)
     if tm.get("kind") == "score_rebalance":
         # trailing-N-day-avg-score top_n (+bottom_n) equal-weight, rebalanced weekly/monthly. No overlay.
         return _score_rebalance_targets(name, cli, current or {}, tm)
@@ -908,22 +983,28 @@ def _cli(argv=None):
     p.add_argument("--secret-env", help="env-var NAME holding this account's APCA secret key")
     p.add_argument("--target-mode",
                    choices=["ramp_up", "top_n", "model_equal", "score_gate", "model_v4",
-                            "score_gate_rampup", "score_rebalance"],
+                            "score_gate_rampup", "score_rebalance", "zscore_reversal"],
                    default="ramp_up",
                    help="SEED modes: top_n / model_equal / score_gate. STEADY-STATE: model_v4 (follow "
                         "model_v4's own buy/sell rules on the account's book). score_gate_rampup (buy "
                         ">--min-score, sell per model_v4, until --graduate-at of starting cash deployed). "
                         "score_rebalance (trailing --lookback-days-avg-score top-N [+ --bottom-n] "
-                        "equal-weight, rebalanced --rebalance weekly/monthly).")
+                        "equal-weight, rebalanced --rebalance). zscore_reversal (BUY the --top-n LOWEST "
+                        "--avg-window-avg of the --lookback-days z-score, --rebalance cadence, cash when "
+                        "QQQ < its --regime-ma MA).")
     p.add_argument("--graduate-at", type=float, default=0.75,
                    help="fraction of starting cash deployed before a score_gate_rampup account goes full model_v4")
     p.add_argument("--top-n", type=int, default=10, help="N for --target-mode top_n / score_rebalance (default 10)")
     p.add_argument("--bottom-n", type=int, default=0,
                    help="also hold N lowest-scored names for score_rebalance (the 20-name version; default 0)")
     p.add_argument("--lookback-days", type=int, default=60,
-                   help="trailing score-average window for score_rebalance (default 60)")
-    p.add_argument("--rebalance", choices=["daily", "weekly", "monthly"], default="monthly",
-                   help="rebalance frequency for score_rebalance (default monthly)")
+                   help="trailing score-average window for score_rebalance; z-score lookback for zscore_reversal (default 60)")
+    p.add_argument("--avg-window", type=int, default=10,
+                   help="days to average the z-score over for zscore_reversal (default 10)")
+    p.add_argument("--regime-ma", type=int, default=200,
+                   help="zscore_reversal regime filter: go to cash when QQQ < this-day MA (0 disables; default 200)")
+    p.add_argument("--rebalance", choices=["daily", "weekly", "biweekly", "monthly"], default="monthly",
+                   help="rebalance frequency for score_rebalance / zscore_reversal (default monthly)")
     p.add_argument("--min-score", type=float, default=0.9,
                    help="score threshold for --target-mode score_gate (default 0.9)")
     p.add_argument("--size-pct", type=float, default=0.085,
@@ -949,11 +1030,14 @@ def _cli(argv=None):
         elif a.target_mode == "score_rebalance":
             tm = {"kind": "score_rebalance", "lookback_days": a.lookback_days, "top_n": a.top_n,
                   "bottom_n": a.bottom_n, "rebalance": a.rebalance, "gross": 0.90}
+        elif a.target_mode == "zscore_reversal":
+            tm = {"kind": "zscore_reversal", "zscore_lookback": a.lookback_days, "avg_window": a.avg_window,
+                  "n": a.top_n, "rebalance": a.rebalance, "regime_ma": a.regime_ma, "gross": 0.90}
         else:
             tm = None
         man = create_broker_account(a.account, broker_keys=bk, target_mode=tm)
         # these modes don't ramp up via next_session_decision → the manifest must carry NO ramp_up
-        if tm and tm["kind"] in ("model_v4", "score_gate_rampup", "score_rebalance"):
+        if tm and tm["kind"] in ("model_v4", "score_gate_rampup", "score_rebalance", "zscore_reversal"):
             man.pop("ramp_up", None)
             _manifest_path(a.account).write_text(json.dumps(man, indent=2))
         if tm and tm["kind"] == "top_n":
@@ -971,6 +1055,9 @@ def _cli(argv=None):
             tmdesc = "score_rebalance (%s rebal, top-%d%s, %dD-avg score, equal-wt)" % (
                 tm["rebalance"], tm["top_n"],
                 ("+bottom-%d" % tm["bottom_n"]) if tm["bottom_n"] else "", tm["lookback_days"])
+        elif tm and tm["kind"] == "zscore_reversal":
+            tmdesc = "zscore_reversal (%s rebal, bottom-%d by %dd-avg of %dd-z, cash<QQQ %ddMA)" % (
+                tm["rebalance"], tm["n"], tm["avg_window"], tm["zscore_lookback"], tm["regime_ma"])
         else:
             tmdesc = "ramp_up entry>=%.2f" % (man.get("ramp_up") or {}).get("entry_score", 0.9)
         print("CREATED broker account '%s' (scenario=%s, $%s cash, %s, keys=%s). "

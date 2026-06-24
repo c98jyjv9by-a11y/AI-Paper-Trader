@@ -101,7 +101,14 @@ account uses it. Older/experimental versions (v2, v3, v5, v6) and one-off script
   rebalances weekly) — the 60-day-lookback momentum sweep winners (keys `APCA_*_{MONTHLY10,WEEKLY10,COMBO20}`,
   **placeholder** until real Alpaca paper keys are set). One-off override **`BROKER_REBALANCE_FORCE_TODAY=1`**
   forces a rebalance TODAY regardless of the calendar gate and scores as-of today's intraday bar (also anchors
-  the combo top sleeve to today instead of the month start) — for an off-cadence "fire now" run. **Seed-only modes** (the initial
+  the combo top sleeve to today instead of the month start) — for an off-cadence "fire now" run. And
+  **`{kind:zscore_reversal, zscore_lookback, avg_window, n, rebalance, regime_ma, gross}`** (`_zscore_reversal_targets`)
+  → a **mean-reversion** book: BUY the `n` LOWEST-signal names where signal = the `avg_window`-day avg of the
+  per-ticker `zscore_lookback`-day z-score of the composite (most-fallen vs their own norm), equal-weight,
+  rebalanced on `rebalance` (incl. **biweekly** = first trading day of even ISO weeks); **REGIME FILTER**:
+  go to CASH when QQQ < its `regime_ma`-day MA (`_qqq_above_ma`). IC-swept + cost/regime-backtested
+  (`research/make_zscore_*`): the 10d-avg-z / biweekly / QQQ>200dMA config is best (gross Sharpe ~1.3, net
+  ~+34%/yr @ 10bp, 2022 −46%→−24%). Used by account **`zrev`** (keys `APCA_*_ZREV`, placeholder). **Seed-only modes** (the initial
   basket, no longer the live steady state): `{kind:top_n,n,size_pct}` (hold the N highest current-scored
   names), `{kind:model_equal,source,gross}` (equal-weight a source account's holdings), `{kind:score_gate,
   min_score,size_pct}` (hold every name whose current score ≥ min_score). Seed modes accumulate (dropouts

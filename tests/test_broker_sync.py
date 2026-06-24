@@ -258,3 +258,33 @@ def test_flatten_overlay_no_position_no_sell():
     r = bs.flatten_overlay("topten", cli=cli, submit=True)
     assert cli.canceled == ["o1"]                          # still cancels the stale TQQQ order
     assert cli.submitted == [] and r["qty"] == 0 and r["submitted"] is False
+
+
+class _ZrCli:
+    def account(self): return {"equity": 100_000.0}
+    def latest_prices(self, syms): return {s: {"mid": 100.0} for s in syms}
+
+
+def test_zscore_reversal_buys_lowest_n(monkeypatch):
+    monkeypatch.setattr(bs, "load_manifest", lambda n: {"scenario": "model_v4"})
+    monkeypatch.setattr(bs, "_recent_trading_days", lambda: ["d1", "d2"])
+    monkeypatch.setattr(bs, "_qqq_above_ma", lambda ma: True)                 # uptrend -> trade
+    monkeypatch.setattr(bs, "_zscore_reversal_signal",
+                        lambda s, zl, aw: {"A": 0.9, "B": 0.5, "C": -0.5, "D": -0.9})
+    tm = {"kind": "zscore_reversal", "n": 2, "rebalance": "biweekly", "regime_ma": 200, "gross": 0.90}
+    t, _ = bs._zscore_reversal_targets("zrev", _ZrCli(), {}, tm)
+    assert set(t) == {"C", "D"}                  # the 2 LOWEST-signal (most-fallen) names
+    assert all(v == 450 for v in t.values())     # 0.9*100k/2 = 45k / $100
+
+
+def test_zscore_reversal_regime_off_goes_cash(monkeypatch):
+    monkeypatch.setattr(bs, "load_manifest", lambda n: {"scenario": "model_v4"})
+    monkeypatch.setattr(bs, "_recent_trading_days", lambda: ["d1", "d2"])
+    monkeypatch.setattr(bs, "_is_rebalance_day", lambda f, c: True)
+    monkeypatch.setattr(bs, "_qqq_above_ma", lambda ma: False)                # QQQ below MA -> downtrend
+    seen = []
+    monkeypatch.setattr(bs, "_zscore_reversal_signal", lambda s, zl, aw: seen.append(1) or {"A": 0.1})
+    tm = {"kind": "zscore_reversal", "n": 10, "rebalance": "biweekly", "regime_ma": 200}
+    t, _ = bs._zscore_reversal_targets("zrev", _ZrCli(), {"X": 50}, tm)
+    assert t == {}                               # cash -> reconcile flattens the held book
+    assert not seen                              # signal not even computed when regime is off

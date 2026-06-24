@@ -1,0 +1,32 @@
+{
+  "name": "zrev",
+  "scenario": "model_v4",
+  "status": "frozen",
+  "inception": "2026-06-24",
+  "frozen_through": "2026-06-24",
+  "live_through": "2026-06-24",
+  "starting_value": 100000.0,
+  "ending_value": 100000.0,
+  "total_return": 0.0,
+  "n_trades": 0,
+  "n_positions": 0,
+  "broker": "alpaca_paper",
+  "broker_keys": {
+    "key_env": "APCA_API_KEY_ID_ZREV",
+    "secret_env": "APCA_API_SECRET_KEY_ZREV"
+  },
+  "hashes": {
+    "trades.csv": "5fdd1f8fd3860e41e180c02e04f49bb8e19c07e0fde4957fb47a295b72a0ac28",
+    "equity.csv": "109040297f774a51e7f502733c2f178108e67507d775d64227c7ca85d94970cd",
+    "positions.csv": "820e6980a10998ec494f00ac7025170ea84592801dd2ebe6ffcef7c9dcd863de"
+  },
+  "target_mode": {
+    "kind": "zscore_reversal",
+    "zscore_lookback": 60,
+    "avg_window": 10,
+    "n": 10,
+    "rebalance": "biweekly",
+    "regime_ma": 200,
+    "gross": 0.9
+  }
+}
