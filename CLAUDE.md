@@ -9,32 +9,173 @@ account uses it. Older/experimental versions (v2, v3, v5, v6) and one-off script
 `archive/` (see `archive/README.md`) and are not wired into anything.
 
 - **Model** — `config/scenarios/model_v4.yaml`. 83-name semis/AI/tech momentum book; composite
-  score 0–1, buy gate 0.70 (+ persistence buy at >0.90 for 3 days); equal-weight full deployment,
-  max total exposure 0.75, ≤2 new trades/day; Barroso vol governor (target 0.35); score-gated
-  7.5% stop; 30-day max hold suppressed until score<0.80. **Do NOT change v4's ticker list** —
+  score 0–1, buy gate 0.70 (+ persistence buy at >0.90 for 3 days); 8.5% per-name cap,
+  max total exposure 0.90, ≤2 new trades/day; Barroso vol governor (target 0.35); score-gated
+  15% stop (fires only when score<0.90), no take-profit (let winners run), 90-day max hold
+  suppressed until score<0.80. **Do NOT change v4's ticker list** —
   broad-universe runs (`make_cycle_test.py`) are test-only.
 - **Hedge overlay** — `src/hedge_overlay.py`. A standalone **overlay that sits ON TOP of model_v4
   and never modifies it.** Signal: QQQ 1-day up-shock + SPY 5d-vol z-spike → buy long **SOXS**
   (−3× inverse semis, 1-day hold, **never shorting**) sized inverse-vol; two-gate hybrid
   (soft=half / hard=full). Validated as the only working "June-16-pullback" hedge.
+- **Rebound overlay** — `src/rebound_overlay.py`. The standalone **mirror image** of the hedge (sits ON
+  TOP of model_v4, never modifies it). Trigger (`ReboundConfig`, tuned via `make_model_v4_rebound_sweep.py`):
+  **QQQ −1d ≤ −2.5% AND `spread_trl_1d` < 0 (momentum signal inverting) AND z(**QQQ** 5d vol) ≥ 0.25 → buy
+  TQQQ (+3×) at 50% of book, 1-day hold.** The `spread < 0` filter is the key — it selects the
+  mean-reverting momentum-crash setups and skips trend-continuation knives. Small, robust, **tail-neutral**
+  Sharpe-adder (ΔSharpe +0.06 full / +0.07 train / +0.03 test, MaxDD −39% vs −40%, worst-day unchanged,
+  ~3 fires/yr, 64% win). Surfaced in EOD reports as a **separate "Rebound overlay" status line** with its
+  1-day session P&L (`build_report` → `d["rebound"]` via `rebound_overlay.recommend`; NOT folded into the
+  book rollups, unlike the hedge). **Fully LIVE:** `rebound_overlay.live_signal()` computes the trigger
+  from yfinance + the newest `rankings_*.csv` (QQQ 1d, SPY 5d-vol z, top10−bottom10 spread), so it works on
+  any date; `recommend(live='auto')` uses the panel when it covers the date else falls back to live. **The
+  live broker accounts trade it:** `broker_sync._rebound_target` (wired into `compute_targets` for the
+  `model_v4`/`score_gate_rampup` modes) ADDS a `REBOUND_SYM`=**TQQQ** buy to the target when it fires (full
+  weight × held book). **Funding** (`rebound_funding`, default `trim`): cash first, then ROTATE — exit AT MOST
+  `rebound_trim_max` (default **2**) holdings, the lowest by **5-day avg score** (`_avg_scores`, across all daily
+  ranking snapshots whether held or not), to raise the shortfall; rest from cash, **overlay capped** if cash + 2
+  exits fall short (bounds turnover to 2 names). The trim sweep (`make_trim_funding_test.py`) confirmed ~50% stays
+  near-optimal funded by rotation (costing ~0.02 ΔSharpe vs free cash). Set `cash` to cap the sleeve at available
+  cash instead (no book sale). When it stops firing TQQQ
+  leaves the target so the reconcile flattens it next session
+  (= the 1-day exit) — the TQQQ **sell is forced to `cls` (market-on-close), even in `--extended-hours` mode**,
+  so the exit only ever happens at the close, never intraday. The model decision never sees TQQQ (excluded like the hedge), so it isn't stop-managed.
+  On by default for the trackers; opt out with manifest `rebound: false`. `python src/rebound_overlay.py
+  [--recommend [--live …]]`. Tuning analysis in `make_model_v4_rebound*.py` / `make_model_v4_{reverse,defense}.py`.
 - **Accounts** — `accounts/<name>/` is an append-only ledger system (immutable frozen core +
   `continuation/` living layer; SHA-256 manifest integrity via `account-verify`). Active accounts:
-  `primary` (main paper book), `tracker` (frictionless ramp-up sim, assumes 10bp cost),
-  `alpaca_tracker` (**broker-driven** go-forward book — ledger synced from real Alpaca paper fills).
+  `primary` (main paper book), `tracker` (frictionless ramp-up sim, assumes 10bp cost). **Broker-driven**
+  go-forward books (ledger synced from real Alpaca paper fills). All three now **follow model_v4's own
+  buy/sell rules** (`target_mode.kind=model_v4` → `next_session_decision` **seeded with the live broker
+  book + cash** via `_model_v4_decision`, so the exposure cap / rotation funding / exits are real — not a
+  from-inception sim; no hedge);
+  their `top_n` / `model_equal` / `score_gate` modes were only the **initial seed**, which now persists and
+  evolves under model_v4. `topten` (seeded top-10; keys `APCA_*_NEW`), `copymodel` (seeded model-equal;
+  keys `APCA_*_EXACT`), `rampup` (`score_gate_rampup`: **buy** only names scoring >0.9 (8.5% each) but
+  **sell** only per model_v4's exit rules, until 75% of starting cash is deployed (Σ broker buys/starting),
+  then full model_v4; keys `APCA_*_RAMP_UP`). Live broker books; cron drives them via `deploy/mv4_crontab.txt`.
+  `src/midday_summary.py` (`run.py midday-summary`) rolls the model_v4 scenario + the three accounts
+  into one cross-book INTRADAY table (`reports/midday_summary_<date>.md`) and renders each book's midday
+  PDF; `src/eod_summary.py` (`run.py eod-summary`) is the EOD sibling — marks to the official close,
+  **sells the overlay hedge at the close**, renders each book's EOD PDF into `reports/eod/`, and writes
+  a consolidated one-page **PDF** (`reports/eod_summary_<date>.pdf`, `.md` alongside) with grouped tables
+  (model_v4 reference vs live accounts) incl. a realized **Hedge P&L** column. `src/snapshot.py` (`run.py snapshot [--window 1D|5D|1M|MTD|YTD|…]`) renders a one-page
+  **performance** PDF (`reports/snapshot_<date>.pdf`): **1D Return + 1D P&L** (default; window
+  configurable) + SPY/QQQ context + Mkt Value/Cash + #Pos, in TWO grouped tables — the **simulated
+  model_v4 scenario** (shaded reference row) vs the **live Alpaca accounts** shown as **Top 10 Seed /
+  Existing Model Seed / Ramp Up** (three ways to implement model_v4 on any date), with an explainer +
+  Definitions block. For 1D the account returns come from the live broker (`stats["1D"]`); other windows
+  use `build_report`'s `eq_series`/`spy_series`/`qqq_series` (a book younger than the window shows `—`).
+  `src/intraday_check.py` (`run.py intraday-check [--accounts …] [--extended-hours] [--summary] [--qqq/--spread/--vol-z
+  what-if]`) is the one-shot **intraday trade-determination** check: live overlay signals (rebound + hedge — fire/idle
+  + gate values) and the **dry-run order plan** for each account (model reconcile + overlay buy with its funding), read-only.
 - **Broker integration (Alpaca paper, paper-only + submit-guarded)** —
   `src/broker_adapter.py` (REST client; refuses non-paper host; `submit`/`cancel` inert unless
   `confirm=True` AND env `BROKER_ADAPTER_ALLOW_SUBMIT=yes`),
   `src/broker_sync.py` (reconcile-to-target **limit** orders with **data-driven per-instrument
   collars** from the 2y overnight-gap distribution → `backtests/collars.csv`; realized-slippage
-  log; broker→ledger sync; `create_broker_account`), and
-  `src/broker_cron.py` (cron wrapper: phases open/retry/close/auto, self-guards on the ET market
-  clock; **dry-run unless `--live`**). Schedule: `deploy/mv4_crontab.txt` (times in CT = ET−1).
+  log; broker→ledger sync; `create_broker_account`. The target book is per-account via manifest
+  `target_mode`. **Live steady-state modes:** `{kind:model_v4}` → **follow model_v4's own buy/sell
+  rules on the account's own book** (`_model_v4_decision` runs `next_session_decision` seeded with the
+  live broker book + cash) — used by `topten`/`copymodel`; and `{kind:score_gate_rampup,min_score,
+  size_pct,graduate_at}` → **buy >min_score names, sell only per model_v4 exits, until graduate_at of
+  starting cash is deployed, then full model_v4** — used by `rampup`; and **`{kind:score_rebalance,
+  lookback_days,top_n,bottom_n,rebalance,gross}`** → rank the scenario universe by the **trailing
+  `lookback_days`-day AVG composite score**, hold the **top_n (+ optional bottom_n) names equal-weight**
+  to `gross` of equity, and **rebalance only on the first trading day of each week/month** (off-rebalance
+  days hold; no model_v4 rules, no hedge/rebound overlay; calendar-gated via `_recent_trading_days` +
+  `_is_rebalance_day`, scored live via `_lookback_avg_scores`). A **STAGGERED split** variant
+  (`top_lookback_days/top_refresh` + `bottom_lookback_days` present → `_combo_targets`) runs two
+  independent sleeves: **top_n by the `top_lookback_days`-avg score anchored to the month start (names match
+  the monthly book), re-sized ONLY on the month's first weekly rebalance — held/untouched the other weeks**;
+  PLUS **bottom_n by the `bottom_lookback_days`-avg score, re-sized every (weekly) rebalance**. Used by the
+  research accounts **`monthly10`** (monthly / top-10 / 60-day), **`weekly10`** (weekly / top-10 / 60-day),
+  **`combo20`** (STAGGERED: top-10 / 60-day refreshed monthly + bottom-10 / **5-day** refreshed weekly, account
+  rebalances weekly) — the 60-day-lookback momentum sweep winners (keys `APCA_*_{MONTHLY10,WEEKLY10,COMBO20}`,
+  **placeholder** until real Alpaca paper keys are set). One-off override **`BROKER_REBALANCE_FORCE_TODAY=1`**
+  forces a rebalance TODAY regardless of the calendar gate and scores as-of today's intraday bar (also anchors
+  the combo top sleeve to today instead of the month start) — for an off-cadence "fire now" run. **Seed-only modes** (the initial
+  basket, no longer the live steady state): `{kind:top_n,n,size_pct}` (hold the N highest current-scored
+  names), `{kind:model_equal,source,gross}` (equal-weight a source account's holdings), `{kind:score_gate,
+  min_score,size_pct}` (hold every name whose current score ≥ min_score). Seed modes accumulate (dropouts
+  reconciled to 0); same reconcile/submit/cron path. Create via `broker_sync.py --create-account
+  --target-mode {top_n|model_equal|score_gate|model_v4|score_gate_rampup|score_rebalance}
+  [--graduate-at … | --lookback-days/--top-n/--bottom-n/--rebalance …] …`. **To set up a NEW paper
+  account, follow the step-by-step runbook `deploy/new_account_runbook.md`** (keys → create → verify
+  → run-the-live-path-for-real → dry-run → submit → reconcile, with the gotchas). Also:
+  `src/broker_cron.py` (cron wrapper: phases open/retry/close/midday/auto, self-guards on the ET
+  market clock; **dry-run unless `--live`**). Schedule: `deploy/mv4_crontab.txt` (times in CT = ET−1).
+  (`broker_sync.py --submit-plan … --extended-hours` is a FILL-NOW pass: marketable-limit
+  `extended_hours` day orders for the current pre/post-market session — crosses the spread at the wider
+  retry collar, bypasses the auction window — instead of next-open `opg`/`cls` auction orders.)
   Daily flow: `open` (submit) → `retry` (re-price unfilled at the wider collar, then skip) →
-  `close` (reconcile fills/slippage + render EOD).
+  `close` (reconcile fills/slippage + render EOD). `midday` renders the intraday Midday Pulse PDF
+  from the account's **own** ledger (read-only; `--prepost` for extended-hours marks) — same as
+  `run.py midday --account <name>`. **On-demand `run.py midday`/`eod`/`midday-summary` renders for the
+  scenario AND every account go to the unified `reports/midday/` & `reports/eod/` folders (named by
+  book: `midday_<account|scenario>_<date>.pdf`). The hash-verified ledger copies under
+  `accounts/<name>/reports/` (written by account-freeze/continue) are separate and unchanged.**
+  For a LIVE midday render of a broker account, `broker_sync.apply_live_broker_marks()` **rebuilds the
+  held book from the Alpaca positions** (source of truth — so names held at the broker but not yet
+  reconciled into the ledger still show), each with `entry_price`←avg_entry (what was paid),
+  `current_price`←live; pv/cash←account, held-DW recomputed, and the **portfolio 1-day return =
+  equity / last_equity − 1** — so intraday returns reflect actual fills, not the (possibly 1-day-old)
+  ledger equity curve. Windowed benchmark returns (1D/5D/MTD) anchor to the **price calendar**, so
+  SPY/QQQ stay correct even for a brand-new account. It also **strips the synthetic overlay hedge**
+  (`d["hedge"]=None`, removes the injected hedge BUY/SELL, recomputes held_avg/held_dw from the real
+  positions) — accounts don't trade the model_v4 hedge, so it must not show a hedge line or hedge P&L.
+  Applied on every live account render (midday/EOD `run` + the summaries); the model_v4 *scenario*
+  keeps the hedge (it's part of that book).
+- **Hedge in model_v4 reports** — `build_report` surfaces `d["hedge"]` = the overlay hedge (**SQQQ**,
+  −3x inverse QQQ) suggested **as of the PRIOR close** (`_hedge_as_of(rank_close)` — the hedge ACTIVE
+  over the session being viewed, since it's a 1-day overlay suggested at close → held next session),
+  NOT the latest close. PURCHASE price = that prior close; `now` = the mark; `today` = the move
+  between them. The EOD/midday reports show it as a flagged **held-book line item** (labeled just
+  "hedge" — no ticker) and an **attribution line** (OVERLAY HEDGE section + contribution). The
+  intraday-paths page leads with an **SPY/QQQ benchmarks** table. The hedge return is **folded into
+  the held-book TOTAL** in BOTH rollups: `held_dw` (dollar-weighted — value-weighted by hedge notional)
+  and `held_avg` (equal-weight — one extra line item); `held_dw_book` keeps the pre-hedge book return
+  for the attribution waterfall (Book $-wt → +hedge contribution → Book incl. hedge = `held_dw`). A
+  fired hedge is treated as a **real prior-close trade**: cash ↓ by the purchase cost, pv += its
+  mark-to-market P&L, and the buy appears in the transactions (`recent_trades` + the midday tx table).
+  The PORTFOLIO/"Session so far" returns (`stats[*]["port"]`) are also **hedge-inclusive** — each
+  window's endpoint is scaled to the hedge-inclusive pv — so the session return lines up with the
+  Portfolio card and the held-book TOTAL (the residual gap to held_dw is just cash, which the
+  portfolio return includes and the held-book return excludes). **EOD exit:** the hedge is a 1-day
+  overlay sold at the session close — `build_report(at_close=True)` (passed by the EOD render
+  `pdf_report.run`) books a **hedge SELL at the close** with realized P&L, returns the proceeds to
+  cash, and flattens it (held-book line shows "SOLD at close"); guarded by `_close_is_final(mark)`
+  so it only sells when the official close is available (past dates, or ≥16:00 ET today) — never on
+  a mid-session provisional bar, and never in the midday report (which keeps the hedge held).
+  The hedge instrument is **fetched intraday** (anchored to its prior close), so the attribution Hedge
+  row shows a full intraday path, not just the closing mark. (The
+  up-shock+vol GATE still comes from `hedge_overlay.recommend`. The hedge instrument is **SQQQ** by
+  default — `HedgeConfig.hedge_ticker` (the held/shown/traded ETF) is decoupled from `HedgeConfig.product`
+  (the inverse-vol SIZING-PANEL key, still `soxs`), so the displayed/traded hedge is SQQQ without needing
+  to rebuild the sizing panel; `broker_sync.HEDGE_SYM` is `SQQQ` too.)
 - **Research artifacts** — `reports/` (dated EOD/status PDFs+md) and `backtests/` (dated
   CSVs/md) are generated outputs; regenerate, don't hand-edit. Current report/PDF tooling:
   `make_model_v4_guide.py`, `make_hedge_recommendation.py`, `make_rolling_chart.py`,
-  `make_cycle_test.py`.
+  `make_cycle_test.py`, `make_levetf_corr_tails.py` (the **corr_tails-by-horizon** report, rebuilt to ask
+  *which trailing **model_v4 metrics** (scores/spread/baskets/vol from `model_v4_timeseries.csv`) predict
+  forward **TQQQ** and **SQQQ** moves* — analysed separately per ETF, target = the ETF's own price return;
+  correlation heatmap + tail UP/DN-gap call-outs → `reports/corr_tails_levetf.pdf`. The original model_v4
+  corr_tails generator was a lost one-off). `make_levetf_volstate.py` backtests the **vol-state tilt** that
+  finding implies (TQQQ-or-cash by QQQ realized-vol z-score; the robust rule is **risk-OFF** — hold TQQQ in
+  calm, cash in vol spikes — not buy-the-stress; never hold SQQQ) → `reports/levetf_volstate.pdf`.
+  `make_levetf_shock.py` backtests a 1-day vol-gated **shock-reversal** (buy TQQQ if QQQ −1d<−2% & rel-vol≥0.75;
+  buy SQQQ if +2% & rel-vol≥0.75; hold 1d) → `reports/levetf_shock.pdf` — strong in 2018-2022 (Sharpe 1.2) but
+  loses in 2022-2026 (regime-dependent, does NOT survive OOS). `make_model_v4_defense.py` compares two
+  same-day sell-off defenses on the model_v4 book — **A** a fast (10d) de-risk-to-cash governor vs **B** a
+  structural 1-day SQQQ tranche (QQQ −2% & <200d MA & vol-z≥0.75) — vs no overlay → `reports/model_v4_defense.pdf`.
+  Finding: **A** (cash) is the only one that defends (volatile-window Sharpe 0.74→0.82, MaxDD −34%→−29%,
+  worst-day −9%→−6%); **B** (inverse ETF) *hurts* in stress and only 39% of fires win — buying SQQQ into
+  sell-offs sells the bottom. Defend with exposure reduction, not inverse ETFs.
+  `make_model_v4_reverse.py` tests the hedge **in reverse** (down-shock → buy TQQQ for the rebound) as a
+  model_v4 overlay, sweeping the TQQQ hold length → `reports/model_v4_reverse.pdf`. The 1-day bounce edge is
+  real (60% win, +1.24%/bet) and boosts raw return, but it's **leverage, not alpha** — full-sample Sharpe is
+  flat and tail risk worsens (worst-day −9%→−22%); **1-day hold is best, longer holds are strictly worse**
+  (Sharpe degrades monotonically to +0.90, MaxDD blows to −65% at 20d) — the rebound is a next-day effect.
 
 **Standing constraints:** paper trading only (no live orders); never mutate the base live-state
 files `data/{trade_log.csv,positions.csv,portfolio_state.json}`; API keys live ONLY in gitignored
@@ -79,6 +220,17 @@ and auto-invoked by the `adaptive` command (reusing the already-fetched price pa
 Named scenarios live in `config/scenarios/<name>.yaml` (trimmed universe + per-ticker `ticker_groups`
 overrides on the base config); `src/scenarios.py` loads + overlays them and runs a scenario-tagged
 backtest. `davids_model` = the OOS-robust trimmed universe (MSFT/ORCL/CRWD) with per-ticker exits.
+`model_v4_rebalance` = model_v4's universe+ranker but a **daily top-10 rebalance** replaces the
+entry/exit logic: a scenario `rebalance: {top_n: 10}` block flips `run_backtest` into rebalance mode —
+each close the book = today's top-10; dropouts are sold and entrants bought equal-weight
+(`max_total_exposure / N`) as a next-close swap; **stayers are never sold or trimmed** (membership-only);
+model_v4's stops/persistence/vol-targeting are bypassed. Always holds 10 positions.
+`LevEtf` = a 2-ticker **leveraged-ETF** scenario (TQQQ +3× / SQQQ −3× QQQ) running model_v4's rules
+pre-adapted for 3× leverage (`max_position_pct: auto` → ~0.45/name, `stop_loss: 0.25`, `target_vol: 0.60`);
+fully isolated from model_v4 (own universe + name-tagged outputs). Studied via the standard exercise
+(`scenario LevEtf` + `experiments --scenario LevEtf`) over 2018-2026 — the momentum rules get whipsawed
+on the inverse 3× pair (baseline +25% vs QQQ +342%). The `experiments` command now takes an optional
+`--scenario <name>` to overlay a scenario's universe/rules (default off = base config).
 
 Per-ticker timing criteria live in `config/ticker_timing_criteria.yaml` (seed). `calibrate` writes a
 dated, data-derived `config/ticker_timing_criteria_<date>.yaml`; `evaluate` applies any such file
