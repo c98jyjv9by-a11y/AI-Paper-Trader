@@ -41,9 +41,14 @@ BLURBS = {
     "combo20": ("Staggered 20-name",
                 "Top 10 by 60-day score (refreshed monthly) + bottom 10 by 5-day score (refreshed weekly), "
                 "equal-weight; rebalances weekly."),
-    "zrev": ("z-reversal - biweekly (regime-filtered)",
+    "zscore10d_biweekly": ("z-reversal - 10d / biweekly (validated)",
              "Mean reversion: buys the 10 MOST-FALLEN names by the 10-day avg of the 60-day z-score, "
-             "equal-weight, biweekly; goes to CASH when QQQ is below its 200-day MA (trend filter)."),
+             "equal-weight, biweekly; cash when QQQ < 200-day MA. The IC/cost-validated config."),
+    "zscore5d_weekly": ("z-reversal - 5d / weekly",
+             "Same idea, faster: 5-day avg of the 60-day z, weekly rebalance; cash when QQQ < 200-day MA."),
+    "zscore1d_daily": ("z-reversal - 1d / daily",
+             "Fastest: the raw (1-day) 60-day z, daily rebalance; cash when QQQ < 200-day MA. Highest gross "
+             "Sharpe but highest turnover/cost."),
 }
 DEFAULT_ACCOUNTS = list(BLURBS)
 

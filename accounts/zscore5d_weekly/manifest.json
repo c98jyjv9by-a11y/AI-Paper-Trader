@@ -1,5 +1,5 @@
 {
-  "name": "zrev",
+  "name": "zscore5d_weekly",
   "scenario": "model_v4",
   "status": "frozen",
   "inception": "2026-06-24",
@@ -12,8 +12,8 @@
   "n_positions": 0,
   "broker": "alpaca_paper",
   "broker_keys": {
-    "key_env": "APCA_API_KEY_ID_ZREV",
-    "secret_env": "APCA_API_SECRET_KEY_ZREV"
+    "key_env": "APCA_API_KEY_ID_ZSCORE5D_WEEKLY",
+    "secret_env": "APCA_API_SECRET_KEY_ZSCORE5D_WEEKLY"
   },
   "hashes": {
     "trades.csv": "5fdd1f8fd3860e41e180c02e04f49bb8e19c07e0fde4957fb47a295b72a0ac28",
@@ -23,9 +23,9 @@
   "target_mode": {
     "kind": "zscore_reversal",
     "zscore_lookback": 60,
-    "avg_window": 10,
+    "avg_window": 5,
     "n": 10,
-    "rebalance": "biweekly",
+    "rebalance": "weekly",
     "regime_ma": 200,
     "gross": 0.9
   }
