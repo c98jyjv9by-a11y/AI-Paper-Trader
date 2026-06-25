@@ -1,4 +1,5 @@
 # ── model_v4 Alpaca paper sessions (PAPER ONLY) — accounts: topten/copymodel/rampup ──
+# ── + z-reversal accounts: zscore1d_daily / zscore5d_weekly / zscore10d_biweekly (see bottom block) ──
 # Times are America/Chicago (= ET-1, constant year-round). The wrapper ALSO self-guards
 # on the live ET market clock, so off-calendar runs no-op. Logs: account cron.log + /tmp.
 # open 9:25 ET (8:25 CT) · retry 10:05 ET (9:05 CT) · midday 12:30 ET (11:30 CT) · close 16:10 ET (15:10 CT)
@@ -22,3 +23,23 @@ APP=/Users/david/PyCharmMiscProject/ai-paper-trader
 10 15 * * 1-5  cd $APP && $PYBIN src/broker_cron.py --phase close --account topten >> /tmp/mv4_cron.log 2>&1
 10 15 * * 1-5  cd $APP && $PYBIN src/broker_cron.py --phase close --account copymodel >> /tmp/mv4_cron.log 2>&1
 10 15 * * 1-5  cd $APP && $PYBIN src/broker_cron.py --phase close --account rampup >> /tmp/mv4_cron.log 2>&1
+
+# ── z-reversal accounts (mean-reversion, NO overlay) — zscore1d_daily / zscore5d_weekly / zscore10d_biweekly ──
+# Run all three EVERY weekday: the rebalance cadence is enforced INSIDE compute_targets
+# (zscore1d_daily=daily, zscore5d_weekly=first trading day of week, zscore10d_biweekly=first trading
+# day of even ISO weeks). On off-cadence days it just holds -> 0 orders. Open scores off the prior
+# close (matches the close-to-close backtest); the regime filter flips them to cash when QQQ<200dMA.
+# open (submit)
+25 8  * * 1-5  cd $APP && $PYBIN src/broker_cron.py --phase open  --account zscore1d_daily --live >> /tmp/mv4_cron.log 2>&1
+25 8  * * 1-5  cd $APP && $PYBIN src/broker_cron.py --phase open  --account zscore5d_weekly --live >> /tmp/mv4_cron.log 2>&1
+25 8  * * 1-5  cd $APP && $PYBIN src/broker_cron.py --phase open  --account zscore10d_biweekly --live >> /tmp/mv4_cron.log 2>&1
+
+# retry (re-price unfilled at the wider collar)
+5  9  * * 1-5  cd $APP && $PYBIN src/broker_cron.py --phase retry --account zscore1d_daily --live >> /tmp/mv4_cron.log 2>&1
+5  9  * * 1-5  cd $APP && $PYBIN src/broker_cron.py --phase retry --account zscore5d_weekly --live >> /tmp/mv4_cron.log 2>&1
+5  9  * * 1-5  cd $APP && $PYBIN src/broker_cron.py --phase retry --account zscore10d_biweekly --live >> /tmp/mv4_cron.log 2>&1
+
+# close (reconcile fills/slippage + sync ledger + EOD PDF)
+10 15 * * 1-5  cd $APP && $PYBIN src/broker_cron.py --phase close --account zscore1d_daily >> /tmp/mv4_cron.log 2>&1
+10 15 * * 1-5  cd $APP && $PYBIN src/broker_cron.py --phase close --account zscore5d_weekly >> /tmp/mv4_cron.log 2>&1
+10 15 * * 1-5  cd $APP && $PYBIN src/broker_cron.py --phase close --account zscore10d_biweekly >> /tmp/mv4_cron.log 2>&1
