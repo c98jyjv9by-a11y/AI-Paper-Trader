@@ -1,15 +1,15 @@
 {
   "name": "zscore1d_daily",
   "scenario": "model_v4",
-  "status": "frozen",
+  "status": "living",
   "inception": "2026-06-24",
   "frozen_through": "2026-06-24",
-  "live_through": "2026-06-24",
+  "live_through": "2026-06-25",
   "starting_value": 100000.0,
   "ending_value": 100000.0,
   "total_return": 0.0,
   "n_trades": 0,
-  "n_positions": 0,
+  "n_positions": 10,
   "broker": "alpaca_paper",
   "broker_keys": {
     "key_env": "APCA_API_KEY_ID_ZSCORE1D_DAILY",
@@ -18,7 +18,9 @@
   "hashes": {
     "trades.csv": "5fdd1f8fd3860e41e180c02e04f49bb8e19c07e0fde4957fb47a295b72a0ac28",
     "equity.csv": "109040297f774a51e7f502733c2f178108e67507d775d64227c7ca85d94970cd",
-    "positions.csv": "820e6980a10998ec494f00ac7025170ea84592801dd2ebe6ffcef7c9dcd863de"
+    "positions.csv": "820e6980a10998ec494f00ac7025170ea84592801dd2ebe6ffcef7c9dcd863de",
+    "continuation/equity.csv": "f877dd481f553c88b651231dbc7d745a8e8bd877e250b5c8505ac1b6fd5a7037",
+    "continuation/positions.csv": "5719e5285cb3fb852ea8b3f8ad59d2326face5b9a8ca0e606809234b54f66209"
   },
   "target_mode": {
     "kind": "zscore_reversal",
@@ -28,5 +30,6 @@
     "rebalance": "daily",
     "regime_ma": 200,
     "gross": 0.9
-  }
+  },
+  "live_value": 100882.43
 }

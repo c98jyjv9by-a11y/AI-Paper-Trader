@@ -19,8 +19,8 @@
     "trades.csv": "5fdd1f8fd3860e41e180c02e04f49bb8e19c07e0fde4957fb47a295b72a0ac28",
     "equity.csv": "359ddb0200a9990c176a9436087f4088f46bff244bea02a4e3b9b7242ba0128f",
     "positions.csv": "820e6980a10998ec494f00ac7025170ea84592801dd2ebe6ffcef7c9dcd863de",
-    "continuation/equity.csv": "28e832195189d4afd1a6f9789264c4a53624ed59993080f4b2dcf5196b1e0011",
-    "continuation/positions.csv": "0b362583381f1c01bf79312e4f0c18d7c9344f2dfba80b6ffc920dd99468bd82"
+    "continuation/equity.csv": "d683a510eeef857d873350070158e0756b7e8474891d59479d438859388e3a8d",
+    "continuation/positions.csv": "d9c7c190bdb7720578ed426ea6ece7c4d43b22203449fb82f578280c4f1c3f10"
   },
   "target_mode": {
     "kind": "score_gate_rampup",
@@ -28,5 +28,5 @@
     "size_pct": 0.085,
     "graduate_at": 0.75
   },
-  "live_value": 98869.08
+  "live_value": 98283.27
 }

@@ -19,11 +19,11 @@
     "trades.csv": "5fdd1f8fd3860e41e180c02e04f49bb8e19c07e0fde4957fb47a295b72a0ac28",
     "equity.csv": "359ddb0200a9990c176a9436087f4088f46bff244bea02a4e3b9b7242ba0128f",
     "positions.csv": "820e6980a10998ec494f00ac7025170ea84592801dd2ebe6ffcef7c9dcd863de",
-    "continuation/equity.csv": "bd1e6637b3d1b58e8d222e6b562a49dd171ccefd42a7fff61d40c878401bb0da",
-    "continuation/positions.csv": "cc8b5d9322f4df20f9c7ec0f38b1a0e0ce0b763716b8fba7566c2801a20d8cfc"
+    "continuation/equity.csv": "e2f142d7d5681b2cae25643fc8bd15b0465c96906859beff8498aa95e4933e3a",
+    "continuation/positions.csv": "791f691a38c8b39f297fd1ebee3ae135f5b07e2c2a3b237bb6dab3318060e06c"
   },
   "target_mode": {
     "kind": "model_v4"
   },
-  "live_value": 96821.68
+  "live_value": 94355.31
 }

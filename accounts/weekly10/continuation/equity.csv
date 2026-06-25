@@ -1,3 +1,5 @@
 date,cash,open_positions_value,total_portfolio_value,realized_pnl_to_date,unrealized_pnl,daily_return,cumulative_return,spy_cumulative_return,qqq_cumulative_return,equal_weight_cumulative_return,forecast_vol,exposure_mult
 2026-06-24,100000.0,0.0,100000.0,0.0,0.0,,,0.0,0.0,0.0,,1.0
 2026-06-24,11738.64,88223.5375,99962.98,0.0,0.0,,,0.0,0.0,0.0,,1.0
+2026-06-25,11738.63,90329.6349,102068.26,0.0,0.0,,,0.0,0.0,0.0,,1.0
+2026-06-25,11738.63,90286.5316,102025.16,0.0,0.0,,,0.0,0.0,0.0,,1.0
