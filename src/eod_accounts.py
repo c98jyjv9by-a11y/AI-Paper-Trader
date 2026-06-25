@@ -90,6 +90,23 @@ def _collect(name, today):
         return {"name": name, "err": str(exc)[:60]}
 
 
+def _benchmarks(today):
+    """{sym: day_return} for QQQ/SPY from the price feed (latest close vs the prior close)."""
+    try:
+        import datetime as _dt
+        from backtest import fetch_backtest_data
+        end = _dt.date.fromisoformat(today)
+        cl = fetch_backtest_data(["QQQ", "SPY"], end - _dt.timedelta(days=10), end)["Close"]
+        out = {}
+        for s in ("QQQ", "SPY"):
+            v = (cl[s] if (hasattr(cl, "columns") and s in cl.columns) else cl).dropna()
+            if len(v) >= 2 and float(v.iloc[-2]) > 0:
+                out[s] = float(v.iloc[-1] / v.iloc[-2] - 1)
+        return out
+    except Exception:
+        return {}
+
+
 def run(accounts=None, end=None, out=None):
     today = end or date.today().isoformat()
     accts = accounts or DEFAULT_ACCOUNTS
@@ -121,6 +138,11 @@ def run(accounts=None, end=None, out=None):
         cells.append(["TOTAL", "%d accounts" % len(ok),
                       _money(tot.get("eq", 0.0)), _money(tot.get("day_pnl", 0.0)),
                       _pct(tot_day), _pct(tot_ret), str(tot_pos), str(tot_trd)])
+        # benchmark rows: QQQ/SPY today's index return (Day % only; the rest N/A for an index)
+        bm = _benchmarks(today)
+        bm_syms = [s for s in ("QQQ", "SPY") if s in bm]
+        for s in bm_syms:
+            cells.append([s, "benchmark (index)", "—", "—", _pct(bm[s]), "—", "—", "—"])
         t = ax.table(cellText=cells, colLabels=cols, loc="center", cellLoc="center")
         t.auto_set_font_size(False); t.set_fontsize(8.5); t.scale(1, 1.6)
         for j in range(len(cols)):
@@ -138,6 +160,12 @@ def run(accounts=None, end=None, out=None):
             t[tr, j].set_facecolor("#dfe6e9"); t[tr, j].set_text_props(weight="bold")
         for j, val in [(3, tot.get("day_pnl", 0.0)), (4, tot_day), (5, tot_ret)]:
             t[tr, j].set_text_props(color=(GREEN if val >= 0 else RED), weight="bold")
+        # benchmark rows (after TOTAL): italic/grey, colored Day %
+        for k, s in enumerate(bm_syms):
+            row = tr + 1 + k
+            for j in range(len(cols)):
+                t[row, j].set_text_props(style="italic", color="#555")
+            t[row, 4].set_text_props(color=(GREEN if bm[s] >= 0 else RED), weight="bold", style="italic")
         ax2 = fig.add_axes([0.04, 0.02, 0.92, 0.46]); ax2.axis("off")
         ax2.text(0, 1.0, "Strategies", fontsize=11, weight="bold", va="top")
         y = 0.92
