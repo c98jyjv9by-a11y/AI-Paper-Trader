@@ -9,6 +9,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import broker_sync as bs
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _stub_last_closes(monkeypatch):
+    # Sizing now sanitizes quotes against the last close (no off-hours mis-sizing). Stub the network
+    # fetch to empty so mocked quotes pass through unchanged; the _sanitize_quotes unit tests pass
+    # their own closes directly and are unaffected.
+    monkeypatch.setattr(bs, "_last_closes", lambda *a, **k: {})
 
 
 def test_topn_targets_sizes_each_name_at_size_pct_of_equity():

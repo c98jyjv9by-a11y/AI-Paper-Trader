@@ -458,7 +458,8 @@ def _combo_targets(scenario: str, cli: ba.AlpacaPaper, current: Dict[str, float]
     bottom = [t for t in sorted(ba, key=lambda k: ba[k]) if pd.notna(ba[t])][:bot_n]
     # refresh the top sleeve only on the month's FIRST weekly rebalance (or when forced / first deploy)
     do_top = force or (not has_book) or (tuple(cal[-1].isocalendar())[:2] == tuple(anchor.isocalendar())[:2])
-    quotes = cli.latest_prices(list(dict.fromkeys(top + bottom))) or {}
+    _names = list(dict.fromkeys(top + bottom))
+    quotes = _sanitize_quotes(cli.latest_prices(_names) or {}, _last_closes(_names))   # size off sane px
     cur = current or {}
     targets: Dict[str, int] = {}
     refs: Dict[str, float] = {}
@@ -504,7 +505,7 @@ def _score_rebalance_targets(name: str, cli: ba.AlpacaPaper, current: Dict[str, 
         return held, {}
     equity = float(cli.account().get("equity") or 0.0)
     per = float(tm.get("gross", 0.90)) * equity / len(picks)       # equal-weight to gross exposure
-    quotes = cli.latest_prices(picks) or {}
+    quotes = _sanitize_quotes(cli.latest_prices(picks) or {}, _last_closes(picks))   # size off sane px
     targets: Dict[str, int] = {}
     refs: Dict[str, float] = {}
     for t in picks:
@@ -573,7 +574,7 @@ def _zscore_reversal_targets(name: str, cli: ba.AlpacaPaper, current: Dict[str, 
         return held, {}
     equity = float(cli.account().get("equity") or 0.0)
     per = float(tm.get("gross", 0.90)) * equity / len(picks)
-    quotes = cli.latest_prices(picks) or {}
+    quotes = _sanitize_quotes(cli.latest_prices(picks) or {}, _last_closes(picks))   # size off sane px
     targets: Dict[str, int] = {}
     refs: Dict[str, float] = {}
     for t in picks:
@@ -656,7 +657,7 @@ def compute_targets(name: str, cli: ba.AlpacaPaper,
     if tm.get("kind") == "model_equal":
         equity = float(cli.account().get("equity") or 0.0)
         names = _source_book_names(tm.get("source", "primary"))
-        quotes = cli.latest_prices(names) if names else {}
+        quotes = _sanitize_quotes(cli.latest_prices(names) or {}, _last_closes(names)) if names else {}
         prices = {s: (quotes.get(s) or {}).get("mid") for s in names}
         return equal_weight_targets(prices, equity, current, float(tm.get("gross", 1.0)))
     q = ba.queue_from_account(name)
