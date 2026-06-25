@@ -83,9 +83,9 @@ def _collect(name, today):
                  if o.get("status") == "filled" and (o.get("filled_at") or "").startswith(today)]
         man = json.load(open(glob.glob(str(ROOT / "accounts" / name / "*.json"))[0]))
         start = float(man.get("starting_value") or eq)
-        return {"name": name, "eq": eq, "day_pnl": eq - le, "day_ret": (eq / le - 1 if le else 0.0),
-                "tot_ret": (eq / start - 1 if start else 0.0), "cash": float(a.get("cash") or 0.0),
-                "pos": pos, "fills": fills, "err": None}
+        return {"name": name, "eq": eq, "le": le, "start": start, "day_pnl": eq - le,
+                "day_ret": (eq / le - 1 if le else 0.0), "tot_ret": (eq / start - 1 if start else 0.0),
+                "cash": float(a.get("cash") or 0.0), "pos": pos, "fills": fills, "err": None}
     except Exception as exc:
         return {"name": name, "err": str(exc)[:60]}
 
@@ -111,6 +111,16 @@ def run(accounts=None, end=None, out=None):
             else:
                 cells.append([n, label, _money(d["eq"]), _money(d["day_pnl"]), _pct(d["day_ret"]),
                               _pct(d["tot_ret"]), str(len(d["pos"])), str(len(d["fills"]))])
+        # TOTAL row — aggregate across the accounts that resolved (skip errored ones)
+        ok = [data[n] for n in accts if not data[n].get("err")]
+        tot = {k: sum(d[k] for d in ok) for k in ("eq", "le", "start", "day_pnl")} if ok else {}
+        tot_day = (tot["eq"] / tot["le"] - 1) if tot.get("le") else 0.0
+        tot_ret = (tot["eq"] / tot["start"] - 1) if tot.get("start") else 0.0
+        tot_pos = sum(len(d["pos"]) for d in ok)
+        tot_trd = sum(len(d["fills"]) for d in ok)
+        cells.append(["TOTAL", "%d accounts" % len(ok),
+                      _money(tot.get("eq", 0.0)), _money(tot.get("day_pnl", 0.0)),
+                      _pct(tot_day), _pct(tot_ret), str(tot_pos), str(tot_trd)])
         t = ax.table(cellText=cells, colLabels=cols, loc="center", cellLoc="center")
         t.auto_set_font_size(False); t.set_fontsize(8.5); t.scale(1, 1.6)
         for j in range(len(cols)):
@@ -122,6 +132,12 @@ def run(accounts=None, end=None, out=None):
             for j, val in [(3, d["day_pnl"]), (4, d["day_ret"]), (5, d["tot_ret"])]:
                 t[i + 1, j].set_text_props(color=(GREEN if val >= 0 else RED), weight="bold")
             t[i + 1, 1].set_text_props(fontsize=7)
+        # style the TOTAL row (last row): shaded + bold, P&L/returns colored
+        tr = len(accts) + 1
+        for j in range(len(cols)):
+            t[tr, j].set_facecolor("#dfe6e9"); t[tr, j].set_text_props(weight="bold")
+        for j, val in [(3, tot.get("day_pnl", 0.0)), (4, tot_day), (5, tot_ret)]:
+            t[tr, j].set_text_props(color=(GREEN if val >= 0 else RED), weight="bold")
         ax2 = fig.add_axes([0.04, 0.02, 0.92, 0.46]); ax2.axis("off")
         ax2.text(0, 1.0, "Strategies", fontsize=11, weight="bold", va="top")
         y = 0.92
