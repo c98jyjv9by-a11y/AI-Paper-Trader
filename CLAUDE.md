@@ -81,7 +81,10 @@ account uses it. Older/experimental versions (v2, v3, v5, v6) and one-off script
   `confirm=True` AND env `BROKER_ADAPTER_ALLOW_SUBMIT=yes`),
   `src/broker_sync.py` (reconcile-to-target **limit** orders with **data-driven per-instrument
   collars** from the 2y overnight-gap distribution → `backtests/collars.csv`; realized-slippage
-  log; broker→ledger sync; `create_broker_account`. The target book is per-account via manifest
+  log; broker→ledger sync; `create_broker_account`. **Quote-sanity fallback** (`_sanitize_quotes`):
+  before pricing, a ONE-SIDED (missing bid/ask — the after-hours trap) or STALE (>25% off the last
+  close) broker quote has its mid replaced by the yfinance last close, so marketable limits aren't
+  built off un-fillable quotes. The target book is per-account via manifest
   `target_mode`. **Live steady-state modes:** `{kind:model_v4}` → **follow model_v4's own buy/sell
   rules on the account's own book** (`_model_v4_decision` runs `next_session_decision` seeded with the
   live broker book + cash) — used by `topten`/`copymodel`; and `{kind:score_gate_rampup,min_score,

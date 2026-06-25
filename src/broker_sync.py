@@ -709,6 +709,47 @@ def _dedupe_order_ids(cli: ba.AlpacaPaper, asof: str, orders: List[Dict[str, Any
     return out
 
 
+def _last_closes(syms) -> Dict[str, float]:
+    """Last yfinance close per symbol — a sane reference price for the quote-sanity fallback."""
+    if not syms:
+        return {}
+    try:
+        import datetime as _dt
+        from backtest import fetch_backtest_data
+        cl = fetch_backtest_data(list(syms), _dt.date.today() - _dt.timedelta(days=10), _dt.date.today())["Close"]
+        out: Dict[str, float] = {}
+        for s in syms:
+            try:
+                ser = cl[s] if (hasattr(cl, "columns") and s in cl.columns) else cl
+                v = ser.dropna()
+                if len(v) and float(v.iloc[-1]) > 0:
+                    out[s] = float(v.iloc[-1])
+            except Exception:
+                pass
+        return out
+    except Exception:
+        return {}
+
+
+def _sanitize_quotes(prices: Dict[str, Any], closes: Dict[str, float], max_dev: float = 0.25) -> Dict[str, Any]:
+    """Replace a broker quote's mid with the last close when the quote is ONE-SIDED (bid or ask missing —
+    the after-hours trap that priced GE's mid off a stale bid) or STALE (mid > max_dev from the close).
+    Stops marketable limits from being built off un-fillable quotes. Patches `prices` in place."""
+    for s, q0 in list(prices.items()):
+        q = dict(q0 or {})
+        bid, ask, mid = float(q.get("bid") or 0), float(q.get("ask") or 0), float(q.get("mid") or 0)
+        lc = float(closes.get(s) or 0)
+        if lc <= 0:
+            continue
+        one_sided = not (bid > 0 and ask > 0)
+        stale = mid > 0 and abs(mid / lc - 1) > max_dev
+        if one_sided or stale or mid <= 0:
+            q["mid"] = lc
+            q["_quote_fallback"] = True                       # flag for the plan/logging
+            prices[s] = q
+    return prices
+
+
 def submit_session(name: str, cli: ba.AlpacaPaper = None, submit: bool = False,
                    prequeue: bool = False, retry: bool = False, extended: bool = False) -> Dict[str, Any]:
     """Build the day's RECONCILE-TO-TARGET plan (limit orders with data-driven per-symbol collars),
@@ -724,6 +765,7 @@ def submit_session(name: str, cli: ba.AlpacaPaper = None, submit: bool = False,
     delta_syms = sorted({s for s in set(targets) | set(current)
                          if int(round(targets.get(s, 0))) != int(round(current.get(s, 0)))})
     prices = cli.latest_prices(delta_syms) if delta_syms else {}
+    prices = _sanitize_quotes(prices, _last_closes(delta_syms))    # one-sided/stale quote -> last close
     collars = compute_collars(delta_syms, cache_day=asof)
     orders = ba.build_reconcile_orders(targets, current, prices, collars, asof, retry=retry, extended=extended)
     for o in orders:                                # the REBOUND overlay EXIT is a 1-day hold sold AT THE

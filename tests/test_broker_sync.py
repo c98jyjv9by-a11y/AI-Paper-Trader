@@ -288,3 +288,27 @@ def test_zscore_reversal_regime_off_goes_cash(monkeypatch):
     t, _ = bs._zscore_reversal_targets("zrev", _ZrCli(), {"X": 50}, tm)
     assert t == {}                               # cash -> reconcile flattens the held book
     assert not seen                              # signal not even computed when regime is off
+
+
+def test_sanitize_quotes_one_sided_falls_back_to_close():
+    prices = {"GE": {"bid": 344.0, "ask": 0.0, "mid": 344.0}}        # missing ask (after-hours)
+    out = bs._sanitize_quotes(prices, {"GE": 365.88})
+    assert out["GE"]["mid"] == 365.88 and out["GE"].get("_quote_fallback")
+
+
+def test_sanitize_quotes_sane_quote_unchanged():
+    prices = {"AAPL": {"bid": 199.9, "ask": 200.1, "mid": 200.0}}
+    out = bs._sanitize_quotes(prices, {"AAPL": 198.0})              # 1% off close -> trust the quote
+    assert out["AAPL"]["mid"] == 200.0 and not out["AAPL"].get("_quote_fallback")
+
+
+def test_sanitize_quotes_stale_two_sided_falls_back():
+    prices = {"X": {"bid": 50.0, "ask": 50.2, "mid": 50.1}}          # mid 50 vs close 100 -> >25% stale
+    out = bs._sanitize_quotes(prices, {"X": 100.0})
+    assert out["X"]["mid"] == 100.0 and out["X"].get("_quote_fallback")
+
+
+def test_sanitize_quotes_no_close_leaves_quote():
+    prices = {"Y": {"bid": 10.0, "ask": 0.0, "mid": 10.0}}
+    out = bs._sanitize_quotes(prices, {})                            # no reference close -> don't touch
+    assert out["Y"]["mid"] == 10.0 and not out["Y"].get("_quote_fallback")
