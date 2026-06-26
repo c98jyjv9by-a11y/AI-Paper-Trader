@@ -9,6 +9,8 @@
 # revisit before it next fires (idle today). No overlay-flatten step here (it would clear a fresh buy).
 set -u
 cd /Users/david/PyCharmMiscProject/ai-paper-trader || exit 1
+ulimit -n 10240 2>/dev/null || true        # launchd starts with a ~256 fd limit; the model_v4 decision
+                                           # + 83-ticker fetch opens more, so raise it (Errno 24 fix)
 PY=/Users/david/PyCharmMiscProject/.venv/bin/python
 ACCTS="topten copymodel rampup monthly10 weekly10 combo20 zscore1d_daily zscore5d_weekly zscore10d_biweekly"
 TODAY="$(TZ=America/New_York date +%F)"
