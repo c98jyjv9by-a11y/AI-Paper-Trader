@@ -159,7 +159,8 @@ class _SrCli:
 
 def test_score_rebalance_picks_top_n_equal_weight(monkeypatch):
     monkeypatch.setattr(bs, "load_manifest", lambda n: {"scenario": "model_v4"})
-    monkeypatch.setattr(bs, "_lookback_avg_scores", lambda s, lb: {"A": 0.9, "B": 0.8, "C": 0.7, "D": 0.2})
+    monkeypatch.setattr(bs, "_lookback_avg_scores",
+                        lambda s, lb, as_of=None, valid_before=None: {"A": 0.9, "B": 0.8, "C": 0.7, "D": 0.2})
     tm = {"kind": "score_rebalance", "lookback_days": 60, "top_n": 2, "bottom_n": 0,
           "rebalance": "monthly", "gross": 0.90}
     t, r = bs._score_rebalance_targets("monthly10", _SrCli(), {}, tm)     # empty book -> always rebalances
@@ -169,7 +170,8 @@ def test_score_rebalance_picks_top_n_equal_weight(monkeypatch):
 
 def test_score_rebalance_combo_includes_bottom(monkeypatch):
     monkeypatch.setattr(bs, "load_manifest", lambda n: {"scenario": "model_v4"})
-    monkeypatch.setattr(bs, "_lookback_avg_scores", lambda s, lb: {"A": 0.9, "B": 0.8, "C": 0.7, "D": 0.2})
+    monkeypatch.setattr(bs, "_lookback_avg_scores",
+                        lambda s, lb, as_of=None, valid_before=None: {"A": 0.9, "B": 0.8, "C": 0.7, "D": 0.2})
     tm = {"kind": "score_rebalance", "lookback_days": 60, "top_n": 2, "bottom_n": 1,
           "rebalance": "weekly", "gross": 0.90}
     t, _ = bs._score_rebalance_targets("combo20", _SrCli(), {}, tm)
@@ -181,7 +183,8 @@ def test_score_rebalance_holds_off_rebalance_day(monkeypatch):
     monkeypatch.setattr(bs, "_recent_trading_days", lambda: ["d1", "d2"])
     monkeypatch.setattr(bs, "_is_rebalance_day", lambda f, c: False)
     called = []
-    monkeypatch.setattr(bs, "_lookback_avg_scores", lambda s, lb: called.append(1) or {"A": 0.9})
+    monkeypatch.setattr(bs, "_lookback_avg_scores",
+                        lambda s, lb, as_of=None, valid_before=None: called.append(1) or {"A": 0.9})
     tm = {"kind": "score_rebalance", "rebalance": "monthly", "top_n": 10}
     t, _ = bs._score_rebalance_targets("monthly10", _SrCli(), {"A": 450, "B": 450}, tm)
     assert t == {"A": 450, "B": 450}                    # held unchanged off-rebalance
@@ -196,7 +199,7 @@ def test_score_rebalance_split_top_monthly_bottom_5d(monkeypatch):
     monkeypatch.setattr(bs, "_is_rebalance_day", lambda f, c: True)
     seen = {}
 
-    def fake(scenario, lb, as_of=None):
+    def fake(scenario, lb, as_of=None, valid_before=None):
         seen[lb] = as_of                                  # record which anchor each sleeve used
         if lb >= 60:                                      # TOP sleeve: 60D, anchored to month start
             return {"A": 0.9, "B": 0.8, "C": 0.7, "D": 0.2}
@@ -220,7 +223,7 @@ def test_combo_top_held_on_non_monthly_week(monkeypatch):
                         lambda: pd.to_datetime(["2026-06-01", "2026-06-15", "2026-06-22"]))
     monkeypatch.setattr(bs, "_is_rebalance_day", lambda f, c: True)
 
-    def fake(scenario, lb, as_of=None):
+    def fake(scenario, lb, as_of=None, valid_before=None):
         if lb >= 60:
             return {"A": 0.9, "B": 0.8}                  # top sleeve
         return {"Y": 0.05, "Z": 0.06, "X": 0.5}          # bottom sleeve (lowest two = Y, Z)
@@ -278,7 +281,7 @@ class _ZrCli:
 def test_zscore_reversal_buys_lowest_n(monkeypatch):
     monkeypatch.setattr(bs, "load_manifest", lambda n: {"scenario": "model_v4"})
     monkeypatch.setattr(bs, "_recent_trading_days", lambda: ["d1", "d2"])
-    monkeypatch.setattr(bs, "_qqq_above_ma", lambda ma: True)                 # uptrend -> trade
+    monkeypatch.setattr(bs, "_qqq_above_ma", lambda ma, valid_before=None: True)   # uptrend -> trade
     monkeypatch.setattr(bs, "_zscore_reversal_signal",
                         lambda s, zl, aw, valid_before=None: {"A": 0.9, "B": 0.5, "C": -0.5, "D": -0.9})
     tm = {"kind": "zscore_reversal", "n": 2, "rebalance": "biweekly", "regime_ma": 200, "gross": 0.90}
@@ -291,7 +294,7 @@ def test_zscore_reversal_regime_off_goes_cash(monkeypatch):
     monkeypatch.setattr(bs, "load_manifest", lambda n: {"scenario": "model_v4"})
     monkeypatch.setattr(bs, "_recent_trading_days", lambda: ["d1", "d2"])
     monkeypatch.setattr(bs, "_is_rebalance_day", lambda f, c: True)
-    monkeypatch.setattr(bs, "_qqq_above_ma", lambda ma: False)                # QQQ below MA -> downtrend
+    monkeypatch.setattr(bs, "_qqq_above_ma", lambda ma, valid_before=None: False)   # QQQ below MA -> downtrend
     seen = []
     monkeypatch.setattr(bs, "_zscore_reversal_signal",
                         lambda s, zl, aw, valid_before=None: seen.append(1) or {"A": 0.1})

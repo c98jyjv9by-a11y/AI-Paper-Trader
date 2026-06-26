@@ -219,6 +219,22 @@ def _source_book_names(source: str) -> List[str]:
     return out
 
 
+def _valid_before(cli) -> "str | None":
+    """None while the market is OPEN (the live bar is a real price — rank off it). Otherwise the next
+    session's date, so scoring DROPS any bar dated on/after it (a phantom overnight bar yfinance can
+    fabricate) and ranks off the last completed close. Shared by every live scoring path."""
+    try:
+        clk = cli.clock() or {}
+        return None if clk.get("is_open") else ((clk.get("next_open") or "")[:10] or None)
+    except Exception:
+        return None
+
+
+def _drop_phantom(pdata, valid_before):
+    """Drop price bars dated on/after `valid_before` (a phantom upcoming-session bar). No-op if None."""
+    return pdata if valid_before is None else pdata[pdata.index < pd.Timestamp(valid_before)]
+
+
 def _model_v4_decision(name: str, cli: ba.AlpacaPaper) -> Dict[str, Any]:
     """model_v4's next-session decision {buys, sells} computed SEEDED with the account's LIVE broker
     book + cash — so exits, the exposure cap, and ROTATION FUNDING (sell the weakest holding to fund a
@@ -248,6 +264,7 @@ def _model_v4_decision(name: str, cli: ba.AlpacaPaper) -> Dict[str, Any]:
     init_cash = float(acct.get("cash") or 0.0)
     end = _date.today()
     pdata = fetch_backtest_data(cfg["tickers"], end - _td(days=220), end)   # >= 60 trading days
+    pdata = _drop_phantom(pdata, _valid_before(cli))       # rank off real prices, never a phantom bar
     return next_session_decision(cfg, pdata, initial_positions=init_pos, initial_cash=init_cash)
 
 
@@ -400,10 +417,11 @@ def _is_rebalance_day(freq: str, cal) -> bool:
     return True
 
 
-def _lookback_avg_scores(scenario: str, lookback_days: int = 60, as_of=None):
+def _lookback_avg_scores(scenario: str, lookback_days: int = 60, as_of=None, valid_before=None):
     """{ticker: trailing N-day AVG composite score} computed LIVE, ending at `as_of` (default today).
     `as_of` lets the top sleeve be anchored to the first-of-month while the bottom uses today (the
-    staggered-refresh combo). A daily cross-sectional score averaged over `lookback_days`."""
+    staggered-refresh combo). A daily cross-sectional score averaged over `lookback_days`. `valid_before`
+    drops a phantom upcoming-session bar so the scores use real prices (see `_valid_before`)."""
     import datetime as _dt
     from backtest import load_config, fetch_backtest_data
     from scenarios import load_scenario, build_config
@@ -413,7 +431,8 @@ def _lookback_avg_scores(scenario: str, lookback_days: int = 60, as_of=None):
     uni, w = cfg["tickers"], cfg["signals"].get("weights")
     tw = _build_ticker_weights(cfg) or None
     end = (as_of.date() if hasattr(as_of, "date") else as_of) or _dt.date.today()
-    pdata = fetch_backtest_data(uni, end - _dt.timedelta(days=lookback_days * 2 + 420), end)
+    pdata = _drop_phantom(fetch_backtest_data(uni, end - _dt.timedelta(days=lookback_days * 2 + 420), end),
+                          valid_before)
     rows = [dict(zip(rf["ticker"], rf["composite_score"]))
             for ts in pdata["Close"].index[-lookback_days:]
             for rf in [rank_candidates(calculate_signals(pdata.loc[:ts].iloc[-_SIGNAL_WINDOW:], uni),
@@ -452,9 +471,10 @@ def _combo_targets(scenario: str, cli: ba.AlpacaPaper, current: Dict[str, float]
     per = float(tm.get("gross", 0.90)) * equity / max(top_n + bot_n, 1)
     # special "fire today": anchor the top sleeve to TODAY's intraday bar (not the month start) and re-size it
     anchor = cal[-1] if force else _period_anchor(cal, tm.get("top_refresh", "monthly"))
-    ta = _lookback_avg_scores(scenario, int(tm.get("top_lookback_days", 60)), as_of=anchor)
+    vb = _valid_before(cli)                                         # rank off real prices, never a phantom bar
+    ta = _lookback_avg_scores(scenario, int(tm.get("top_lookback_days", 60)), as_of=anchor, valid_before=vb)
     top = [t for t in sorted(ta, key=lambda k: ta[k], reverse=True) if pd.notna(ta[t])][:top_n]
-    ba = _lookback_avg_scores(scenario, int(tm.get("bottom_lookback_days", 5)))
+    ba = _lookback_avg_scores(scenario, int(tm.get("bottom_lookback_days", 5)), valid_before=vb)
     bottom = [t for t in sorted(ba, key=lambda k: ba[k]) if pd.notna(ba[t])][:bot_n]
     # refresh the top sleeve only on the month's FIRST weekly rebalance (or when forced / first deploy)
     do_top = force or (not has_book) or (tuple(cal[-1].isocalendar())[:2] == tuple(anchor.isocalendar())[:2])
@@ -497,7 +517,7 @@ def _score_rebalance_targets(name: str, cli: ba.AlpacaPaper, current: Dict[str, 
     scenario = (load_manifest(name) or {}).get("scenario", "model_v4")
     if tm.get("top_lookback_days") or tm.get("bottom_lookback_days"):
         return _combo_targets(scenario, cli, current, tm, cal, bool(held))
-    avg = _lookback_avg_scores(scenario, int(tm.get("lookback_days", 60)))
+    avg = _lookback_avg_scores(scenario, int(tm.get("lookback_days", 60)), valid_before=_valid_before(cli))
     ranked = [t for t in sorted(avg, key=lambda k: avg[k], reverse=True) if pd.notna(avg[t])]
     top_n, bot_n = int(tm.get("top_n", 10)), int(tm.get("bottom_n", 0))
     picks = list(dict.fromkeys(ranked[:top_n] + (ranked[-bot_n:] if bot_n else [])))
@@ -545,12 +565,13 @@ def _zscore_reversal_signal(scenario: str = "model_v4", zscore_lookback: int = 6
     return z.rolling(avg_window).mean().iloc[-1].to_dict()
 
 
-def _qqq_above_ma(ma_days: int = 200) -> bool:
-    """Regime filter: is QQQ above its `ma_days`-day moving average right now? (uptrend -> trade)."""
+def _qqq_above_ma(ma_days: int = 200, valid_before=None) -> bool:
+    """Regime filter: is QQQ above its `ma_days`-day moving average right now? (uptrend -> trade).
+    `valid_before` drops a phantom upcoming-session bar so the comparison uses the last real QQQ price."""
     import datetime as _dt
     from backtest import fetch_backtest_data
     end = _dt.date.today()
-    px = fetch_backtest_data(["QQQ"], end - _dt.timedelta(days=ma_days * 2 + 30), end)["Close"]
+    px = _drop_phantom(fetch_backtest_data(["QQQ"], end - _dt.timedelta(days=ma_days * 2 + 30), end), valid_before)["Close"]
     px = px["QQQ"] if hasattr(px, "columns") else px
     return float(px.iloc[-1]) > float(px.rolling(ma_days).mean().iloc[-1])
 
@@ -569,14 +590,12 @@ def _zscore_reversal_targets(name: str, cli: ba.AlpacaPaper, current: Dict[str, 
     cal = _recent_trading_days()
     if held and not force and not _is_rebalance_day(tm.get("rebalance", "biweekly"), cal):
         return held, {}                                            # not a rebalance day -> hold
+    # Rank/regime off real prices: live bar while open, last completed close otherwise (drop phantom bar).
+    valid_before = _valid_before(cli)
     ma = int(tm.get("regime_ma", 0) or 0)
-    if ma and not _qqq_above_ma(ma):
+    if ma and not _qqq_above_ma(ma, valid_before=valid_before):
         return {}, {}                                              # downtrend -> cash (flatten everything)
     scenario = (load_manifest(name) or {}).get("scenario", "model_v4")
-    # When the market is OPEN the live bar is a real price → rank off it. When CLOSED, exclude any bar on/
-    # after the next session (a phantom overnight bar) and rank off the last completed close.
-    clk = cli.clock() or {}
-    valid_before = None if clk.get("is_open") else ((clk.get("next_open") or "")[:10] or None)
     sig = _zscore_reversal_signal(scenario, int(tm.get("zscore_lookback", 60)),
                                   int(tm.get("avg_window", 10)), valid_before=valid_before)
     ranked = sorted((t for t in sig if pd.notna(sig[t])), key=lambda t: sig[t])   # ascending -> lowest z first
