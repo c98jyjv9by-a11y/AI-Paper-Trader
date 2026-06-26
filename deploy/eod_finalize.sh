@@ -1,6 +1,6 @@
 #!/bin/bash
 # Full end-of-day flow for the 9 paper broker accounts. Scheduled by the launchd agent com.mv4.eod
-# at 15:15 local (Central) = 16:15 ET, Mon-Fri. launchd reruns a MISSED job on wake, so this survives
+# at 15:05 local (Central) = 16:05 ET (5 min after the close), Mon-Fri. launchd reruns a MISSED job on wake, so this survives
 # the machine sleeping (unlike cron / background waiters). Idempotent; paper only; push stays manual.
 set -u
 cd /Users/david/PyCharmMiscProject/ai-paper-trader || exit 1
