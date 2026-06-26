@@ -19,8 +19,8 @@
     "trades.csv": "5fdd1f8fd3860e41e180c02e04f49bb8e19c07e0fde4957fb47a295b72a0ac28",
     "equity.csv": "109040297f774a51e7f502733c2f178108e67507d775d64227c7ca85d94970cd",
     "positions.csv": "820e6980a10998ec494f00ac7025170ea84592801dd2ebe6ffcef7c9dcd863de",
-    "continuation/equity.csv": "d0faa988b17b6fd7e042e71b7da9e843e082fe1219fd329b1c9271df4ce0b9f5",
-    "continuation/positions.csv": "1ee76da3c772bd9a8dfddc5e2798334c2177a93f75fa0961211c0478f7b0b8fb"
+    "continuation/equity.csv": "be3fccfc98c4fb35d702d0da4694ef362d8055dfbaa82c4a0c7865e52a6a82b4",
+    "continuation/positions.csv": "463d2d90a9d2d909e12b731ba4c0a92e25f258c4d1900b09d69065589d267e71"
   },
   "target_mode": {
     "kind": "score_rebalance",
@@ -30,5 +30,5 @@
     "rebalance": "monthly",
     "gross": 0.9
   },
-  "live_value": 98654.5
+  "live_value": 98358.49
 }

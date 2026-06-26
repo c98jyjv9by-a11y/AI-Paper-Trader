@@ -19,8 +19,8 @@
     "trades.csv": "5fdd1f8fd3860e41e180c02e04f49bb8e19c07e0fde4957fb47a295b72a0ac28",
     "equity.csv": "109040297f774a51e7f502733c2f178108e67507d775d64227c7ca85d94970cd",
     "positions.csv": "820e6980a10998ec494f00ac7025170ea84592801dd2ebe6ffcef7c9dcd863de",
-    "continuation/equity.csv": "a90165b86ddd76b4cfba0acade4af9a063bae65064884f47c684928eda8dbf91",
-    "continuation/positions.csv": "e330ec2719e530c417816f796c3c424004495410c5fbe9736d59fda205e10535"
+    "continuation/equity.csv": "1d484a3e2e12c02aa227f83e365c8e3d96cd25634b7b755b345fde5e4917166e",
+    "continuation/positions.csv": "18c08a2de1ffa7749ef6c39b8061cb4bd99003c8c069142208552c7ad80298f4"
   },
   "target_mode": {
     "kind": "zscore_reversal",
@@ -31,5 +31,5 @@
     "regime_ma": 200,
     "gross": 0.9
   },
-  "live_value": 100983.13
+  "live_value": 101022.75
 }
