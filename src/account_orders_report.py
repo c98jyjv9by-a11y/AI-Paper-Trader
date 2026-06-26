@@ -125,12 +125,44 @@ def _collect(name, today, status="all", limit=500):
         start = float(man.get("starting_value") or eq)
         unreal = sum(p["unrealized_pl"] for p in pos)
         total = eq - start
+        cost = sum(p["cost_basis"] for p in pos)               # open-book return = Σ mkt / Σ cost - 1
+        mv = sum(p["market_value"] for p in pos)
         return {"name": name, "eq": eq, "cash": cash, "start": start, "pos": pos, "orders": orders,
-                "kind": (man.get("target_mode") or {}).get("kind"),
+                "kind": (man.get("target_mode") or {}).get("kind"), "inception": man.get("inception"),
+                "book_cost": cost, "book_mv": mv, "book_ret": (mv / cost - 1) if cost > 0 else None,
                 "unreal": unreal, "total_pnl": total, "realized_est": total - unreal,
                 "tot_ret": (eq / start - 1 if start else 0.0), "err": None}
     except Exception as exc:
         return {"name": name, "err": str(exc)[:80]}
+
+
+# ── benchmarks (aligned PER ACCOUNT to its own inception window) ──────────────────
+def _bench_panel(today, start):
+    """QQQ/SPY close panel from `start` (earliest inception) through `today`. {} on failure."""
+    try:
+        import datetime as _dt
+        from backtest import fetch_backtest_data
+        s = _dt.date.fromisoformat(start) - _dt.timedelta(days=10)
+        cl = fetch_backtest_data(["QQQ", "SPY"], s, _dt.date.fromisoformat(today))["Close"]
+        return cl if hasattr(cl, "columns") else None
+    except Exception:
+        return None
+
+
+def _bench(panel, inception):
+    """{QQQ,SPY} total return from the close ON/BEFORE the account's inception to the latest close —
+    so each account is compared to the benchmark over ITS OWN holding window (timelines aligned)."""
+    if panel is None or not inception:
+        return {}
+    try:
+        base = panel.loc[:inception]
+        if base.empty:
+            return {}
+        b0, b1 = base.iloc[-1], panel.iloc[-1]
+        return {s: float(b1[s] / b0[s] - 1) for s in ("QQQ", "SPY")
+                if s in panel.columns and float(b0[s]) > 0}
+    except Exception:
+        return {}
 
 
 # ── rendering ───────────────────────────────────────────────────────────────────
@@ -154,7 +186,8 @@ def _table(fig, rect, cols, cells, colw, fontsize=7.5):
     return ax, t
 
 
-def _render_account(pdf, d):
+def _render_account(pdf, d, bench=None):
+    bench = bench or {}
     name = d["name"]
     label, blurb = _blurb(name)
     title = "%s  —  %s" % (name, label)
@@ -187,6 +220,15 @@ def _render_account(pdf, d):
             fontsize=10, color=(GREEN if d["unreal"] >= 0 else RED), va="top")
     ax.text(0.60, 0.60, "Realized (est.)  %s" % _money(d["realized_est"]),
             fontsize=10, color=(GREEN if d["realized_est"] >= 0 else RED), va="top")
+    # benchmark + open-book return, aligned to THIS account's inception window
+    def _bpct(sym):
+        v = bench.get(sym)
+        return ("%s %s" % (sym, _pct(v))) if v is not None else ("%s —" % sym)
+    bookret = (" · Open book %s (cost %s → mkt %s)"
+               % (_pct(d["book_ret"]), _money(d["book_cost"]), _money(d["book_mv"]))) if d.get("book_ret") is not None else ""
+    ax.text(0.0, 0.34, "Since inception %s:  Total %s   vs   %s   %s%s"
+            % (d.get("inception") or "—", _pct(d["tot_ret"]), _bpct("QQQ"), _bpct("SPY"), bookret),
+            fontsize=8.5, va="top", color="#333")
     ax.text(0.0, 0.18, textwrap.fill(blurb, 120), fontsize=7.5, color="#444", va="top")
 
     # positions table — gets the rest of page 1 (holds up to ~24 rows comfortably; combo20 has 20)
@@ -268,31 +310,42 @@ def _render_account(pdf, d):
         page += 1
 
 
-def _render_cover(pdf, data, accts, today):
+def _render_cover(pdf, data, accts, today, bench):
     fig = plt.figure(figsize=(11, 8.5))
     fig.suptitle("Account Order History & P&L — all accounts   %s" % today, fontsize=14, weight="bold")
-    ax = fig.add_axes([0.05, 0.30, 0.90, 0.55]); ax.axis("off")
-    cols = ["Account", "Equity", "Cash", "Starting", "Total P&L", "Total %", "Unreal $", "Realized(est)", "Pos", "Orders"]
+    ax = fig.add_axes([0.03, 0.30, 0.94, 0.55]); ax.axis("off")
+    cols = ["Account", "Equity", "Cash", "Starting", "Total P&L", "Total %", "QQQ %", "SPY %",
+            "Unreal $", "Realized(est)", "Pos", "Orders"]
+
+    def _bp(n, sym):                                          # account-aligned benchmark % (or "—")
+        v = (bench.get(n) or {}).get(sym)
+        return _pct(v) if v is not None else "—"
     cells, ok = [], []
     for n in accts:
         d = data[n]
         if d.get("err"):
-            cells.append([n, "—", "—", "—", "ERR", "—", "—", "—", "—", "—"])
+            cells.append([n, "—", "—", "—", "ERR", "—", "—", "—", "—", "—", "—", "—"])
             continue
         ok.append(d)
         cells.append([n, _money(d["eq"]), _money(d["cash"]), _money(d["start"]), _money(d["total_pnl"]),
-                      _pct(d["tot_ret"]), _money(d["unreal"]), _money(d["realized_est"]),
-                      str(len(d["pos"])), str(len(d["orders"]))])
+                      _pct(d["tot_ret"]), _bp(n, "QQQ"), _bp(n, "SPY"), _money(d["unreal"]),
+                      _money(d["realized_est"]), str(len(d["pos"])), str(len(d["orders"]))])
     if ok:
         agg = {k: sum(d[k] for d in ok) for k in ("eq", "cash", "start", "total_pnl", "unreal", "realized_est")}
+        # blended benchmark = starting-value-weighted mean of each account's inception-aligned return
+        def _blend(sym):
+            num = sum(d["start"] * bench[d["name"]][sym] for d in ok
+                      if bench.get(d["name"], {}).get(sym) is not None)
+            den = sum(d["start"] for d in ok if bench.get(d["name"], {}).get(sym) is not None)
+            return _pct(num / den) if den else "—"
         cells.append(["TOTAL", _money(agg["eq"]), _money(agg["cash"]), _money(agg["start"]),
                       _money(agg["total_pnl"]), _pct(agg["eq"] / agg["start"] - 1 if agg["start"] else 0.0),
-                      _money(agg["unreal"]), _money(agg["realized_est"]),
+                      _blend("QQQ"), _blend("SPY"), _money(agg["unreal"]), _money(agg["realized_est"]),
                       str(sum(len(d["pos"]) for d in ok)), str(sum(len(d["orders"]) for d in ok))])
-    raw = [16, 11, 10, 10, 11, 8, 10, 12, 6, 8]
+    raw = [15, 10, 9, 9, 10, 7, 7, 7, 9, 11, 5, 7]
     t = ax.table(cellText=cells, colLabels=cols, colWidths=[w / sum(raw) for w in raw],
                  loc="upper center", cellLoc="center")
-    t.auto_set_font_size(False); t.set_fontsize(8); t.scale(1, 1.5)
+    t.auto_set_font_size(False); t.set_fontsize(7.5); t.scale(1, 1.5)
     for j in range(len(cols)):
         t[0, j].set_facecolor("#34495e"); t[0, j].set_text_props(color="white", weight="bold")
     for i, n in enumerate(accts):
@@ -300,16 +353,22 @@ def _render_cover(pdf, data, accts, today):
         if d.get("err"):
             t[i + 1, 4].set_text_props(color=RED, weight="bold")
             continue
-        for j, v in [(4, d["total_pnl"]), (5, d["tot_ret"]), (6, d["unreal"]), (7, d["realized_est"])]:
+        for j, v in [(4, d["total_pnl"]), (5, d["tot_ret"]), (8, d["unreal"]), (9, d["realized_est"])]:
             t[i + 1, j].set_text_props(color=(GREEN if v >= 0 else RED), weight="bold")
+        for j, sym in [(6, "QQQ"), (7, "SPY")]:               # color benchmark cells too
+            bv = (bench.get(n) or {}).get(sym)
+            if bv is not None:
+                t[i + 1, j].set_text_props(color=(GREEN if bv >= 0 else RED))
     if ok:                                                    # shade + bold the TOTAL row
         tr = len(accts) + 1
         for j in range(len(cols)):
             t[tr, j].set_facecolor("#dfe6e9"); t[tr, j].set_text_props(weight="bold")
-    fig.text(0.05, 0.24, "Total P&L = equity - starting value.  Unrealized = Σ (price - avg entry) x qty over open "
+    fig.text(0.03, 0.24, "Total P&L = equity - starting value.  Unrealized = Σ (price - avg entry) x qty over open "
              "positions.  Realized (est.) = Total - Unrealized (exact for a once-funded paper account).",
              fontsize=7.5, color="#555", wrap=True)
-    fig.text(0.05, 0.20, "ERR rows = the account's Alpaca keys are unset/placeholder; see its page for detail.",
+    fig.text(0.03, 0.205, "QQQ %% / SPY %% = benchmark total return measured over EACH account's own inception->today "
+             "window (timelines aligned per account; TOTAL = starting-weighted blend).", fontsize=7.5, color="#555")
+    fig.text(0.03, 0.17, "ERR rows = the account's Alpaca keys are unset/placeholder; see its page for detail.",
              fontsize=7.5, color="#555")
     pdf.savefig(fig); plt.close(fig)
 
@@ -318,12 +377,16 @@ def run(accounts=None, end=None, out=None, status="all", limit=500):
     today = end or date.today().isoformat()
     accts = accounts or DEFAULT_ACCOUNTS
     data = {n: _collect(n, today, status=status, limit=limit) for n in accts}
+    # QQQ/SPY benchmark return aligned to EACH account's own inception window (timelines per account)
+    incs = [data[n]["inception"] for n in accts if not data[n].get("err") and data[n].get("inception")]
+    panel = _bench_panel(today, min(incs)) if incs else None
+    bench = {n: _bench(panel, data[n].get("inception")) for n in accts if not data[n].get("err")}
     out = Path(out) if out else ROOT / "reports" / f"account_orders_{today}.pdf"
     out.parent.mkdir(parents=True, exist_ok=True)
     with PdfPages(out) as pdf:
-        _render_cover(pdf, data, accts, today)
+        _render_cover(pdf, data, accts, today, bench)
         for n in accts:
-            _render_account(pdf, data[n])
+            _render_account(pdf, data[n], bench.get(n, {}))
     return {"pdf": str(out), "data": data}
 
 
