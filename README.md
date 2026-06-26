@@ -132,6 +132,35 @@ Optional, default-off knobs: `entry_filters.qqq_above_ma` (regime filter), `risk
 
 ---
 
+## Live paper accounts (Alpaca)
+
+Beyond the simulated book, the project drives **nine Alpaca _paper_ accounts** (paper-only and submit-guarded — no live orders are ever placed). Each has its own API keys in the gitignored `.env`, an append-only ledger under `accounts/<name>/`, and a `target_mode` in its manifest that defines its order rules. A daily cron (`deploy/mv4_crontab.txt`) reconciles each account's broker positions to its target book via limit orders; submission stays inert unless run `--live` **and** env `BROKER_ADAPTER_ALLOW_SUBMIT=yes`. (`primary` and `tracker` are local ledger-only sims, not broker accounts.)
+
+The nine broker-driven books fall into two groups.
+
+**Model-driven — follow model_v4's own buy/sell decisions** (these three also run the 1-day rebound TQQQ overlay; none trade the SQQQ hedge):
+
+| Account | `target_mode` | Order rule |
+|---------|---------------|------------|
+| `topten` | `model_v4` | model_v4's own entry/exit rules, on its own book (seeded from a top-10 basket) |
+| `copymodel` | `model_v4` | model_v4's own entry/exit rules (seeded model-equal) |
+| `rampup` | `score_gate_rampup` | buy >0.90 names @ 8.5% each; sell only per model_v4 exits; graduates to full model_v4 once 75% of starting cash is deployed |
+
+**Research strategy books — pure signal rules** (no model_v4 logic, no overlay/hedge; off-rebalance days hold, dropped names flatten):
+
+| Account | `target_mode` | Order rule |
+|---------|---------------|------------|
+| `monthly10` | `score_rebalance` | top-10 by 60-day-avg composite score, equal-weight to 90% gross, rebalanced monthly |
+| `weekly10` | `score_rebalance` | same, rebalanced weekly |
+| `combo20` | `score_rebalance` | staggered split: top-10 (60-day score, refreshed monthly) + bottom-10 (5-day score, refreshed weekly) |
+| `zscore1d_daily` | `zscore_reversal` | buy the 10 names most-fallen vs their own z-norm (1-day-avg z), daily; to cash when QQQ < 200-day MA |
+| `zscore5d_weekly` | `zscore_reversal` | same with 5-day-avg z, rebalanced weekly |
+| `zscore10d_biweekly` | `zscore_reversal` | same with 10-day-avg z, biweekly (the validated config) |
+
+Order mechanics are shared across all accounts: each session reconciles the broker's actual positions to the target book with data-driven per-instrument limit collars (P85 base / P95 retry from the 2-year overnight-gap distribution) — `opg`/`cls` auction orders by default, or marketable `day-ext` limits with `--extended-hours`; the rebound TQQQ exit is always market-on-close. See `CLAUDE.md` for the full per-mode order rules and the reporting tools (`run.py midday-summary` / `eod-summary` / `eod-accounts` / `snapshot`).
+
+---
+
 ## Project structure
 
 ```text

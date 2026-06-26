@@ -48,17 +48,27 @@ account uses it. Older/experimental versions (v2, v3, v5, v6) and one-off script
 - **Accounts** — `accounts/<name>/` is an append-only ledger system (immutable frozen core +
   `continuation/` living layer; SHA-256 manifest integrity via `account-verify`). Active accounts:
   `primary` (main paper book), `tracker` (frictionless ramp-up sim, assumes 10bp cost). **Broker-driven**
-  go-forward books (ledger synced from real Alpaca paper fills). All three now **follow model_v4's own
-  buy/sell rules** (`target_mode.kind=model_v4` → `next_session_decision` **seeded with the live broker
-  book + cash** via `_model_v4_decision`, so the exposure cap / rotation funding / exits are real — not a
-  from-inception sim; no hedge);
-  their `top_n` / `model_equal` / `score_gate` modes were only the **initial seed**, which now persists and
-  evolves under model_v4. `topten` (seeded top-10; keys `APCA_*_NEW`), `copymodel` (seeded model-equal;
-  keys `APCA_*_EXACT`), `rampup` (`score_gate_rampup`: **buy** only names scoring >0.9 (8.5% each) but
-  **sell** only per model_v4's exit rules, until 75% of starting cash is deployed (Σ broker buys/starting),
-  then full model_v4; keys `APCA_*_RAMP_UP`). Live broker books; cron drives them via `deploy/mv4_crontab.txt`.
-  `src/midday_summary.py` (`run.py midday-summary`) rolls the model_v4 scenario + the three accounts
-  into one cross-book INTRADAY table (`reports/midday_summary_<date>.md`) and renders each book's midday
+  go-forward books (ledger synced from real Alpaca paper fills): **NINE Alpaca paper accounts**, each with
+  its own keys, in two groups (per-mode order rules are detailed in the **Broker-integration** bullet below).
+  **(A) Model-driven** — follow model_v4 itself: `topten` (seeded top-10; keys `APCA_*_NEW`) and `copymodel`
+  (seeded model-equal; keys `APCA_*_EXACT`), both `target_mode.kind=model_v4` → **follow model_v4's own
+  buy/sell rules** (`next_session_decision` **seeded with the live broker book + cash** via `_model_v4_decision`,
+  so the exposure cap / rotation funding / exits are real — not a from-inception sim); their
+  `top_n` / `model_equal` / `score_gate` modes were only the **initial seed**, which now persists and evolves
+  under model_v4. `rampup` (`score_gate_rampup`: **buy** only names scoring >0.9 (8.5% each) but **sell** only
+  per model_v4's exit rules, until 75% of starting cash is deployed (Σ broker buys/starting), then full
+  model_v4; keys `APCA_*_RAMP_UP`). These three also carry the **1-day rebound TQQQ overlay**; none trade the
+  SQQQ hedge. **(B) Research strategy books** — pure signal rules, NO model_v4 entry/exit logic and NO
+  overlay/hedge: three `score_rebalance` momentum books — `monthly10` and `weekly10` (top-10 by 60-day-avg
+  composite score, equal-weight to 90% gross, rebalanced on the first trading day of each month / week) and
+  `combo20` (staggered: top-10 / 60-day refreshed monthly + bottom-10 / 5-day refreshed weekly); and three
+  regime-filtered `zscore_reversal` mean-reversion books — `zscore10d_biweekly` (the validated 10d/biweekly
+  config), `zscore5d_weekly`, `zscore1d_daily` (buy the 10 names most-fallen vs their own z-norm, equal-weight,
+  to CASH when QQQ < its 200-day MA). Keys `APCA_*_{MONTHLY10,WEEKLY10,COMBO20,ZSCORE10D_BIWEEKLY,ZSCORE5D_WEEKLY,ZSCORE1D_DAILY}`.
+  Live broker books; cron drives them via `deploy/mv4_crontab.txt`.
+  `src/midday_summary.py` (`run.py midday-summary`) rolls the model_v4 scenario + the three **model-driven**
+  accounts (the default; `--accounts` to override) into one cross-book INTRADAY table
+  (`reports/midday_summary_<date>.md`) and renders each book's midday
   PDF; `src/eod_summary.py` (`run.py eod-summary`) is the EOD sibling — marks to the official close,
   **sells the overlay hedge at the close**, renders each book's EOD PDF into `reports/eod/`, and writes
   a consolidated one-page **PDF** (`reports/eod_summary_<date>.pdf`, `.md` alongside) with grouped tables
@@ -102,7 +112,7 @@ account uses it. Older/experimental versions (v2, v3, v5, v6) and one-off script
   research accounts **`monthly10`** (monthly / top-10 / 60-day), **`weekly10`** (weekly / top-10 / 60-day),
   **`combo20`** (STAGGERED: top-10 / 60-day refreshed monthly + bottom-10 / **5-day** refreshed weekly, account
   rebalances weekly) — the 60-day-lookback momentum sweep winners (keys `APCA_*_{MONTHLY10,WEEKLY10,COMBO20}`,
-  **placeholder** until real Alpaca paper keys are set). One-off override **`BROKER_REBALANCE_FORCE_TODAY=1`**
+  live in `.env`). One-off override **`BROKER_REBALANCE_FORCE_TODAY=1`**
   forces a rebalance TODAY regardless of the calendar gate and scores as-of today's intraday bar (also anchors
   the combo top sleeve to today instead of the month start) — for an off-cadence "fire now" run. And
   **`{kind:zscore_reversal, zscore_lookback, avg_window, n, rebalance, regime_ma, gross}`** (`_zscore_reversal_targets`)
@@ -113,7 +123,7 @@ account uses it. Older/experimental versions (v2, v3, v5, v6) and one-off script
   (`research/make_zscore_*`): the 10d-avg-z / biweekly / QQQ>200dMA config is best (gross Sharpe ~1.3, net
   ~+34%/yr @ 10bp, 2022 −46%→−24%). Used by matched-cadence accounts **`zscore10d_biweekly`** (the validated
   10d/biweekly config), **`zscore5d_weekly`** (5d/weekly), **`zscore1d_daily`** (1d/daily) — all regime-filtered,
-  keys `APCA_*_{ZSCORE10D_BIWEEKLY,ZSCORE5D_WEEKLY,ZSCORE1D_DAILY}` placeholder. **Seed-only modes** (the initial
+  keys `APCA_*_{ZSCORE10D_BIWEEKLY,ZSCORE5D_WEEKLY,ZSCORE1D_DAILY}` live in `.env`. **Seed-only modes** (the initial
   basket, no longer the live steady state): `{kind:top_n,n,size_pct}` (hold the N highest current-scored
   names), `{kind:model_equal,source,gross}` (equal-weight a source account's holdings), `{kind:score_gate,
   min_score,size_pct}` (hold every name whose current score ≥ min_score). Seed modes accumulate (dropouts

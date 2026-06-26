@@ -359,6 +359,16 @@ def build_parser() -> argparse.ArgumentParser:
     ea.add_argument("--out", help="output PDF path (default reports/eod_accounts_<date>.pdf)")
     ea.set_defaults(func=_cmd_eod_accounts)
 
+    oh = sub.add_parser("order-history",
+                        help="Combined PDF: each account's full Alpaca order history + positions + P&L (realized/unrealized)")
+    oh.add_argument("--accounts", nargs="+", help="override the account list (default: all broker accounts)")
+    oh.add_argument("--status", default="all", choices=["all", "closed", "open"],
+                    help="which orders to include (default: all)")
+    oh.add_argument("--end", metavar="YYYY-MM-DD", help="as-of date for the title/filename (default: today)")
+    oh.add_argument("--limit", type=int, default=500, help="max orders pulled per account (default: 500)")
+    oh.add_argument("--out", help="output PDF path (default reports/account_orders_<date>.pdf)")
+    oh.set_defaults(func=_cmd_order_history)
+
     return parser
 
 
@@ -489,6 +499,14 @@ def _cmd_eod_accounts(args: argparse.Namespace) -> None:
     import eod_accounts
     r = eod_accounts.run(accounts=getattr(args, "accounts", None), end=args.end, out=args.out)
     print("wrote", r["pdf"])
+
+
+def _cmd_order_history(args: argparse.Namespace) -> None:
+    import account_orders_report
+    r = account_orders_report.run(accounts=getattr(args, "accounts", None), end=args.end,
+                                  out=args.out, status=args.status, limit=args.limit)
+    ok = sum(1 for d in r["data"].values() if not d.get("err"))
+    print("wrote %s  (%d/%d accounts live)" % (r["pdf"], ok, len(r["data"])))
 
 
 def _cmd_snapshot(args: argparse.Namespace) -> None:
