@@ -279,6 +279,8 @@ def _model_v4_targets(name: str, current: Dict[str, float], cli: ba.AlpacaPaper,
     targets: Dict[str, int] = {t: int(round(s)) for t, s in current.items()
                                if t not in (HEDGE_SYM, REBOUND_SYM)}
     refs: Dict[str, float] = {}
+    dec: Dict[str, Any] = {}
+    ranks = _ranks_snapshot((load_manifest(name) or {}).get("scenario", "model_v4"))
     for b in (ns.get("buys") or []):
         sym, px = b["ticker"], b.get("price")
         sh = int(round(b.get("shares") or 0))
@@ -289,6 +291,8 @@ def _model_v4_targets(name: str, current: Dict[str, float], cli: ba.AlpacaPaper,
         if px:
             refs[sym] = px
         targets[sym] = int(round(current.get(sym, 0))) + sh
+        sc, rk = ranks.get(sym, (None, None))
+        dec[sym] = _dec("model_v4 buy: %s" % (b.get("reason") or "gate/persistence entry"), score=sc, rank=rk)
     for s in (ns.get("sells") or []):                      # model exits + rotation-funding sells → flatten
         sym = s["ticker"]
         if sym == HEDGE_SYM:
@@ -296,9 +300,11 @@ def _model_v4_targets(name: str, current: Dict[str, float], cli: ba.AlpacaPaper,
         targets[sym] = 0
         if s.get("price"):
             refs[sym] = s["price"]
+        sc, rk = ranks.get(sym, (None, None))
+        dec[sym] = _dec("model_v4 sell: %s" % (s.get("reason") or "exit"), score=sc, rank=rk, pnl=s.get("pnl"))
     if not include_hedge:
         targets.pop(HEDGE_SYM, None)
-    return targets, refs
+    return targets, refs, dec
 
 
 def _deployed_frac(name: str, cli: ba.AlpacaPaper = None) -> float:
@@ -333,7 +339,7 @@ def _avg_scores(scenario: str = "model_v4", n: int = 5) -> Dict[str, float]:
 
 
 def _rebound_target(name: str, cli: ba.AlpacaPaper, targets: Dict[str, int],
-                    refs: Dict[str, float]) -> "tuple[Dict[str,int], Dict[str,float]]":
+                    refs: Dict[str, float], dec: Dict[str, Any] = None) -> "tuple[Dict[str,int], Dict[str,float], dict]":
     """Overlay the standalone 1-day REBOUND sleeve onto the account's model target. If the LIVE rebound
     fires (QQQ down-shock + momentum signal<0 + vol-up; see rebound_overlay), ADD a TQQQ buy at the full
     weight x book size. Funding (`rebound_funding`, default 'trim'): cash first, then ROTATE — exit AT MOST
@@ -342,9 +348,10 @@ def _rebound_target(name: str, cli: ba.AlpacaPaper, targets: Dict[str, int],
     'cash' to instead cap at available cash (no book sale). If it does NOT fire, TQQQ is absent so the reconcile flattens any
     held rebound position next session (the 1-day exit; the trimmed names also come back into the model
     target and are rebought). The model decision never sees TQQQ. Opt out with manifest `rebound: false`."""
+    dec = dec if dec is not None else {}
     man = load_manifest(name) or {}
     if not man.get("rebound", True):
-        return targets, refs
+        return targets, refs, dec
     try:
         import rebound_overlay as _ro
         acct = cli.account()
@@ -352,11 +359,11 @@ def _rebound_target(name: str, cli: ba.AlpacaPaper, targets: Dict[str, int],
         bmv = max(float(acct.get("equity") or 0.0) - cash, 0.0)
         rec = _ro.recommend(market_value=bmv, live=True)          # latest close -> act now if it fires
         if not rec.get("fires"):
-            return targets, refs
+            return targets, refs, dec
         q = (cli.latest_prices([REBOUND_SYM]) or {}).get(REBOUND_SYM) or {}
         px = q.get("mid") or q.get("last") or q.get("price")
         if not (px and float(px) > 0):
-            return targets, refs
+            return targets, refs, dec
         want = float(rec["rebound_dollars"])                      # full weight x book
         avail = cash * 0.95                                       # fund from cash first (5% buffer)
         if want > avail and man.get("rebound_funding", "trim") == "trim":
@@ -381,15 +388,19 @@ def _rebound_target(name: str, cli: ba.AlpacaPaper, targets: Dict[str, int],
                 targets[t] = qv - sell                            # trim this holding
                 refs[t] = float(p)
                 raised += sell * float(p)
+                dec[t] = _dec("rebound funding: trim lowest 5d-avg-score to fund TQQQ overlay",
+                              score=scores.get(t))
             avail += raised                                       # cash + up-to-2 exits; rest unfunded
         qty = int(min(want, avail) / float(px))
         if qty > 0:
             targets[REBOUND_SYM] = qty
             refs[REBOUND_SYM] = float(px)
+            dec[REBOUND_SYM] = _dec("rebound overlay fired: QQQ %+.1f%% down-shock + momentum<0 + vol-up (1-day)"
+                                    % (float(rec.get("qqq_down", 0)) * 100))
     except Exception as exc:
         import logging
         logging.getLogger(__name__).warning("rebound overlay skipped for %s: %s", name, exc)
-    return targets, refs
+    return targets, refs, dec
 
 
 def _recent_trading_days(n: int = 12):
@@ -440,6 +451,37 @@ def _lookback_avg_scores(scenario: str, lookback_days: int = 60, as_of=None, val
     return pd.DataFrame(rows).mean().to_dict()
 
 
+def _dec(reason: str, score=None, rank=None, z=None, pnl=None) -> Dict[str, Any]:
+    """One DECISION record: the real rule that produced an order + its supporting data. Persisted with
+    the plan so every trade carries why it happened (reason) and the numbers behind it (score/rank/z/pnl)."""
+    e: Dict[str, Any] = {"reason": reason}
+    if score is not None and pd.notna(score):
+        e["score"] = round(float(score), 4)
+    if rank is not None:
+        e["rank"] = int(rank)
+    if z is not None and pd.notna(z):
+        e["z"] = round(float(z), 3)
+    if pnl is not None and pd.notna(pnl):
+        e["pnl"] = round(float(pnl), 2)
+    return e
+
+
+def _ranks_snapshot(scenario: str = "model_v4") -> Dict[str, "tuple"]:
+    """{ticker: (composite_score, rank)} from the latest rankings_<scenario>_*.csv (rank 1 = top score).
+    Cheap (one CSV) — used to attach score+rank context to model_v4 / ramp-up trades. {} if none."""
+    import glob
+    snaps = sorted(glob.glob(str(ROOT / "backtests" / f"rankings_{scenario}_*.csv")))
+    if not snaps:
+        return {}
+    try:
+        df = pd.read_csv(snaps[-1])
+        df["ticker"] = df["ticker"].astype(str).str.strip()
+        df = df.sort_values("score", ascending=False).reset_index(drop=True)
+        return {r["ticker"]: (float(r["score"]), i + 1) for i, r in df.iterrows()}
+    except Exception:
+        return {}
+
+
 def _period_anchor(cal, refresh: str):
     """First trading day of the current week/month in `cal` (for staggered refresh — so the top sleeve
     is computed as-of the period start and stays fixed between refreshes)."""
@@ -483,13 +525,17 @@ def _combo_targets(scenario: str, cli: ba.AlpacaPaper, current: Dict[str, float]
     cur = current or {}
     targets: Dict[str, int] = {}
     refs: Dict[str, float] = {}
-    for t in top:
+    dec: Dict[str, Any] = {}
+    for i, t in enumerate(top):
         px = (quotes.get(t) or {}).get("mid") or (quotes.get(t) or {}).get("last")
         if not px or float(px) <= 0:
             continue
         refs[t] = float(px)
         targets[t] = int(per / float(px)) if do_top else int(round(cur.get(t, 0)))   # monthly re-size, else hold
-    for t in bottom:
+        dec[t] = _dec("combo TOP sleeve #%d (%dd-avg score, %s refresh)"
+                      % (i + 1, int(tm.get("top_lookback_days", 60)), tm.get("top_refresh", "monthly")),
+                      score=ta.get(t), rank=i + 1)
+    for i, t in enumerate(bottom):
         if t in targets:                                           # overlap -> top sleeve keeps it
             continue
         px = (quotes.get(t) or {}).get("mid") or (quotes.get(t) or {}).get("last")
@@ -497,7 +543,13 @@ def _combo_targets(scenario: str, cli: ba.AlpacaPaper, current: Dict[str, float]
             continue
         refs[t] = float(px)
         targets[t] = int(per / float(px))                          # bottom re-sizes every (weekly) rebalance
-    return targets, refs
+        dec[t] = _dec("combo BOTTOM sleeve #%d (%dd-avg score, weekly refresh)"
+                      % (i + 1, int(tm.get("bottom_lookback_days", 5))), score=ba.get(t), rank=i + 1)
+    # currently-held names that fell out of BOTH sleeves are flattened by reconcile -> log the drop
+    for t, qv in cur.items():
+        if int(round(qv)) > 0 and t not in targets and t not in (HEDGE_SYM, REBOUND_SYM):
+            dec[t] = _dec("combo: dropped (out of top%d/bottom%d)" % (top_n, bot_n))
+    return targets, refs, dec
 
 
 def _score_rebalance_targets(name: str, cli: ba.AlpacaPaper, current: Dict[str, float],
@@ -513,27 +565,38 @@ def _score_rebalance_targets(name: str, cli: ba.AlpacaPaper, current: Dict[str, 
             if int(round(s)) > 0 and t not in (HEDGE_SYM, REBOUND_SYM)}
     cal = _recent_trading_days()
     if held and not force and not _is_rebalance_day(tm.get("rebalance", "monthly"), cal):
-        return held, {}                                            # not a rebalance day -> hold (unless forced)
+        return held, {}, {}                                        # not a rebalance day -> hold (unless forced)
     scenario = (load_manifest(name) or {}).get("scenario", "model_v4")
     if tm.get("top_lookback_days") or tm.get("bottom_lookback_days"):
         return _combo_targets(scenario, cli, current, tm, cal, bool(held))
     avg = _lookback_avg_scores(scenario, int(tm.get("lookback_days", 60)), valid_before=_valid_before(cli))
     ranked = [t for t in sorted(avg, key=lambda k: avg[k], reverse=True) if pd.notna(avg[t])]
+    rank_of = {t: i + 1 for i, t in enumerate(ranked)}
     top_n, bot_n = int(tm.get("top_n", 10)), int(tm.get("bottom_n", 0))
     picks = list(dict.fromkeys(ranked[:top_n] + (ranked[-bot_n:] if bot_n else [])))
     if not picks:
-        return held, {}
+        return held, {}, {}
     equity = float(cli.account().get("equity") or 0.0)
     per = float(tm.get("gross", 0.90)) * equity / len(picks)       # equal-weight to gross exposure
     quotes = _sanitize_quotes(cli.latest_prices(picks) or {}, _last_closes(picks))   # size off sane px
+    freq, lb = tm.get("rebalance", "monthly"), int(tm.get("lookback_days", 60))
+    bottom_set = set(ranked[-bot_n:]) if bot_n else set()
     targets: Dict[str, int] = {}
     refs: Dict[str, float] = {}
+    dec: Dict[str, Any] = {}
     for t in picks:
         px = (quotes.get(t) or {}).get("mid") or (quotes.get(t) or {}).get("last")
         if px and float(px) > 0:
             refs[t] = float(px)
             targets[t] = int(per / float(px))
-    return targets, refs                                           # picks only -> the rest flattens
+            sleeve = "bottom" if t in bottom_set else "top"
+            dec[t] = _dec("score_rebalance %s: %s #%d of %d (%dd-avg score)"
+                          % (freq, sleeve, rank_of.get(t, 0), top_n, lb), score=avg.get(t), rank=rank_of.get(t))
+    for t, qv in (held or {}).items():                             # held names that fell out -> flattened
+        if t not in targets:
+            dec[t] = _dec("score_rebalance %s: dropped (rank %s of %d)"
+                          % (freq, rank_of.get(t, "—"), len(ranked)), score=avg.get(t), rank=rank_of.get(t))
+    return targets, refs, dec                                      # picks only -> the rest flattens
 
 
 def _zscore_reversal_signal(scenario: str = "model_v4", zscore_lookback: int = 60, avg_window: int = 10,
@@ -588,36 +651,49 @@ def _zscore_reversal_targets(name: str, cli: ba.AlpacaPaper, current: Dict[str, 
     held = {t: int(round(s)) for t, s in (current or {}).items()
             if int(round(s)) > 0 and t not in (HEDGE_SYM, REBOUND_SYM)}
     cal = _recent_trading_days()
-    if held and not force and not _is_rebalance_day(tm.get("rebalance", "biweekly"), cal):
-        return held, {}                                            # not a rebalance day -> hold
+    freq = tm.get("rebalance", "biweekly")
+    if held and not force and not _is_rebalance_day(freq, cal):
+        return held, {}, {}                                        # not a rebalance day -> hold
     # Rank/regime off real prices: live bar while open, last completed close otherwise (drop phantom bar).
     valid_before = _valid_before(cli)
     ma = int(tm.get("regime_ma", 0) or 0)
     if ma and not _qqq_above_ma(ma, valid_before=valid_before):
-        return {}, {}                                              # downtrend -> cash (flatten everything)
+        dec = {t: _dec("zscore: regime OFF (QQQ < %d-day MA) -> to CASH" % ma) for t in (held or {})}
+        return {}, {}, dec                                         # downtrend -> cash (flatten everything)
     scenario = (load_manifest(name) or {}).get("scenario", "model_v4")
     sig = _zscore_reversal_signal(scenario, int(tm.get("zscore_lookback", 60)),
                                   int(tm.get("avg_window", 10)), valid_before=valid_before)
     ranked = sorted((t for t in sig if pd.notna(sig[t])), key=lambda t: sig[t])   # ascending -> lowest z first
+    rank_of = {t: i + 1 for i, t in enumerate(ranked)}
     picks = ranked[:int(tm.get("n", 10))]
     if not picks:
-        return held, {}
+        return held, {}, {}
     equity = float(cli.account().get("equity") or 0.0)
     per = float(tm.get("gross", 0.90)) * equity / len(picks)
     quotes = _sanitize_quotes(cli.latest_prices(picks) or {}, _last_closes(picks))   # size off sane px
+    aw = int(tm.get("avg_window", 10))
     targets: Dict[str, int] = {}
     refs: Dict[str, float] = {}
+    dec: Dict[str, Any] = {}
     for t in picks:
         px = (quotes.get(t) or {}).get("mid") or (quotes.get(t) or {}).get("last")
         if px and float(px) > 0:
             refs[t] = float(px)
             targets[t] = int(per / float(px))
-    return targets, refs
+            dec[t] = _dec("zscore %s entry: most-fallen #%d (%dd-avg z)" % (freq, rank_of.get(t, 0), aw),
+                          z=sig.get(t), rank=rank_of.get(t))
+    for t, qv in (held or {}).items():                             # held names no longer lowest-z -> flattened
+        if t not in targets:
+            dec[t] = _dec("zscore %s: rebalance out (z rank %s)" % (freq, rank_of.get(t, "—")),
+                          z=sig.get(t), rank=rank_of.get(t))
+    return targets, refs, dec
 
 
 def compute_targets(name: str, cli: ba.AlpacaPaper,
-                    current: Optional[Dict[str, float]] = None) -> "tuple[Dict[str,int], Dict[str,float]]":
+                    current: Optional[Dict[str, float]] = None) -> "tuple[Dict[str,int], Dict[str,float], dict]":
     """TARGET book {symbol: shares} for the next session, computed from the broker's actual book.
+    Returns (targets, ref_prices, decisions) where `decisions` = {symbol: {reason, score?, rank?, z?,
+    pnl?}} — the REAL rule + supporting data behind each name's trade, persisted for the audit log.
 
     Default (ramp-up) mode:
         • hold every current NON-hedge position (ramp-up is accumulate-only),
@@ -663,36 +739,57 @@ def compute_targets(name: str, cli: ba.AlpacaPaper,
         if _deployed_frac(name, cli) >= float(tm.get("graduate_at", 0.75)):
             return _rebound_target(name, cli, *_model_v4_targets(name, current, cli,
                                                                  include_hedge=bool(tm.get("hedge", False))))
-        model_sells = {s["ticker"] for s in (_model_v4_decision(name, cli).get("sells") or [])}
+        min_score = float(tm.get("min_score", 0.9))
+        ns = _model_v4_decision(name, cli)
+        model_sells = {s["ticker"] for s in (ns.get("sells") or [])}
+        ranks = _ranks_snapshot((load_manifest(name) or {}).get("scenario", "model_v4"))
         # keep current names EXCEPT those model_v4 is exiting (sell only per model_v4 rules)
         targets: Dict[str, int] = {s: int(round(sh)) for s, sh in current.items()
                                    if s not in (HEDGE_SYM, REBOUND_SYM) and s not in model_sells}
         refs: Dict[str, float] = {}
+        dec: Dict[str, Any] = {}
+        for s in (ns.get("sells") or []):                      # sells follow model_v4's exit rules
+            sym = s["ticker"]
+            sc, rk = ranks.get(sym, (None, None))
+            dec[sym] = _dec("ramp-up sell: model_v4 %s" % (s.get("reason") or "exit"),
+                            score=sc, rank=rk, pnl=s.get("pnl"))
         size_pct = float(tm.get("size_pct", 0.085))
-        for it in ba.score_gate_from_account(name, min_score=float(tm.get("min_score", 0.9))):
-            s, px = it["ticker"], it.get("price")              # add the >0.9 names at size_pct
+        for it in ba.score_gate_from_account(name, min_score=min_score):
+            s, px = it["ticker"], it.get("price")              # add the >min_score names at size_pct
             if not px or float(px) <= 0:
                 continue
             refs[s] = float(px)
             targets[s] = max(int(round(current.get(s, 0))), int(equity * size_pct / float(px)))
-        return _rebound_target(name, cli, targets, refs)
+            dec[s] = _dec("ramp-up buy: score-gate (score > %.2f, %.1f%% each)" % (min_score, size_pct * 100),
+                          score=it.get("score"), rank=it.get("rank"))
+        return _rebound_target(name, cli, targets, refs, dec)
     if tm.get("kind") == "top_n":
         equity = float(cli.account().get("equity") or 0.0)
         intended = ba.topn_from_account(name, top_n=int(tm.get("n", 10)))
-        return topn_targets(intended, equity, current, float(tm.get("size_pct", 0.085)))
+        tgt, rf = topn_targets(intended, equity, current, float(tm.get("size_pct", 0.085)))
+        dec = {it["ticker"]: _dec("top_n seed: highest current score", score=it.get("score"),
+                                  rank=it.get("rank")) for it in intended}
+        return tgt, rf, dec
     if tm.get("kind") == "score_gate":
         equity = float(cli.account().get("equity") or 0.0)
         intended = ba.score_gate_from_account(name, min_score=float(tm.get("min_score", 0.9)))
-        return topn_targets(intended, equity, current, float(tm.get("size_pct", 0.085)))
+        tgt, rf = topn_targets(intended, equity, current, float(tm.get("size_pct", 0.085)))
+        dec = {it["ticker"]: _dec("score_gate seed: score >= %.2f" % float(tm.get("min_score", 0.9)),
+                                  score=it.get("score"), rank=it.get("rank")) for it in intended}
+        return tgt, rf, dec
     if tm.get("kind") == "model_equal":
         equity = float(cli.account().get("equity") or 0.0)
         names = _source_book_names(tm.get("source", "primary"))
         quotes = _sanitize_quotes(cli.latest_prices(names) or {}, _last_closes(names)) if names else {}
         prices = {s: (quotes.get(s) or {}).get("mid") for s in names}
-        return equal_weight_targets(prices, equity, current, float(tm.get("gross", 1.0)))
+        tgt, rf = equal_weight_targets(prices, equity, current, float(tm.get("gross", 1.0)))
+        dec = {s: _dec("model_equal seed: replicate %s (equal-weight)" % tm.get("source", "primary"))
+               for s in names}
+        return tgt, rf, dec
     q = ba.queue_from_account(name)
     targets: Dict[str, int] = {t: int(round(s)) for t, s in current.items() if t != HEDGE_SYM}
     refs: Dict[str, float] = {}
+    dec: Dict[str, Any] = {}
     hedge_seen = False
     for it in q:
         sym, px = it["ticker"], it.get("price")
@@ -701,13 +798,16 @@ def compute_targets(name: str, cli: ba.AlpacaPaper,
             refs[sym] = px
         if sym == HEDGE_SYM:
             targets[HEDGE_SYM] = sh; hedge_seen = True
+            dec[sym] = _dec("hedge overlay")
         elif it.get("action", "BUY").upper() == "BUY":
             targets[sym] = int(round(current.get(sym, 0))) + sh    # held -> add; new -> shares
+            dec[sym] = _dec("queue buy: %s" % (it.get("reason") or "entry"), score=it.get("score"))
         else:                                                       # SELL / model exit
             targets[sym] = 0
+            dec[sym] = _dec("queue sell: %s" % (it.get("reason") or "exit"), score=it.get("score"))
     if not hedge_seen:
         targets[HEDGE_SYM] = 0                                      # hedge off -> flatten any hedge
-    return targets, refs
+    return targets, refs, dec
 
 
 # ── session steps ──────────────────────────────────────────────────────────────────
@@ -781,6 +881,27 @@ def _sanitize_quotes(prices: Dict[str, Any], closes: Dict[str, float], max_dev: 
     return prices
 
 
+def _log_decisions(name: str, asof: str, orders: List[Dict[str, Any]],
+                   decisions: Dict[str, Any], retry: bool) -> None:
+    """Append one audit row per submitted order to accounts/<name>/broker/decisions.csv — the REAL
+    reason the strategy produced that trade plus its supporting data (score/rank/z/realized pnl). This
+    is the durable per-trade decision log the reports read. Best-effort: never blocks order submission."""
+    try:
+        rows = []
+        for o in orders:
+            d = decisions.get(o["symbol"], {})
+            rows.append({"asof": asof, "symbol": o["symbol"], "side": o["side"],
+                         "qty": o.get("qty"), "limit_price": o.get("limit_price"),
+                         "reason": d.get("reason", ""), "score": d.get("score"),
+                         "rank": d.get("rank"), "z": d.get("z"), "pnl": d.get("pnl"),
+                         "retry": bool(retry)})
+        if rows:
+            _append_csv(_broker_dir(name) / "decisions.csv", pd.DataFrame(rows))
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("decision logging skipped for %s: %s", name, exc)
+
+
 def submit_session(name: str, cli: ba.AlpacaPaper = None, submit: bool = False,
                    prequeue: bool = False, retry: bool = False, extended: bool = False) -> Dict[str, Any]:
     """Build the day's RECONCILE-TO-TARGET plan (limit orders with data-driven per-symbol collars),
@@ -792,7 +913,7 @@ def submit_session(name: str, cli: ba.AlpacaPaper = None, submit: bool = False,
     clk = cli.clock()
     asof = clk.get("timestamp", _utcnow())[:10]
     current = {p["ticker"]: p["qty"] for p in cli.positions()}
-    targets, _refpx = compute_targets(name, cli, current)
+    targets, _refpx, decisions = compute_targets(name, cli, current)
     delta_syms = sorted({s for s in set(targets) | set(current)
                          if int(round(targets.get(s, 0))) != int(round(current.get(s, 0)))})
     prices = cli.latest_prices(delta_syms) if delta_syms else {}
@@ -808,9 +929,12 @@ def submit_session(name: str, cli: ba.AlpacaPaper = None, submit: bool = False,
     (_broker_dir(name) / f"plan_{asof}.json").write_text(json.dumps(
         {"asof": asof, "retry": retry, "refs": refs,
          "collars": {s: collars.get(s, {}) for s in delta_syms},
+         # the REAL reason + supporting data (score/rank/z/pnl) behind each traded symbol's decision
+         "decisions": {o["symbol"]: decisions.get(o["symbol"], {}) for o in orders},
          "orders": [{k: v for k, v in o.items() if not k.startswith("_")} for o in orders],
-         "detail": [dict(symbol=o["symbol"], side=o["side"], qty=o["qty"],
-                         limit_price=o["limit_price"], **o["_plan"]) for o in orders]}, indent=2))
+         "detail": [dict(symbol=o["symbol"], side=o["side"], qty=o["qty"], limit_price=o["limit_price"],
+                         **decisions.get(o["symbol"], {}), **o["_plan"]) for o in orders]}, indent=2))
+    _log_decisions(name, asof, orders, decisions, retry)          # append the per-trade audit row(s)
     # retry orders are intraday DAY limits (submitted while the market is open), so they bypass the
     # pre-open/on-open window guard that governs the first (opg/cls) attempt.
     win = submit_window(clk, prequeue=prequeue or retry or extended)
@@ -836,7 +960,7 @@ def retry_unfilled(name: str, cli: ba.AlpacaPaper = None) -> Dict[str, Any]:
         cli.cancel(o["id"]) if hasattr(cli, "cancel") else None
     res = submit_session(name, cli=cli, submit=True, prequeue=False, retry=True)
     # record what got skipped (still no position vs target) for honesty
-    targets, _ = compute_targets(name, cli)
+    targets, _, _ = compute_targets(name, cli)
     current = {p["ticker"]: p["qty"] for p in cli.positions()}
     skipped = [{"asof": asof, "symbol": s, "target": int(round(targets.get(s, 0))),
                 "current": int(round(current.get(s, 0)))}

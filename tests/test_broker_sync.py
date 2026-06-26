@@ -103,7 +103,7 @@ def _fires(monkeypatch, dollars=50_000.0):
 def test_rebound_funds_from_cash_when_sufficient(monkeypatch):
     monkeypatch.setattr(bs, "load_manifest", lambda n: {"rebound": True})
     _fires(monkeypatch)
-    t, _ = bs._rebound_target("topten", _RbCli(cash=60_000.0), {"AAPL": 10}, {})
+    t, _, _ = bs._rebound_target("topten", _RbCli(cash=60_000.0), {"AAPL": 10}, {})
     assert t["TQQQ"] == 500 and t["AAPL"] == 10        # 50k from cash, book untouched, no trim
 
 
@@ -112,7 +112,7 @@ def test_rebound_trims_two_lowest_5d_avg_score(monkeypatch):
     monkeypatch.setattr(bs, "_avg_scores", lambda s="model_v4", n=5: {"A": 0.20, "B": 0.30, "C": 0.90})
     _fires(monkeypatch, dollars=50_000.0)
     # cash 10k -> avail 9.5k; shortfall 40.5k; exit the 2 lowest-avg (A fully 30k, B 106 sh) -> covers it
-    t, _ = bs._rebound_target("topten", _RbCli(cash=10_000.0), {"A": 300, "B": 300, "C": 300}, {})
+    t, _, _ = bs._rebound_target("topten", _RbCli(cash=10_000.0), {"A": 300, "B": 300, "C": 300}, {})
     assert t["A"] == 0 and t["B"] == 194              # two weakest exited (A full, B partial)
     assert t["C"] == 300                              # 3rd-weakest untouched -> capped at 2 exits
     assert t["TQQQ"] == 500                           # full 50k funded by cash + 2 exits
@@ -123,7 +123,7 @@ def test_rebound_trim_capped_at_two_exits(monkeypatch):
     monkeypatch.setattr(bs, "_avg_scores", lambda s="model_v4", n=5: {"A": 0.2, "B": 0.3, "C": 0.4})
     _fires(monkeypatch, dollars=50_000.0)
     # cash 5k -> avail 4.75k; positions 10k each; 2 full exits (20k) + cash < 50k -> overlay CAPPED
-    t, _ = bs._rebound_target("topten", _RbCli(cash=5_000.0), {"A": 100, "B": 100, "C": 100}, {})
+    t, _, _ = bs._rebound_target("topten", _RbCli(cash=5_000.0), {"A": 100, "B": 100, "C": 100}, {})
     assert t["A"] == 0 and t["B"] == 0                # both weakest fully exited (cap 2)
     assert t["C"] == 100                              # 3rd untouched
     assert t["TQQQ"] == 247                           # capped at (4.75k + 20k) / 100
@@ -132,7 +132,7 @@ def test_rebound_trim_capped_at_two_exits(monkeypatch):
 def test_rebound_cash_mode_caps_no_trim(monkeypatch):
     monkeypatch.setattr(bs, "load_manifest", lambda n: {"rebound": True, "rebound_funding": "cash"})
     _fires(monkeypatch, dollars=50_000.0)
-    t, _ = bs._rebound_target("topten", _RbCli(cash=10_000.0), {"AAPL": 300}, {})
+    t, _, _ = bs._rebound_target("topten", _RbCli(cash=10_000.0), {"AAPL": 300}, {})
     assert t["TQQQ"] == 95 and t["AAPL"] == 300        # cash mode -> cap at 95% of 10k; book untouched
 
 
@@ -140,14 +140,14 @@ def test_rebound_no_fire_leaves_no_tqqq(monkeypatch):
     import rebound_overlay
     monkeypatch.setattr(bs, "load_manifest", lambda n: {"rebound": True})
     monkeypatch.setattr(rebound_overlay, "recommend", lambda **k: {"fires": False, "rebound_dollars": 0.0})
-    t, _ = bs._rebound_target("topten", _RbCli(), {"AAPL": 10}, {})
+    t, _, _ = bs._rebound_target("topten", _RbCli(), {"AAPL": 10}, {})
     assert "TQQQ" not in t                              # absent -> reconcile flattens any held TQQQ next session
 
 
 def test_rebound_opt_out_via_manifest(monkeypatch):
     monkeypatch.setattr(bs, "load_manifest", lambda n: {"rebound": False})
     _fires(monkeypatch)
-    t, _ = bs._rebound_target("topten", _RbCli(cash=10_000.0), {"AAPL": 10}, {})
+    t, _, _ = bs._rebound_target("topten", _RbCli(cash=10_000.0), {"AAPL": 10}, {})
     assert "TQQQ" not in t                              # rebound:false -> overlay disabled
 
 
@@ -163,7 +163,7 @@ def test_score_rebalance_picks_top_n_equal_weight(monkeypatch):
                         lambda s, lb, as_of=None, valid_before=None: {"A": 0.9, "B": 0.8, "C": 0.7, "D": 0.2})
     tm = {"kind": "score_rebalance", "lookback_days": 60, "top_n": 2, "bottom_n": 0,
           "rebalance": "monthly", "gross": 0.90}
-    t, r = bs._score_rebalance_targets("monthly10", _SrCli(), {}, tm)     # empty book -> always rebalances
+    t, r, _ = bs._score_rebalance_targets("monthly10", _SrCli(), {}, tm)     # empty book -> always rebalances
     assert t == {"A": 450, "B": 450}                    # 0.9*100k/2 = 45k each / $100
     assert set(r) == {"A", "B"}
 
@@ -174,7 +174,7 @@ def test_score_rebalance_combo_includes_bottom(monkeypatch):
                         lambda s, lb, as_of=None, valid_before=None: {"A": 0.9, "B": 0.8, "C": 0.7, "D": 0.2})
     tm = {"kind": "score_rebalance", "lookback_days": 60, "top_n": 2, "bottom_n": 1,
           "rebalance": "weekly", "gross": 0.90}
-    t, _ = bs._score_rebalance_targets("combo20", _SrCli(), {}, tm)
+    t, _, _ = bs._score_rebalance_targets("combo20", _SrCli(), {}, tm)
     assert t == {"A": 300, "B": 300, "D": 300}          # 3 names (2 top + 1 bottom), 30k each
 
 
@@ -186,7 +186,7 @@ def test_score_rebalance_holds_off_rebalance_day(monkeypatch):
     monkeypatch.setattr(bs, "_lookback_avg_scores",
                         lambda s, lb, as_of=None, valid_before=None: called.append(1) or {"A": 0.9})
     tm = {"kind": "score_rebalance", "rebalance": "monthly", "top_n": 10}
-    t, _ = bs._score_rebalance_targets("monthly10", _SrCli(), {"A": 450, "B": 450}, tm)
+    t, _, _ = bs._score_rebalance_targets("monthly10", _SrCli(), {"A": 450, "B": 450}, tm)
     assert t == {"A": 450, "B": 450}                    # held unchanged off-rebalance
     assert not called                                   # and scores NOT recomputed
 
@@ -208,7 +208,7 @@ def test_score_rebalance_split_top_monthly_bottom_5d(monkeypatch):
     tm = {"kind": "score_rebalance", "rebalance": "weekly", "gross": 0.90,
           "top_n": 2, "top_lookback_days": 60, "top_refresh": "monthly",
           "bottom_n": 2, "bottom_lookback_days": 5, "bottom_refresh": "weekly"}
-    t, _ = bs._score_rebalance_targets("combo20", _SrCli(), {}, tm)
+    t, _, _ = bs._score_rebalance_targets("combo20", _SrCli(), {}, tm)
     assert set(t) == {"A", "B", "Y", "X"}                 # top-2 by 60D (A,B) + bottom-2 by 5D (Y,X)
     assert all(v == 225 for v in t.values())              # 4 names, 0.9*100k/4 = 22.5k / $100
     assert str(seen[60].date()) == "2026-06-01"           # top anchored to first trading day of the month
@@ -232,7 +232,7 @@ def test_combo_top_held_on_non_monthly_week(monkeypatch):
           "top_n": 2, "top_lookback_days": 60, "top_refresh": "monthly",
           "bottom_n": 2, "bottom_lookback_days": 5}
     cur = {"A": 999, "B": 111, "W": 50}                  # top held at drifted shares; W = stale old bottom
-    t, _ = bs._score_rebalance_targets("combo20", _SrCli(), cur, tm)
+    t, _, _ = bs._score_rebalance_targets("combo20", _SrCli(), cur, tm)
     assert t["A"] == 999 and t["B"] == 111              # TOP kept untouched on a non-monthly week
     assert t["Y"] == 225 and t["Z"] == 225              # BOTTOM re-sized weekly (0.9*100k/4 = 22.5k/$100)
     assert "W" not in t                                  # stale bottom name flattened
@@ -285,7 +285,7 @@ def test_zscore_reversal_buys_lowest_n(monkeypatch):
     monkeypatch.setattr(bs, "_zscore_reversal_signal",
                         lambda s, zl, aw, valid_before=None: {"A": 0.9, "B": 0.5, "C": -0.5, "D": -0.9})
     tm = {"kind": "zscore_reversal", "n": 2, "rebalance": "biweekly", "regime_ma": 200, "gross": 0.90}
-    t, _ = bs._zscore_reversal_targets("zrev", _ZrCli(), {}, tm)
+    t, _, _ = bs._zscore_reversal_targets("zrev", _ZrCli(), {}, tm)
     assert set(t) == {"C", "D"}                  # the 2 LOWEST-signal (most-fallen) names
     assert all(v == 450 for v in t.values())     # 0.9*100k/2 = 45k / $100
 
@@ -299,7 +299,7 @@ def test_zscore_reversal_regime_off_goes_cash(monkeypatch):
     monkeypatch.setattr(bs, "_zscore_reversal_signal",
                         lambda s, zl, aw, valid_before=None: seen.append(1) or {"A": 0.1})
     tm = {"kind": "zscore_reversal", "n": 10, "rebalance": "biweekly", "regime_ma": 200}
-    t, _ = bs._zscore_reversal_targets("zrev", _ZrCli(), {"X": 50}, tm)
+    t, _, _ = bs._zscore_reversal_targets("zrev", _ZrCli(), {"X": 50}, tm)
     assert t == {}                               # cash -> reconcile flattens the held book
     assert not seen                              # signal not even computed when regime is off
 

@@ -20,6 +20,7 @@ from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 matplotlib.rcParams["text.parse_math"] = False     # treat '$' / '%' literally everywhere (money strings)
@@ -35,6 +36,7 @@ ORDERS_PER_PAGE = 34          # order rows per page (+ header + TOTAL row); wrap
 
 
 _CT = ZoneInfo("America/Chicago")
+_ET = ZoneInfo("America/New_York")
 _UTC = ZoneInfo("UTC")
 
 
@@ -99,14 +101,41 @@ _KIND_REASON = {
 
 
 def _reason(side, sym, kind):
-    """Brief GOVERNING-RULE label for an order, derived from the account strategy + side + symbol.
-    Alpaca/plan files store no per-order reason, but each book is a deterministic rule, so the rule
-    that produced a given buy/sell is well-defined. Overlay sleeves are flagged by symbol."""
+    """Brief GOVERNING-RULE label for an order, derived from the account strategy + side + symbol —
+    the FALLBACK used for orders placed before per-order decision logging existed. Each book is a
+    deterministic rule, so the rule that produced a buy/sell is well-defined. Overlays flagged by symbol."""
     is_buy = (side or "").lower() == "buy"
     if sym in _OVERLAY_REASON:
         return _OVERLAY_REASON[sym][0 if is_buy else 1]
     b, s = _KIND_REASON.get(kind, ("buy", "sell"))
     return b if is_buy else s
+
+
+def _et_date(s):
+    """ET calendar date (YYYY-MM-DD) of an ISO timestamp — matches the broker plan's `asof` (ET)."""
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return (dt.replace(tzinfo=_UTC) if dt.tzinfo is None else dt).astimezone(_ET).strftime("%Y-%m-%d")
+    except Exception:
+        return None
+
+
+def _order_reason(o, kind, dec_log):
+    """The REAL logged reason + supporting data for an order (matched by ET date + symbol + side in
+    decisions.csv), e.g. 'zscore weekly entry: most-fallen #1 (5d-avg z) · z-1.71'. Falls back to the
+    derived rule label when no decision was logged (orders predating the decision-logging feature)."""
+    sym, side = o.get("symbol", ""), (o.get("side") or "").lower()
+    d = dec_log.get((_et_date(o.get("submitted_at") or o.get("filled_at")), sym, side))
+    if not d or not d.get("reason"):
+        return _reason(side, sym, kind)
+    extra = []
+    if d.get("score") is not None:
+        extra.append("score %.2f" % float(d["score"]))
+    if d.get("z") is not None:
+        extra.append("z%+.2f" % float(d["z"]))
+    return str(d["reason"]) + ((" · " + " ".join(extra)) if extra else "")
 
 
 def _collect(name, today, status="all", limit=500):
@@ -129,11 +158,30 @@ def _collect(name, today, status="all", limit=500):
         mv = sum(p["market_value"] for p in pos)
         return {"name": name, "eq": eq, "cash": cash, "start": start, "pos": pos, "orders": orders,
                 "kind": (man.get("target_mode") or {}).get("kind"), "inception": man.get("inception"),
+                "dec_log": _load_decision_log(name),
                 "book_cost": cost, "book_mv": mv, "book_ret": (mv / cost - 1) if cost > 0 else None,
                 "unreal": unreal, "total_pnl": total, "realized_est": total - unreal,
                 "tot_ret": (eq / start - 1 if start else 0.0), "err": None}
     except Exception as exc:
         return {"name": name, "err": str(exc)[:80]}
+
+
+def _load_decision_log(name):
+    """{(asof, symbol, side): {reason, score, rank, z, pnl}} from accounts/<name>/broker/decisions.csv —
+    the REAL reason + supporting data logged when each order was created. {} if the log doesn't exist yet
+    (orders placed before decision-logging was added fall back to the derived rule label)."""
+    f = ROOT / "accounts" / name / "broker" / "decisions.csv"
+    if not f.exists():
+        return {}
+    try:
+        df = pd.read_csv(f)
+        out = {}
+        for _, r in df.iterrows():
+            out[(str(r["asof"]), str(r["symbol"]), str(r["side"]).lower())] = {
+                k: (None if pd.isna(r.get(k)) else r.get(k)) for k in ("reason", "score", "rank", "z", "pnl")}
+        return out
+    except Exception:
+        return {}
 
 
 # ── benchmarks (aligned PER ACCOUNT to its own inception window) ──────────────────
@@ -149,9 +197,11 @@ def _bench_panel(today, start):
         return None
 
 
-def _bench(panel, inception):
-    """{QQQ,SPY} total return from the close ON/BEFORE the account's inception to the latest close —
-    so each account is compared to the benchmark over ITS OWN holding window (timelines aligned)."""
+def _bench(panel, inception, ext=None):
+    """{QQQ,SPY} total return from the close ON/BEFORE the account's inception to the latest mark —
+    so each account is compared to the benchmark over ITS OWN holding window (timelines aligned).
+    When `ext` (extended-hours {SPY,QQQ} prices) is given, the latest endpoint uses that print, so
+    an EH-marked book is compared to an EH-marked benchmark (consistent marks)."""
     if panel is None or not inception:
         return {}
     try:
@@ -159,10 +209,45 @@ def _bench(panel, inception):
         if base.empty:
             return {}
         b0, b1 = base.iloc[-1], panel.iloc[-1]
-        return {s: float(b1[s] / b0[s] - 1) for s in ("QQQ", "SPY")
-                if s in panel.columns and float(b0[s]) > 0}
+        ext = ext or {}
+        out = {}
+        for s in ("QQQ", "SPY"):
+            if s not in panel.columns or float(b0[s]) <= 0:
+                continue
+            end_px = ext.get(s) or float(b1[s])
+            out[s] = float(end_px) / float(b0[s]) - 1
+        return out
     except Exception:
         return {}
+
+
+def _remark_prepost(d, ext, label):
+    """Re-mark a collected account to the latest EXTENDED-HOURS print (`ext` = {symbol: price}).
+    Updates each position's price/MV/unrealized, the book aggregates, the EH-marked equity, and the
+    held-BUY order marks. Realized P&L is price-invariant so it's unchanged. Falls back to the close
+    for any symbol without an EH bar. Records how many names were EH-marked + the as-of label."""
+    if d.get("err"):
+        return d
+    marked = 0
+    for p in d["pos"]:
+        px = ext.get(p["ticker"])
+        if px and px > 0:
+            p["price"] = float(px); marked += 1
+        p["cost_basis"] = p["avg_entry"] * p["qty"]
+        p["market_value"] = p["price"] * p["qty"]
+        p["unrealized_pl"] = (p["price"] - p["avg_entry"]) * p["qty"]
+        p["unrealized_plpc"] = (p["price"] / p["avg_entry"] - 1) if p["avg_entry"] else 0.0
+    d["unreal"] = sum(p["unrealized_pl"] for p in d["pos"])
+    d["book_cost"] = sum(p["cost_basis"] for p in d["pos"])
+    d["book_mv"] = sum(p["market_value"] for p in d["pos"])
+    d["book_ret"] = (d["book_mv"] / d["book_cost"] - 1) if d["book_cost"] > 0 else None
+    d["eq"] = d["cash"] + d["book_mv"]                          # EH-marked equity = cash + EH market value
+    d["total_pnl"] = d["eq"] - d["start"]
+    d["tot_ret"] = (d["eq"] / d["start"] - 1) if d["start"] else 0.0
+    d["realized_est"] = d["total_pnl"] - d["unreal"]
+    _annotate_trade_pnl(d["orders"], price_now={p["ticker"]: p["price"] for p in d["pos"]})
+    d["mark_label"], d["marked_ext"] = label, marked
+    return d
 
 
 # ── rendering ───────────────────────────────────────────────────────────────────
@@ -214,6 +299,10 @@ def _render_account(pdf, d, bench=None):
     line1 = ("Equity %s    Cash %s    Starting %s    Positions %d    Orders %d"
              % (_money(d["eq"]), _money(d["cash"]), _money(d["start"]), len(d["pos"]), len(d["orders"])))
     ax.text(0.0, 1.0, line1, fontsize=9.5, family="monospace", va="top")
+    if d.get("mark_label"):
+        ax.text(0.0, 0.82, "Marked to extended-hours print (%s) — %d/%d names; rest at close."
+                % (d["mark_label"], d.get("marked_ext", 0), len(d["pos"])),
+                fontsize=7.5, color="#0b3d91", style="italic", va="top")
     ax.text(0.0, 0.60, "Total P&L  %s (%s)" % (_money(d["total_pnl"]), _pct(d["tot_ret"])),
             fontsize=11, weight="bold", color=pnl_color, va="top")
     ax.text(0.34, 0.60, "Unrealized  %s" % _money(d["unreal"]),
@@ -249,6 +338,7 @@ def _render_account(pdf, d, bench=None):
     # ── order history — its own page(s), paginated; never shares a page with positions ──
     orders = d["orders"]
     kind = d.get("kind")
+    dec_log = d.get("dec_log") or {}
     ocols = ["Submitted", "Filled", "Side", "Symbol", "FillQty", "Fill px", "Value", "Rlz $", "Unrlz $", "Ret %", "Status", "Reason"]
     oraw = [9, 9, 4, 6, 5, 7, 7, 7, 7, 6, 7, 14]
     ow = [w / sum(oraw) for w in oraw]
@@ -269,7 +359,7 @@ def _render_account(pdf, d, bench=None):
                 _money(rlz) if rlz is not None else "—",
                 _money(unrlz) if unrlz is not None else "—",
                 _pct(ret) if ret is not None else "—",
-                o.get("status", ""), _reason(o.get("side"), o.get("symbol", ""), kind)]
+                o.get("status", ""), _order_reason(o, kind, dec_log)]
 
     def _color_orders(tbl, chunk, offset):                   # `offset` = table row of the first order
         # style the TOTAL header-data row (always at table row 1) once
@@ -301,8 +391,9 @@ def _render_account(pdf, d, bench=None):
         if ot is not None:
             _color_orders(ot, chunk, offset=2)               # order rows start after header(0)+TOTAL(1)
         fig.text(0.03, 0.92, "TOTAL row = account-wide gross filled Value + Σ Rlz/Unrlz.  Rlz/Unrlz = realized "
-                 "on SELLs / held BUYs marked to price; Ret %% pairs with whichever applies.  Reason = the rule "
-                 "that governs the order (by strategy + side; overlays by symbol).  Times in CT.",
+                 "on SELLs / held BUYs marked to price; Ret %% pairs with whichever applies.  Reason = the REAL "
+                 "logged rule + data (score/z/rank) the strategy recorded when it created the order; orders "
+                 "predating decision-logging show the derived rule label.  Times in CT.",
                  fontsize=7, color="#555")
         pdf.savefig(fig); plt.close(fig)
         if not rest:
@@ -310,9 +401,11 @@ def _render_account(pdf, d, bench=None):
         page += 1
 
 
-def _render_cover(pdf, data, accts, today, bench):
+def _render_cover(pdf, data, accts, today, bench, mark_note=None):
     fig = plt.figure(figsize=(11, 8.5))
     fig.suptitle("Account Order History & P&L — all accounts   %s" % today, fontsize=14, weight="bold")
+    if mark_note:
+        fig.text(0.5, 0.945, mark_note, ha="center", fontsize=8, color="#0b3d91", style="italic")
     ax = fig.add_axes([0.03, 0.30, 0.94, 0.55]); ax.axis("off")
     cols = ["Account", "Equity", "Cash", "Starting", "Total P&L", "Total %", "QQQ %", "SPY %",
             "Unreal $", "Realized(est)", "Pos", "Orders"]
@@ -373,18 +466,35 @@ def _render_cover(pdf, data, accts, today, bench):
     pdf.savefig(fig); plt.close(fig)
 
 
-def run(accounts=None, end=None, out=None, status="all", limit=500):
+def run(accounts=None, end=None, out=None, status="all", limit=500, prepost=False):
     today = end or date.today().isoformat()
     accts = accounts or DEFAULT_ACCOUNTS
     data = {n: _collect(n, today, status=status, limit=limit) for n in accts}
+
+    # Extended-hours marking: re-mark held positions (and the QQQ/SPY benchmark endpoint) to the
+    # latest pre/post-market print so the report reflects the freshest price after the close.
+    ext = {}
+    mark_note = None
+    if prepost:
+        from rank_report import extended_hours_prices
+        syms = sorted({p["ticker"] for n in accts if not data[n].get("err") for p in data[n]["pos"]}
+                      | {"SPY", "QQQ"})
+        ext, label, _ = extended_hours_prices(syms)
+        if ext:
+            for n in accts:
+                _remark_prepost(data[n], ext, label)
+            mark_note = "Marked to latest extended-hours print (%s); names without an AH bar stay at the close." % label
+        else:
+            mark_note = "Extended-hours marking requested but no pre/post-market bars were available — showing the close."
+
     # QQQ/SPY benchmark return aligned to EACH account's own inception window (timelines per account)
     incs = [data[n]["inception"] for n in accts if not data[n].get("err") and data[n].get("inception")]
     panel = _bench_panel(today, min(incs)) if incs else None
-    bench = {n: _bench(panel, data[n].get("inception")) for n in accts if not data[n].get("err")}
+    bench = {n: _bench(panel, data[n].get("inception"), ext) for n in accts if not data[n].get("err")}
     out = Path(out) if out else ROOT / "reports" / f"account_orders_{today}.pdf"
     out.parent.mkdir(parents=True, exist_ok=True)
     with PdfPages(out) as pdf:
-        _render_cover(pdf, data, accts, today, bench)
+        _render_cover(pdf, data, accts, today, bench, mark_note)
         for n in accts:
             _render_account(pdf, data[n], bench.get(n, {}))
     return {"pdf": str(out), "data": data}

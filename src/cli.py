@@ -366,6 +366,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="which orders to include (default: all)")
     oh.add_argument("--end", metavar="YYYY-MM-DD", help="as-of date for the title/filename (default: today)")
     oh.add_argument("--limit", type=int, default=500, help="max orders pulled per account (default: 500)")
+    oh.add_argument("--prepost", action="store_true",
+                    help="mark positions + benchmark to the latest extended-hours (pre/post-market) print")
     oh.add_argument("--out", help="output PDF path (default reports/account_orders_<date>.pdf)")
     oh.set_defaults(func=_cmd_order_history)
 
@@ -504,7 +506,8 @@ def _cmd_eod_accounts(args: argparse.Namespace) -> None:
 def _cmd_order_history(args: argparse.Namespace) -> None:
     import account_orders_report
     r = account_orders_report.run(accounts=getattr(args, "accounts", None), end=args.end,
-                                  out=args.out, status=args.status, limit=args.limit)
+                                  out=args.out, status=args.status, limit=args.limit,
+                                  prepost=getattr(args, "prepost", False))
     ok = sum(1 for d in r["data"].values() if not d.get("err"))
     print("wrote %s  (%d/%d accounts live)" % (r["pdf"], ok, len(r["data"])))
 
