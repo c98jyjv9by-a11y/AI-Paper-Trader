@@ -65,7 +65,29 @@ account uses it. Older/experimental versions (v2, v3, v5, v6) and one-off script
   regime-filtered `zscore_reversal` mean-reversion books — `zscore10d_biweekly` (the validated 10d/biweekly
   config), `zscore5d_weekly`, `zscore1d_daily` (buy the 10 names most-fallen vs their own z-norm, equal-weight,
   to CASH when QQQ < its 200-day MA). Keys `APCA_*_{MONTHLY10,WEEKLY10,COMBO20,ZSCORE10D_BIWEEKLY,ZSCORE5D_WEEKLY,ZSCORE1D_DAILY}`.
-  Live broker books; cron drives them via `deploy/mv4_crontab.txt`.
+  Live broker books, driven by **launchd agents** (`deploy/com.mv4.{eod,midday}.plist`): trading is a single
+  **close-to-close** event at 16:05 ET (`com.mv4.eod` → `deploy/eod_finalize.sh`) — compute each book off the
+  close and **execute immediately** (post-market, fills now in the paper sim) so order execution is glued to
+  when the score was computed; plus a 12:30 ET midday info report (`com.mv4.midday`). (The old per-phase
+  `deploy/mv4_crontab.txt` open/retry/close cron is superseded; agents raise the fd `ulimit` for the launchd
+  environment.)
+- **Why the z-score books exist — a SIGNAL-LATENCY play (not merely "mean reversion").** The momentum books
+  (model_v4 + the `score_rebalance` books) decide purely on the **close** score/rank. That backtests well —
+  the backtest is frictionless close-to-close, capturing the full move from close T to close T+1 — but **live
+  underperforms**: by the time the close score is computed and you can actually buy, **part of the predicted
+  move has already happened** (trade friction + signal delay), so realized return < backtest. The strategy is
+  right about *which* names, just too late to capture the move. The `zscore_reversal` books target exactly that
+  leak: instead of the raw close score, they rank by the per-ticker **normalized spread of the LATEST score vs
+  the name's own 60-day baseline** — `z = (latest score − 60d mean) / 60d std` — read off the **freshest price
+  available** (the live intraday bar while the market is open, the last *completed* close otherwise — see
+  `_valid_before`/`_drop_phantom`; never a phantom overnight bar). Normalizing per name makes the spread
+  comparable across the universe (a jumpy-score name needs a bigger move to register than a stable one).
+  **Buying the lowest-z names bets on harvesting the timing divergence the delayed close-only books miss** —
+  acting on the fresh read before a close-only strategy can. The three cadences test that timing edge at three
+  speeds: **`1d/daily`** = the purest "trade the freshest signal" (most turnover/cost), **`5d/weekly`** and
+  **`10d/biweekly`** = average the spread to trade less noise/friction (10d/biweekly was the IC- and
+  cost-validated winner). The **close-to-close EOD agent applies the same principle to every book** — compute
+  off the latest price and fill at once — to collapse the signal-to-fill gap so live tracks the backtest.
   `src/midday_summary.py` (`run.py midday-summary`) rolls the model_v4 scenario + the three **model-driven**
   accounts (the default; `--accounts` to override) into one cross-book INTRADAY table
   (`reports/midday_summary_<date>.md`) and renders each book's midday
