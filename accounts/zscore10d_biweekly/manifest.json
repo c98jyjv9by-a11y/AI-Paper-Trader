@@ -4,7 +4,7 @@
   "status": "living",
   "inception": "2026-06-24",
   "frozen_through": "2026-06-24",
-  "live_through": "2026-06-25",
+  "live_through": "2026-06-26",
   "starting_value": 100000.0,
   "ending_value": 100000.0,
   "total_return": 0.0,
@@ -19,8 +19,8 @@
     "trades.csv": "5fdd1f8fd3860e41e180c02e04f49bb8e19c07e0fde4957fb47a295b72a0ac28",
     "equity.csv": "109040297f774a51e7f502733c2f178108e67507d775d64227c7ca85d94970cd",
     "positions.csv": "820e6980a10998ec494f00ac7025170ea84592801dd2ebe6ffcef7c9dcd863de",
-    "continuation/equity.csv": "ea6e5c00dbbb904dae48d0e14b90587d659d807437568c4d73b3f9dc7f600340",
-    "continuation/positions.csv": "3ff7aa32528f2db30a5848f3010932efbf1e053b9c662b94ee77fa5fff22eec9"
+    "continuation/equity.csv": "a90165b86ddd76b4cfba0acade4af9a063bae65064884f47c684928eda8dbf91",
+    "continuation/positions.csv": "e330ec2719e530c417816f796c3c424004495410c5fbe9736d59fda205e10535"
   },
   "target_mode": {
     "kind": "zscore_reversal",
@@ -31,5 +31,5 @@
     "regime_ma": 200,
     "gross": 0.9
   },
-  "live_value": 99744.93
+  "live_value": 100983.13
 }
