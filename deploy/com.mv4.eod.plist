@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- launchd EOD agent. Install:
+       cp deploy/com.mv4.eod.plist ~/Library/LaunchAgents/
+       launchctl load -w ~/Library/LaunchAgents/com.mv4.eod.plist
+     Verify: launchctl list | grep mv4   ·   logs: /tmp/mv4_eod.log
+     Runs 15:15 local Central (= 16:15 ET), Mon-Fri; reruns on wake if the machine was asleep. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.mv4.eod</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/david/PyCharmMiscProject/ai-paper-trader/deploy/eod_finalize.sh</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>15</integer></dict>
+  </array>
+  <key>StandardOutPath</key><string>/tmp/mv4_eod.log</string>
+  <key>StandardErrorPath</key><string>/tmp/mv4_eod.log</string>
+  <key>RunAtLoad</key><false/>
+</dict>
+</plist>
