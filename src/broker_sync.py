@@ -516,10 +516,14 @@ def _score_rebalance_targets(name: str, cli: ba.AlpacaPaper, current: Dict[str, 
     return targets, refs                                           # picks only -> the rest flattens
 
 
-def _zscore_reversal_signal(scenario: str = "model_v4", zscore_lookback: int = 60, avg_window: int = 10):
+def _zscore_reversal_signal(scenario: str = "model_v4", zscore_lookback: int = 60, avg_window: int = 10,
+                            valid_before=None):
     """{ticker: signal} where signal = the trailing `avg_window`-day average of the per-ticker
     `zscore_lookback`-day rolling z-score of the composite (z = (score - mean)/std). LIVE — recomputes
-    the daily cross-sectional scores then z + avg. Low signal = score most-fallen vs the name's own norm."""
+    the daily cross-sectional scores then z + avg. Low signal = score most-fallen vs the name's own norm.
+    `valid_before` (a date/timestamp): drop any price bar dated on/after it — used to exclude a PHANTOM
+    upcoming-session bar (yfinance can hand back a fabricated next-day bar overnight) so the rank only
+    ever uses real prices: the live bar while the market trades, the last completed close otherwise."""
     import datetime as _dt
     from backtest import load_config, fetch_backtest_data
     from scenarios import load_scenario, build_config
@@ -530,6 +534,8 @@ def _zscore_reversal_signal(scenario: str = "model_v4", zscore_lookback: int = 6
     tw = _build_ticker_weights(cfg) or None
     end = _dt.date.today()
     pdata = fetch_backtest_data(uni, end - _dt.timedelta(days=(zscore_lookback + avg_window) * 2 + 420), end)
+    if valid_before is not None:                                    # drop a phantom upcoming-session bar
+        pdata = pdata[pdata.index < pd.Timestamp(valid_before)]
     rows = [dict(zip(rf["ticker"], rf["composite_score"]))
             for ts in pdata["Close"].index[-(zscore_lookback + avg_window):]
             for rf in [rank_candidates(calculate_signals(pdata.loc[:ts].iloc[-_SIGNAL_WINDOW:], uni),
@@ -567,7 +573,12 @@ def _zscore_reversal_targets(name: str, cli: ba.AlpacaPaper, current: Dict[str, 
     if ma and not _qqq_above_ma(ma):
         return {}, {}                                              # downtrend -> cash (flatten everything)
     scenario = (load_manifest(name) or {}).get("scenario", "model_v4")
-    sig = _zscore_reversal_signal(scenario, int(tm.get("zscore_lookback", 60)), int(tm.get("avg_window", 10)))
+    # When the market is OPEN the live bar is a real price → rank off it. When CLOSED, exclude any bar on/
+    # after the next session (a phantom overnight bar) and rank off the last completed close.
+    clk = cli.clock() or {}
+    valid_before = None if clk.get("is_open") else ((clk.get("next_open") or "")[:10] or None)
+    sig = _zscore_reversal_signal(scenario, int(tm.get("zscore_lookback", 60)),
+                                  int(tm.get("avg_window", 10)), valid_before=valid_before)
     ranked = sorted((t for t in sig if pd.notna(sig[t])), key=lambda t: sig[t])   # ascending -> lowest z first
     picks = ranked[:int(tm.get("n", 10))]
     if not picks:
