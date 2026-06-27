@@ -122,6 +122,41 @@ def _et_date(s):
         return None
 
 
+_PHASE_ORDER = {"open": 0, "intraday": 1, "close": 2}
+
+
+def _ct_date(s):
+    """Chicago (Central) calendar date (YYYY-MM-DD) of an ISO timestamp."""
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return (dt.replace(tzinfo=_UTC) if dt.tzinfo is None else dt).astimezone(_CT).strftime("%Y-%m-%d")
+    except Exception:
+        return None
+
+
+def _phase(ts):
+    """Classify a submission into a session phase by its CHICAGO (Central) time of day: open (< 9:00 CT =
+    < 10:00 ET, incl. the on-open auction + pre-market), close (>= 14:30 CT = >= 15:30 ET, incl. the
+    on-close auction + post-market/EOD), else intraday."""
+    if not ts:
+        return "intraday"
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        dt = (dt.replace(tzinfo=_UTC) if dt.tzinfo is None else dt).astimezone(_CT)
+        m = dt.hour * 60 + dt.minute
+        return "open" if m < 540 else ("close" if m >= 870 else "intraday")
+    except Exception:
+        return "intraday"
+
+
+def _sess(r):
+    """Display label for a (date, phase) batch row, e.g. '06-26 close'."""
+    ed = r.get("edate") or ""
+    return ("%s %s" % (ed[5:], r.get("phase", ""))) if ed else r.get("phase", "")
+
+
 def _load_rank_snapshots(scenario="model_v4"):
     """Ascending [(date, {ticker: (score, rank)})] from backtests/rankings_<scenario>_<date>.csv — the
     close-based composite score + rank the model recorded each day. Each order is matched to the snapshot
@@ -567,84 +602,171 @@ def _render_cover(pdf, data, accts, today, bench, mark_note=None):
     pdf.savefig(fig); plt.close(fig)
 
 
-def _batch_rows(data, accts):
-    """Order submissions grouped by (account, submission-minute batch). Per batch: # filled trades, hit
-    rate, capital invested (buy notional), realized $ (sells), unrealized $ (held buys), and avg winner /
-    loser. Per-trade P&L = realized for a sell, mark-to-market for a held buy; win = P&L > 0."""
-    def _agg(os_):
-        invested = sum(o["filled_qty"] * o["fill_price"] for o in os_ if (o.get("side") or "").lower() == "buy")
-        realized = sum(o["rlz"] for o in os_ if o.get("rlz") is not None)
-        unreal = sum(o["unrlz"] for o in os_ if o.get("unrlz") is not None)
-        pnls = [(o["rlz"] if o.get("rlz") is not None else o.get("unrlz")) for o in os_]
-        pnls = [p for p in pnls if p is not None]
-        wins, losses = [p for p in pnls if p > 0], [p for p in pnls if p < 0]
-        return {"n": len(os_), "invested": invested, "realized": realized, "unreal": unreal,
-                "hit": (len(wins) / len(pnls)) if pnls else None,
-                "avgwin": (sum(wins) / len(wins)) if wins else None,
-                "avglose": (sum(losses) / len(losses)) if losses else None}
-    rows, allf = [], []
+def _buy_pnl(orders, price_now):
+    """Per-BUY-entry P&L via FIFO lot tracking, so each sale's realized P&L is credited back to the BUY
+    batch it came from (not the sell batch). Walks filled orders oldest->newest per symbol: a BUY opens a
+    lot (tagged with its submit-minute), a SELL consumes lots FIFO crediting (sell_px - lot_px) x qty to
+    each lot's buy; leftover open lots mark to current price. Returns {buy_oid: {ts, notional, realized,
+    unrealized}}. SELLS are NOT entries — they only feed realized back to the buys."""
+    import collections
+    fills = [o for o in orders if o.get("fill_price") and o.get("filled_qty")]
+    fills.sort(key=lambda o: (o.get("filled_at") or o.get("submitted_at") or ""))
+    queues, res, seq = collections.defaultdict(list), {}, 0
+    for o in fills:
+        sym, q, px = o["symbol"], o["filled_qty"], o["fill_price"]
+        if (o.get("side") or "").lower() == "buy":
+            src = o.get("submitted_at") or o.get("filled_at") or ""
+            oid = "%s#%d" % (o.get("id") or "b", seq); seq += 1
+            res[oid] = {"edate": _ct_date(src) or "", "phase": _phase(src),
+                        "notional": q * px, "realized": 0.0, "unrealized": 0.0}
+            queues[sym].append({"oid": oid, "qty": q, "price": px})
+        else:                                                          # sell -> realize against FIFO lots
+            sq = q
+            while sq > 1e-9 and queues[sym]:
+                lot = queues[sym][0]
+                take = min(lot["qty"], sq)
+                res[lot["oid"]]["realized"] += (px - lot["price"]) * take
+                lot["qty"] -= take; sq -= take
+                if lot["qty"] <= 1e-9:
+                    queues[sym].pop(0)
+    for sym, lots in queues.items():                                  # still-open lots -> unrealized
+        cur = price_now.get(sym)
+        if cur:
+            for lot in lots:
+                res[lot["oid"]]["unrealized"] += (cur - lot["price"]) * lot["qty"]
+    return res
+
+
+def _agg_buys(rows):
+    """Aggregate BUY entries (sells excluded): #entries, hit rate, invested (notional), realized $ (FIFO-
+    attributed back to these buys), unrealized $, avg winner/loser. Per-entry P&L = realized + unrealized."""
+    pnls = [r["realized"] + r["unrealized"] for r in rows]
+    wins, losses = [p for p in pnls if p > 0], [p for p in pnls if p < 0]
+    return {"n": len(rows), "invested": sum(r["notional"] for r in rows),
+            "realized": sum(r["realized"] for r in rows), "unreal": sum(r["unrealized"] for r in rows),
+            "hit": (len(wins) / len(pnls)) if pnls else None,
+            "avgwin": (sum(wins) / len(wins)) if wins else None,
+            "avglose": (sum(losses) / len(losses)) if losses else None}
+
+
+def _batch_summaries(data, accts):
+    """BUY entries summarized two ways, BOTH ascending (oldest->newest); realized P&L is credited to the
+    originating buy batch (FIFO) and sells are excluded from the stats:
+      • acct_rows  — one row per (account, buy-batch minute),
+      • ts_rows    — one row per buy-batch minute ACROSS portfolios, with the #portfolios it spanned.
+    Plus a grand TOTAL."""
+    buyrows = []
     for n in accts:
         d = data[n]
         if d.get("err"):
             continue
-        groups = {}
-        for o in d["orders"]:
-            if not (o.get("fill_price") and o.get("filled_qty")):     # only actual fills count as trades
-                continue
-            allf.append(o)
-            key = (o.get("submitted_at") or o.get("filled_at") or "")[:16]   # minute = one submission batch
-            groups.setdefault(key, []).append(o)
-        for key, os_ in groups.items():
-            rows.append({"account": n, "ts": key, **_agg(os_)})
-    rows.sort(key=lambda r: r["ts"], reverse=True)                    # ts desc, then account (stable)
-    rows.sort(key=lambda r: r["account"])
-    total = {"account": "TOTAL", "ts": "", **_agg(allf)} if allf else None
-    return rows, total
+        price_now = {p["ticker"]: p["price"] for p in d["pos"]}
+        for v in _buy_pnl(d["orders"], price_now).values():
+            buyrows.append({"account": n, **v})
+    g_acct, g_ts = {}, {}
+    for r in buyrows:
+        g_acct.setdefault((r["account"], r["edate"], r["phase"]), []).append(r)
+        tk = (r["edate"], r["phase"])
+        g_ts.setdefault(tk, {"rows": [], "ports": set()})
+        g_ts[tk]["rows"].append(r); g_ts[tk]["ports"].add(r["account"])
+    acct_rows = [{"account": n, "edate": ed, "phase": ph, **_agg_buys(rs)}
+                 for (n, ed, ph), rs in g_acct.items()]
+    acct_rows.sort(key=lambda r: (r["edate"], _PHASE_ORDER.get(r["phase"], 1), r["account"]))   # ascending
+    ts_rows = [{"edate": ed, "phase": ph, "nport": len(v["ports"]), **_agg_buys(v["rows"])}
+               for (ed, ph), v in g_ts.items()]
+    ts_rows.sort(key=lambda r: (r["edate"], _PHASE_ORDER.get(r["phase"], 1)))                   # ascending
+    total = {**_agg_buys(buyrows), "nport": len({r["account"] for r in buyrows})} if buyrows else None
+    return acct_rows, ts_rows, total
 
 
-def _render_batch_summary(pdf, data, accts, today):
-    rows, total = _batch_rows(data, accts)
-    cols = ["Account", "Submitted (CT)", "#Trd", "Hit%", "Invested", "Realized", "Unreal", "AvgWin", "AvgLose"]
-    raw = [16, 12, 5, 6, 11, 10, 10, 9, 9]
+_SUM_FOOT = ("One row per BUY batch grouped by day + session phase (CT): open <9:00, intraday, close >=14:30, "
+             "oldest->newest.  Sells excluded from the stats; each sale's realized P&L is credited back to the "
+             "buy phase it came from (FIFO).  #Buys = entries.  Entry P&L = realized (shares since sold) + "
+             "unrealized (still held).  Hit% = entries with P&L>0.  Invested = buy notional.  AvgWin/AvgLose = "
+             "mean entry P&L.  Rows shaded green/red: GOOD = hit>=50% AND avg win > avg loss; BAD = neither.")
+# very light, nonchalant row tints by batch rating
+_RATE_TINT = {"good": "#eef6ee", "bad": "#f8efef", "neutral": None}
 
-    def _cells(r):
-        return [r["account"], _ts(r["ts"]) if r["ts"] else "—", str(r["n"]),
-                ("%.0f%%" % (r["hit"] * 100)) if r["hit"] is not None else "—",
-                _money(r["invested"]), _money(r["realized"]), _money(r["unreal"]),
-                _money(r["avgwin"]) if r["avgwin"] is not None else "—",
-                _money(r["avglose"]) if r["avglose"] is not None else "—"]
-    PER = 30
-    chunks = [rows[i:i + PER] for i in range(0, max(len(rows), 1), PER)] or [[]]
+
+def _rate(r):
+    """Batch rating: GOOD if hit>=50% AND avg winner beats avg loser (magnitude); BAD if neither; else
+    NEUTRAL. None hit (no P&L'd trades) -> neutral."""
+    hit = r.get("hit")
+    if hit is None:
+        return "neutral"
+    aw, al = r.get("avgwin"), r.get("avglose")
+    c1 = hit >= 0.5
+    c2 = (aw is not None) and (aw > (abs(al) if al is not None else 0.0))
+    return "good" if (c1 and c2) else ("neutral" if (c1 or c2) else "bad")
+
+
+def _render_summary_table(pdf, title, today, cols, raw, rows, total, cells_fn, per=20):
+    """Paginated metric table (money cols 5..8 colored by sign; shaded TOTAL on the last page)."""
+    chunks = [rows[i:i + per] for i in range(0, max(len(rows), 1), per)] or [[]]
     for pi, chunk in enumerate(chunks):
         fig = plt.figure(figsize=(11, 8.5))
-        ttl = "Trade Summary — submissions by batch & account   %s" % today
-        fig.suptitle(ttl + ("" if len(chunks) == 1 else "  (%d/%d)" % (pi + 1, len(chunks))),
-                     fontsize=14, weight="bold")
-        ax = fig.add_axes([0.04, 0.08, 0.92, 0.8]); ax.axis("off")
-        body = [_cells(r) for r in chunk]
-        if pi == len(chunks) - 1 and total:                          # grand TOTAL on the last page
-            body.append(_cells(total))
+        fig.suptitle(title + ("   %s" % today) + ("" if len(chunks) == 1 else "  (%d/%d)" % (pi + 1, len(chunks))),
+                     fontsize=13, weight="bold")
+        ax = fig.add_axes([0.04, 0.07, 0.92, 0.83]); ax.axis("off")
+        body = [cells_fn(r, False) for r in chunk]
+        last = pi == len(chunks) - 1
+        if last and total:
+            body.append(cells_fn(total, True))
         t = ax.table(cellText=body or [["—"] * len(cols)], colLabels=cols,
                      colWidths=[w / sum(raw) for w in raw], loc="upper center", cellLoc="center")
-        t.auto_set_font_size(False); t.set_fontsize(7.5); t.scale(1, 1.5)
+        t.auto_set_font_size(False); t.set_fontsize(8); t.scale(1, 1.4)
         for j in range(len(cols)):
             t[0, j].set_facecolor("#34495e"); t[0, j].set_text_props(color="white", weight="bold")
+        money = [(4, "realized"), (5, "unreal"), (6, "avgwin"), (7, "avglose")]
         for i, r in enumerate(chunk):
-            for j, v in [(5, r["realized"]), (6, r["unreal"]), (7, r["avgwin"]), (8, r["avglose"])]:
+            tint = _RATE_TINT.get(_rate(r))                          # nonchalant good/bad row shade
+            if tint:
+                for j in range(len(cols)):
+                    t[i + 1, j].set_facecolor(tint)
+            for j, key in money:
+                v = r.get(key)
                 if v is not None:
                     t[i + 1, j].set_text_props(color=(GREEN if v >= 0 else RED), weight="bold")
-        if pi == len(chunks) - 1 and total:
+        if last and total:
             tr = len(chunk) + 1
             for j in range(len(cols)):
                 t[tr, j].set_facecolor("#dfe6e9"); t[tr, j].set_text_props(weight="bold")
-            for j, v in [(5, total["realized"]), (6, total["unreal"]), (7, total["avgwin"]), (8, total["avglose"])]:
+            for j, key in money:
+                v = total.get(key)
                 if v is not None:
                     t[tr, j].set_text_props(color=(GREEN if v >= 0 else RED), weight="bold")
-        fig.text(0.04, 0.04, "One row per submission batch (orders sharing a submit minute).  #Trd = filled "
-                 "orders.  Hit% = trades with P&L>0 (realized for sells, mark-to-market for held buys).  "
-                 "Invested = buy notional.  AvgWin/AvgLose = mean P&L of winning/losing trades.",
-                 fontsize=7, color="#555")
+        fig.text(0.04, 0.035, _SUM_FOOT, fontsize=7, color="#555")
         pdf.savefig(fig); plt.close(fig)
+
+
+def _render_batch_summary(pdf, data, accts, today):
+    acct_rows, ts_rows, total = _batch_summaries(data, accts)
+
+    def _hit(r):
+        return ("%.0f%%" % (r["hit"] * 100)) if r["hit"] is not None else "—"
+
+    def _m(r, k):
+        return _money(r[k]) if r.get(k) is not None else "—"
+
+    # Table 1: ACROSS session phases (all portfolios), with the #portfolios each phase spanned
+    tcols = ["Session (CT)", "#Port", "#Buys", "Invested", "Realized", "Unreal", "AvgWin", "AvgLose", "Hit%"]
+    traw = [13, 6, 5, 11, 10, 10, 9, 9, 6]
+
+    def _tcells(r, is_total):
+        return [("TOTAL" if is_total else _sess(r)), str(r.get("nport", "")), str(r["n"]),
+                _m(r, "invested"), _m(r, "realized"), _m(r, "unreal"), _m(r, "avgwin"), _m(r, "avglose"), _hit(r)]
+    _render_summary_table(pdf, "Trade Summary — by session phase (all portfolios)", today,
+                          tcols, traw, ts_rows, total, _tcells)
+
+    # Table 2: per ACCOUNT & session phase
+    acols = ["Account", "Session (CT)", "#Buys", "Invested", "Realized", "Unreal", "AvgWin", "AvgLose", "Hit%"]
+    araw = [16, 12, 5, 11, 10, 10, 9, 9, 6]
+
+    def _acells(r, is_total):
+        return [("TOTAL" if is_total else r["account"]), ("" if is_total else _sess(r)), str(r["n"]),
+                _m(r, "invested"), _m(r, "realized"), _m(r, "unreal"), _m(r, "avgwin"), _m(r, "avglose"), _hit(r)]
+    _render_summary_table(pdf, "Trade Summary — by account & session phase", today,
+                          acols, araw, acct_rows, total, _acells)
 
 
 def run(accounts=None, end=None, out=None, status="all", limit=500, prepost=False):
