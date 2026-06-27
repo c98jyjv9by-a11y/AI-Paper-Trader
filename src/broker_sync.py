@@ -600,13 +600,15 @@ def _score_rebalance_targets(name: str, cli: ba.AlpacaPaper, current: Dict[str, 
 
 
 def _zscore_reversal_signal(scenario: str = "model_v4", zscore_lookback: int = 60, avg_window: int = 10,
-                            valid_before=None):
+                            valid_before=None, as_of=None):
     """{ticker: signal} where signal = the trailing `avg_window`-day average of the per-ticker
     `zscore_lookback`-day rolling z-score of the composite (z = (score - mean)/std). LIVE — recomputes
     the daily cross-sectional scores then z + avg. Low signal = score most-fallen vs the name's own norm.
     `valid_before` (a date/timestamp): drop any price bar dated on/after it — used to exclude a PHANTOM
     upcoming-session bar (yfinance can hand back a fabricated next-day bar overnight) so the rank only
-    ever uses real prices: the live bar while the market trades, the last completed close otherwise."""
+    ever uses real prices: the live bar while the market trades, the last completed close otherwise.
+    `as_of` (a date): compute the signal AS-OF that historical close instead of today (deterministic from
+    price history) — used to reconstruct the z + rank a past order was submitted under."""
     import datetime as _dt
     from backtest import load_config, fetch_backtest_data
     from scenarios import load_scenario, build_config
@@ -615,8 +617,10 @@ def _zscore_reversal_signal(scenario: str = "model_v4", zscore_lookback: int = 6
     cfg = build_config(load_config(ROOT / "config"), load_scenario(scenario))
     uni, w = cfg["tickers"], cfg["signals"].get("weights")
     tw = _build_ticker_weights(cfg) or None
-    end = _dt.date.today()
+    end = (as_of.date() if hasattr(as_of, "date") else as_of) or _dt.date.today()
     pdata = fetch_backtest_data(uni, end - _dt.timedelta(days=(zscore_lookback + avg_window) * 2 + 420), end)
+    if as_of is not None:                                           # historical as-of -> only bars up to that close
+        pdata = pdata[pdata.index <= pd.Timestamp(end)]
     if valid_before is not None:                                    # drop a phantom upcoming-session bar
         pdata = pdata[pdata.index < pd.Timestamp(valid_before)]
     rows = [dict(zip(rf["ticker"], rf["composite_score"]))

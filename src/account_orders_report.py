@@ -122,6 +122,80 @@ def _et_date(s):
         return None
 
 
+def _load_rank_snapshots(scenario="model_v4"):
+    """Ascending [(date, {ticker: (score, rank)})] from backtests/rankings_<scenario>_<date>.csv — the
+    close-based composite score + rank the model recorded each day. Each order is matched to the snapshot
+    EFFECTIVE at its submission time (latest snapshot on/before the order's ET submit date), so the score
+    shown is the one the batch was actually generated under."""
+    import glob, re
+    out = []
+    for f in sorted(glob.glob(str(ROOT / "backtests" / ("rankings_%s_*.csv" % scenario)))):
+        m = re.search(r"_(\d{4}-\d{2}-\d{2})\.csv$", f)
+        if not m:
+            continue
+        try:
+            df = pd.read_csv(f)
+            tbl = {str(r["ticker"]).strip(): (float(r["score"]), int(r["rank"]))
+                   for _, r in df.iterrows() if pd.notna(r.get("score"))}
+            out.append((m.group(1), tbl))
+        except Exception:
+            continue
+    return out
+
+
+def _entry_score(o, snapshots):
+    """(score, rank) for an order's symbol from the ranking snapshot effective at its SUBMISSION time —
+    the latest snapshot dated on/before the order's ET submit date (carry-forward over gap days). Returns
+    (None, None) for overlay/unscored names or when no snapshot covers the date."""
+    if not snapshots:
+        return None, None
+    d = _et_date(o.get("submitted_at") or o.get("filled_at"))
+    if not d:
+        return None, None
+    tbl = None
+    for date_str, t in snapshots:                              # ascending -> keep the last on/before d
+        if date_str <= d:
+            tbl = t
+        else:
+            break
+    return (tbl or {}).get(o.get("symbol", ""), (None, None))
+
+
+def _asof_signal(d, as_of, cache):
+    """{ticker: (value, rank)} for the account's OWN selection metric, recomputed AS-OF `as_of`:
+      • zscore_reversal -> the avg-window z-signal, ranked ASCENDING (lowest z = #1, the pick),
+      • score_rebalance -> the trailing-lookback avg composite, ranked DESCENDING (highest = #1).
+    Deterministic from price history; cached per (kind, params, date) since a whole batch shares a date.
+    Heavy (recomputes daily cross-sectional scores) so it's only invoked for these two book types."""
+    kind, tm, scen = d.get("kind"), d.get("tm") or {}, d.get("scenario", "model_v4")
+    if kind == "zscore_reversal":
+        key = ("z", scen, int(tm.get("zscore_lookback", 60)), int(tm.get("avg_window", 10)), as_of)
+    elif kind == "score_rebalance":
+        key = ("s", scen, int(tm.get("lookback_days", 60)), as_of)
+    else:
+        return {}
+    if key in cache:
+        return cache[key]
+    out = {}
+    try:
+        import broker_sync as bs
+        import datetime as _dt
+        dt = _dt.date.fromisoformat(as_of)
+        if kind == "zscore_reversal":
+            sig = bs._zscore_reversal_signal(scen, int(tm.get("zscore_lookback", 60)),
+                                             int(tm.get("avg_window", 10)), as_of=dt)
+            ranked = sorted((t for t in sig if sig[t] == sig[t]), key=lambda t: sig[t])   # asc, NaN-safe
+            out = {t: (sig[t], i + 1) for i, t in enumerate(ranked)}
+        else:
+            avg = bs._lookback_avg_scores(scen, int(tm.get("lookback_days", 60)), as_of=dt)
+            ranked = sorted((t for t in avg if avg[t] == avg[t]), key=lambda t: avg[t], reverse=True)
+            out = {t: (avg[t], i + 1) for i, t in enumerate(ranked)}
+    except Exception:
+        out = {}
+    cache[key] = out
+    return out
+
+
 def _order_reason(o, kind, dec_log):
     """The REAL logged reason + supporting data for an order (matched by ET date + symbol + side in
     decisions.csv), e.g. 'zscore weekly entry: most-fallen #1 (5d-avg z) · z-1.71'. Falls back to the
@@ -157,7 +231,8 @@ def _collect(name, today, status="all", limit=500):
         cost = sum(p["cost_basis"] for p in pos)               # open-book return = Σ mkt / Σ cost - 1
         mv = sum(p["market_value"] for p in pos)
         return {"name": name, "eq": eq, "cash": cash, "start": start, "pos": pos, "orders": orders,
-                "kind": (man.get("target_mode") or {}).get("kind"), "inception": man.get("inception"),
+                "kind": (man.get("target_mode") or {}).get("kind"), "tm": (man.get("target_mode") or {}),
+                "scenario": man.get("scenario", "model_v4"), "inception": man.get("inception"),
                 "dec_log": _load_decision_log(name),
                 "book_cost": cost, "book_mv": mv, "book_ret": (mv / cost - 1) if cost > 0 else None,
                 "unreal": unreal, "total_pnl": total, "realized_est": total - unreal,
@@ -271,8 +346,10 @@ def _table(fig, rect, cols, cells, colw, fontsize=7.5):
     return ax, t
 
 
-def _render_account(pdf, d, bench=None):
+def _render_account(pdf, d, bench=None, snapshots=None, sig_cache=None):
     bench = bench or {}
+    snapshots = snapshots or []
+    sig_cache = sig_cache if sig_cache is not None else {}
     name = d["name"]
     label, blurb = _blurb(name)
     title = "%s  —  %s" % (name, label)
@@ -339,15 +416,38 @@ def _render_account(pdf, d, bench=None):
     orders = d["orders"]
     kind = d.get("kind")
     dec_log = d.get("dec_log") or {}
-    ocols = ["Submitted", "Filled", "Side", "Symbol", "FillQty", "Fill px", "Value", "Rlz $", "Unrlz $", "Ret %", "Status", "Reason"]
-    oraw = [9, 9, 4, 6, 5, 7, 7, 7, 7, 6, 7, 14]
+    ocols = ["Submitted", "Filled", "Side", "Symbol", "FillQty", "Fill px", "Value", "Rlz $", "Unrlz $", "Ret %", "Score@sub", "Status", "Reason"]
+    oraw = [9, 9, 4, 6, 5, 7, 7, 7, 7, 6, 8, 7, 12]
     ow = [w / sum(oraw) for w in oraw]
     realized_sum = sum(o["rlz"] for o in orders if o.get("rlz") is not None)
     unrlz_sum = sum(o["unrlz"] for o in orders if o.get("unrlz") is not None)
     value_sum = sum(o["filled_qty"] * o["fill_price"] for o in orders
                     if o.get("fill_price") and o.get("filled_qty"))
     # account-wide TOTAL row (shown atop every page of this history): gross filled value + Σ Rlz/Unrlz
-    total_row = ["TOTAL", "", "", "", "", "", _money(value_sum), _money(realized_sum), _money(unrlz_sum), "", "", ""]
+    total_row = ["TOTAL", "", "", "", "", "", _money(value_sum), _money(realized_sum), _money(unrlz_sum), "", "", "", ""]
+
+    def _scorecell(o):                                       # the book's OWN selection metric the batch was submitted under
+        sym, side = o.get("symbol", ""), (o.get("side") or "").lower()
+        dt = _et_date(o.get("submitted_at") or o.get("filled_at"))
+        # 1) exact, from the decision log (going forward): z for zscore books, score otherwise
+        dl = dec_log.get((dt, sym, side))
+        if dl:
+            rk = (" #%d" % int(dl["rank"])) if dl.get("rank") is not None else ""
+            if dl.get("z") is not None and dl["z"] == dl["z"]:
+                return "z%+.2f%s" % (float(dl["z"]), rk)
+            if dl.get("score") is not None and dl["score"] == dl["score"]:
+                return "%.2f%s" % (float(dl["score"]), rk)
+        # 2) recompute the book's own metric as-of the submission date (zscore / score_rebalance)
+        if kind in ("zscore_reversal", "score_rebalance") and dt:
+            v, rk = _asof_signal(d, dt, sig_cache).get(sym, (None, None))
+            if v is not None:
+                return ("z%+.2f #%d" % (v, rk)) if kind == "zscore_reversal" else ("%.2f #%d" % (v, rk))
+            return "—"                                       # don't fall back to composite (wrong metric)
+        # 3) model_v4 / ramp-up / seed books -> composite score #rank from the daily snapshot
+        sc, rk = _entry_score(o, snapshots)
+        if sc is None:
+            return "—"
+        return ("%.2f #%d" % (sc, rk)) if rk else ("%.2f" % sc)
 
     def _orow(o):
         fp = o.get("fill_price")
@@ -359,7 +459,7 @@ def _render_account(pdf, d, bench=None):
                 _money(rlz) if rlz is not None else "—",
                 _money(unrlz) if unrlz is not None else "—",
                 _pct(ret) if ret is not None else "—",
-                o.get("status", ""), _order_reason(o, kind, dec_log)]
+                _scorecell(o), o.get("status", ""), _order_reason(o, kind, dec_log)]
 
     def _color_orders(tbl, chunk, offset):                   # `offset` = table row of the first order
         # style the TOTAL header-data row (always at table row 1) once
@@ -378,8 +478,8 @@ def _render_account(pdf, d, bench=None):
             if o.get("ret") is not None:
                 tbl[r, 9].set_text_props(color=(GREEN if o["ret"] >= 0 else RED), weight="bold")
             if o.get("status") != "filled":
-                tbl[r, 10].set_text_props(color=GREY, style="italic")
-            tbl[r, 11].set_text_props(color="#555", style="italic")
+                tbl[r, 11].set_text_props(color=GREY, style="italic")
+            tbl[r, 12].set_text_props(color="#555", style="italic")
 
     rest, page, npages = orders, 1, max(1, (len(orders) + ORDERS_PER_PAGE - 1) // ORDERS_PER_PAGE)
     while rest or page == 1:                                  # always emit at least one (possibly empty) page
@@ -391,9 +491,10 @@ def _render_account(pdf, d, bench=None):
         if ot is not None:
             _color_orders(ot, chunk, offset=2)               # order rows start after header(0)+TOTAL(1)
         fig.text(0.03, 0.92, "TOTAL row = account-wide gross filled Value + Σ Rlz/Unrlz.  Rlz/Unrlz = realized "
-                 "on SELLs / held BUYs marked to price; Ret %% pairs with whichever applies.  Reason = the REAL "
-                 "logged rule + data (score/z/rank) the strategy recorded when it created the order; orders "
-                 "predating decision-logging show the derived rule label.  Times in CT.",
+                 "on SELLs / held BUYs marked to price; Ret %% pairs with whichever applies.  Score@sub = the "
+                 "book's OWN selection metric #rank as-of the order's SUBMISSION date — zscore books show z #rank "
+                 "(lowest z = #1), score-rebalance show 60d-avg score #rank, model_v4 show composite #rank; '—' "
+                 "for overlay/unscored.  Reason = the real logged rule (derived label for pre-logging orders).  Times in CT.",
                  fontsize=7, color="#555")
         pdf.savefig(fig); plt.close(fig)
         if not rest:
@@ -466,6 +567,86 @@ def _render_cover(pdf, data, accts, today, bench, mark_note=None):
     pdf.savefig(fig); plt.close(fig)
 
 
+def _batch_rows(data, accts):
+    """Order submissions grouped by (account, submission-minute batch). Per batch: # filled trades, hit
+    rate, capital invested (buy notional), realized $ (sells), unrealized $ (held buys), and avg winner /
+    loser. Per-trade P&L = realized for a sell, mark-to-market for a held buy; win = P&L > 0."""
+    def _agg(os_):
+        invested = sum(o["filled_qty"] * o["fill_price"] for o in os_ if (o.get("side") or "").lower() == "buy")
+        realized = sum(o["rlz"] for o in os_ if o.get("rlz") is not None)
+        unreal = sum(o["unrlz"] for o in os_ if o.get("unrlz") is not None)
+        pnls = [(o["rlz"] if o.get("rlz") is not None else o.get("unrlz")) for o in os_]
+        pnls = [p for p in pnls if p is not None]
+        wins, losses = [p for p in pnls if p > 0], [p for p in pnls if p < 0]
+        return {"n": len(os_), "invested": invested, "realized": realized, "unreal": unreal,
+                "hit": (len(wins) / len(pnls)) if pnls else None,
+                "avgwin": (sum(wins) / len(wins)) if wins else None,
+                "avglose": (sum(losses) / len(losses)) if losses else None}
+    rows, allf = [], []
+    for n in accts:
+        d = data[n]
+        if d.get("err"):
+            continue
+        groups = {}
+        for o in d["orders"]:
+            if not (o.get("fill_price") and o.get("filled_qty")):     # only actual fills count as trades
+                continue
+            allf.append(o)
+            key = (o.get("submitted_at") or o.get("filled_at") or "")[:16]   # minute = one submission batch
+            groups.setdefault(key, []).append(o)
+        for key, os_ in groups.items():
+            rows.append({"account": n, "ts": key, **_agg(os_)})
+    rows.sort(key=lambda r: r["ts"], reverse=True)                    # ts desc, then account (stable)
+    rows.sort(key=lambda r: r["account"])
+    total = {"account": "TOTAL", "ts": "", **_agg(allf)} if allf else None
+    return rows, total
+
+
+def _render_batch_summary(pdf, data, accts, today):
+    rows, total = _batch_rows(data, accts)
+    cols = ["Account", "Submitted (CT)", "#Trd", "Hit%", "Invested", "Realized", "Unreal", "AvgWin", "AvgLose"]
+    raw = [16, 12, 5, 6, 11, 10, 10, 9, 9]
+
+    def _cells(r):
+        return [r["account"], _ts(r["ts"]) if r["ts"] else "—", str(r["n"]),
+                ("%.0f%%" % (r["hit"] * 100)) if r["hit"] is not None else "—",
+                _money(r["invested"]), _money(r["realized"]), _money(r["unreal"]),
+                _money(r["avgwin"]) if r["avgwin"] is not None else "—",
+                _money(r["avglose"]) if r["avglose"] is not None else "—"]
+    PER = 30
+    chunks = [rows[i:i + PER] for i in range(0, max(len(rows), 1), PER)] or [[]]
+    for pi, chunk in enumerate(chunks):
+        fig = plt.figure(figsize=(11, 8.5))
+        ttl = "Trade Summary — submissions by batch & account   %s" % today
+        fig.suptitle(ttl + ("" if len(chunks) == 1 else "  (%d/%d)" % (pi + 1, len(chunks))),
+                     fontsize=14, weight="bold")
+        ax = fig.add_axes([0.04, 0.08, 0.92, 0.8]); ax.axis("off")
+        body = [_cells(r) for r in chunk]
+        if pi == len(chunks) - 1 and total:                          # grand TOTAL on the last page
+            body.append(_cells(total))
+        t = ax.table(cellText=body or [["—"] * len(cols)], colLabels=cols,
+                     colWidths=[w / sum(raw) for w in raw], loc="upper center", cellLoc="center")
+        t.auto_set_font_size(False); t.set_fontsize(7.5); t.scale(1, 1.5)
+        for j in range(len(cols)):
+            t[0, j].set_facecolor("#34495e"); t[0, j].set_text_props(color="white", weight="bold")
+        for i, r in enumerate(chunk):
+            for j, v in [(5, r["realized"]), (6, r["unreal"]), (7, r["avgwin"]), (8, r["avglose"])]:
+                if v is not None:
+                    t[i + 1, j].set_text_props(color=(GREEN if v >= 0 else RED), weight="bold")
+        if pi == len(chunks) - 1 and total:
+            tr = len(chunk) + 1
+            for j in range(len(cols)):
+                t[tr, j].set_facecolor("#dfe6e9"); t[tr, j].set_text_props(weight="bold")
+            for j, v in [(5, total["realized"]), (6, total["unreal"]), (7, total["avgwin"]), (8, total["avglose"])]:
+                if v is not None:
+                    t[tr, j].set_text_props(color=(GREEN if v >= 0 else RED), weight="bold")
+        fig.text(0.04, 0.04, "One row per submission batch (orders sharing a submit minute).  #Trd = filled "
+                 "orders.  Hit% = trades with P&L>0 (realized for sells, mark-to-market for held buys).  "
+                 "Invested = buy notional.  AvgWin/AvgLose = mean P&L of winning/losing trades.",
+                 fontsize=7, color="#555")
+        pdf.savefig(fig); plt.close(fig)
+
+
 def run(accounts=None, end=None, out=None, status="all", limit=500, prepost=False):
     today = end or date.today().isoformat()
     accts = accounts or DEFAULT_ACCOUNTS
@@ -491,12 +672,15 @@ def run(accounts=None, end=None, out=None, status="all", limit=500, prepost=Fals
     incs = [data[n]["inception"] for n in accts if not data[n].get("err") and data[n].get("inception")]
     panel = _bench_panel(today, min(incs)) if incs else None
     bench = {n: _bench(panel, data[n].get("inception"), ext) for n in accts if not data[n].get("err")}
+    snapshots = _load_rank_snapshots()                         # close-based composite score+rank per day
+    sig_cache = {}                                             # memoizes as-of z / avg-score recomputes
     out = Path(out) if out else ROOT / "reports" / f"account_orders_{today}.pdf"
     out.parent.mkdir(parents=True, exist_ok=True)
     with PdfPages(out) as pdf:
         _render_cover(pdf, data, accts, today, bench, mark_note)
+        _render_batch_summary(pdf, data, accts, today)         # page 2: submissions by batch & account
         for n in accts:
-            _render_account(pdf, data[n], bench.get(n, {}))
+            _render_account(pdf, data[n], bench.get(n, {}), snapshots, sig_cache)
     return {"pdf": str(out), "data": data}
 
 
