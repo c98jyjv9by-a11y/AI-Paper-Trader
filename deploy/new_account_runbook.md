@@ -136,9 +136,12 @@ A brand-new empty account deploys on its first run regardless of the calendar an
 
 ---
 
-## 8. (Optional) wire into cron
-Add the account to `deploy/mv4_crontab.txt` (open/retry/close/reconcile phases via `broker_cron.py`,
-which is dry-run unless `--live`). Times are CT = ET−1.
+## 8. Wire into the schedule (launchd — the active scheduler)
+Add the account name to the `ACCTS=` list in **`deploy/eod_finalize.sh`** — that's the single
+close-to-close trading agent (`com.mv4.eod`, 16:05 ET) that trades + reconciles all books; the new
+account is then traded/reconciled/committed nightly with the rest. No reload needed (launchd runs the
+script fresh each fire). (Legacy: `deploy/mv4_crontab.txt` + `broker_cron.py` per-phase cron is
+superseded — don't use it.)
 
 ---
 

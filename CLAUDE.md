@@ -107,16 +107,26 @@ account uses it. Older/experimental versions (v2, v3, v5, v6) and one-off script
   `src/eod_accounts.py` (`run.py eod-accounts [--accounts …] [--end …] [--out …]`) renders a consolidated
   **EOD PDF across ALL broker accounts** (`reports/eod_accounts_<date>.pdf`): a summary table (equity, day P&L $/%,
   total %, #positions, #trades) + a brief **per-strategy description** + a page of **today's fills** per account,
-  pulled from each account's LIVE broker state.
+  pulled from each account's LIVE broker state. The EOD summary table also carries a **TOTAL** row and
+  **QQQ/SPY** benchmark rows, **Cash** + **Days-since-inception** columns, and a **Day % on invested**
+  (P&L ÷ equity−cash). `src/account_orders_report.py` renders an **order-history + P&L PDF across all
+  broker accounts**: every order labeled with its **governing rule** (model entry/exit, ramp-up buy,
+  rebalance add/drop, z-reversal entry/to-cash, overlay sleeve by symbol — Alpaca stores no per-order
+  reason, but each book is a fixed rule set), plus each book's open-position return vs **inception-aligned**
+  QQQ/SPY.
 - **Broker integration (Alpaca paper, paper-only + submit-guarded)** —
   `src/broker_adapter.py` (REST client; refuses non-paper host; `submit`/`cancel` inert unless
   `confirm=True` AND env `BROKER_ADAPTER_ALLOW_SUBMIT=yes`),
   `src/broker_sync.py` (reconcile-to-target **limit** orders with **data-driven per-instrument
   collars** from the 2y overnight-gap distribution → `backtests/collars.csv`; realized-slippage
-  log; broker→ledger sync; `create_broker_account`. **Quote-sanity fallback** (`_sanitize_quotes`):
-  before pricing, a ONE-SIDED (missing bid/ask — the after-hours trap) or STALE (>25% off the last
-  close) broker quote has its mid replaced by the yfinance last close, so marketable limits aren't
-  built off un-fillable quotes. The target book is per-account via manifest
+  log; broker→ledger sync; `create_broker_account`. **Quote-sanity fallback** (`_sanitize_quotes`): a
+  ONE-SIDED (missing bid/ask — the after-hours trap) or STALE (>25% off the last close) broker quote has
+  its mid replaced by the yfinance last close — applied to BOTH order PRICING (limits) and dollars→shares
+  SIZING, so neither a limit nor a share-count is built off an un-fillable/mis-priced quote. **Phantom-bar
+  guard** (`_valid_before`/`_drop_phantom`, fleet-wide across the model_v4 / score_rebalance /
+  zscore_reversal scoring paths): market OPEN → the live bar drives the rank; market CLOSED → any bar
+  dated on/after the next session (a fabricated overnight bar) is dropped so scoring ranks off the last
+  completed close. The target book is per-account via manifest
   `target_mode`. **Live steady-state modes:** `{kind:model_v4}` → **follow model_v4's own buy/sell
   rules on the account's own book** (`_model_v4_decision` runs `next_session_decision` seeded with the
   live broker book + cash) — used by `topten`/`copymodel`; and `{kind:score_gate_rampup,min_score,
@@ -142,8 +152,14 @@ account uses it. Older/experimental versions (v2, v3, v5, v6) and one-off script
   per-ticker `zscore_lookback`-day z-score of the composite (most-fallen vs their own norm), equal-weight,
   rebalanced on `rebalance` (incl. **biweekly** = first trading day of even ISO weeks); **REGIME FILTER**:
   go to CASH when QQQ < its `regime_ma`-day MA (`_qqq_above_ma`). IC-swept + cost/regime-backtested
-  (`research/make_zscore_*`): the 10d-avg-z / biweekly / QQQ>200dMA config is best (gross Sharpe ~1.3, net
-  ~+34%/yr @ 10bp, 2022 −46%→−24%). Used by matched-cadence accounts **`zscore10d_biweekly`** (the validated
+  (`research/make_zscore_*` — IC sweep, variant/cadence sweep, regime-filter). Signal-edge analysis:
+  `research/make_latency_edge.py` (the close signal's forward return splits OVERNIGHT, lost to open-
+  execution, vs INTRADAY, captured — sizing why a close-only book bleeds ~80% of its paper edge live),
+  `make_zscore_corr_horizon.py` (trailing-avg-z → fwd-return Pearson heatmap), `make_zscore_buckets_horizon.py`
+  (fwd return by absolute z-bucket) and `make_zscore_rankgroups_horizon.py` (by cross-sectional z-rank
+  group — the bottom-10 the book buys is the best group, cleanest at the 10d window). The 10d-avg-z /
+  biweekly / QQQ>200dMA config is best (gross Sharpe ~1.3, net ~+34%/yr @ 10bp, 2022 −46%→−24%). Used by
+  matched-cadence accounts **`zscore10d_biweekly`** (the validated
   10d/biweekly config), **`zscore5d_weekly`** (5d/weekly), **`zscore1d_daily`** (1d/daily) — all regime-filtered,
   keys `APCA_*_{ZSCORE10D_BIWEEKLY,ZSCORE5D_WEEKLY,ZSCORE1D_DAILY}` live in `.env`. **Seed-only modes** (the initial
   basket, no longer the live steady state): `{kind:top_n,n,size_pct}` (hold the N highest current-scored
@@ -154,15 +170,20 @@ account uses it. Older/experimental versions (v2, v3, v5, v6) and one-off script
   [--graduate-at … | --lookback-days/--top-n/--bottom-n/--rebalance …] …`. **To set up a NEW paper
   account, follow the step-by-step runbook `deploy/new_account_runbook.md`** (keys → create → verify
   → run-the-live-path-for-real → dry-run → submit → reconcile, with the gotchas). Also:
-  `src/broker_cron.py` (cron wrapper: phases open/retry/close/midday/auto, self-guards on the ET
-  market clock; **dry-run unless `--live`**). Schedule: `deploy/mv4_crontab.txt` (times in CT = ET−1).
-  (`broker_sync.py --submit-plan … --extended-hours` is a FILL-NOW pass: marketable-limit
-  `extended_hours` day orders for the current pre/post-market session — crosses the spread at the wider
-  retry collar, bypasses the auction window — instead of next-open `opg`/`cls` auction orders.)
-  Daily flow: `open` (submit) → `retry` (re-price unfilled at the wider collar, then skip) →
-  `close` (reconcile fills/slippage + render EOD). `midday` renders the intraday Midday Pulse PDF
-  from the account's **own** ledger (read-only; `--prepost` for extended-hours marks) — same as
-  `run.py midday --account <name>`. **On-demand `run.py midday`/`eod`/`midday-summary` renders for the
+  **Scheduling — ACTIVE = launchd (close-to-close), NOT the per-phase cron.** Trading is ONE event/day:
+  `com.mv4.eod` runs `deploy/eod_finalize.sh` at **16:05 ET** (5 min after the close) — compute each of
+  the 9 books off the CLOSE and execute immediately via `--submit-plan … --extended-hours` (fills now in
+  the paper sim, so execution is glued to the score), then reconcile each → per-account EOD PDF → refresh
+  model_v4 → consolidated `eod-accounts` PDF → git commit. `com.mv4.midday` (12:30 ET) runs
+  `deploy/midday_summary.sh` (read-only). The agents raise the fd `ulimit` (launchd's ~256 default broke
+  the model_v4 decision) and rerun a missed job on wake; install via `cp deploy/com.mv4.*.plist
+  ~/Library/LaunchAgents/ + launchctl bootstrap gui/$(id -u) …`. The **open (9:35) + retry (10:05) agents
+  were REMOVED** — no open-session trading. **Legacy/superseded:** `src/broker_cron.py`
+  (open/retry/close/midday/auto wrapper, dry-run unless `--live`) + `deploy/mv4_crontab.txt` remain for
+  reference only. (`--submit-plan … --extended-hours` = the EOD agent's FILL-NOW pass: marketable
+  `extended_hours` day orders for the current session, crossing the spread at the wider retry collar.)
+  `run.py midday --account <name>` renders the intraday Midday Pulse PDF from the account's own ledger
+  (read-only; `--prepost` for extended-hours marks). **On-demand `run.py midday`/`eod`/`midday-summary` renders for the
   scenario AND every account go to the unified `reports/midday/` & `reports/eod/` folders (named by
   book: `midday_<account|scenario>_<date>.pdf`). The hash-verified ledger copies under
   `accounts/<name>/reports/` (written by account-freeze/continue) are separate and unchanged.**
