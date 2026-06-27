@@ -1,0 +1,11 @@
+asof,symbol,side,qty,limit_price,reason,score,rank,z,pnl,retry
+2026-06-27,ADI,buy,23,397.24,zscore daily entry: most-fallen #7 (1d-avg z),,7,-1.557,,False
+2026-06-27,MCHP,buy,101,91.46,zscore daily entry: most-fallen #10 (1d-avg z),,10,-1.419,,False
+2026-06-27,MRVL,sell,33,247.4,zscore daily: rebalance out (z rank 13),,13,-1.27,,False
+2026-06-27,NVDA,sell,44,194.98,zscore daily: rebalance out (z rank 18),,18,-0.981,,False
+2026-06-27,NXPI,buy,1,286.23,zscore daily entry: most-fallen #3 (1d-avg z),,3,-2.29,,False
+2026-06-27,ON,buy,1,95.67,zscore daily entry: most-fallen #1 (1d-avg z),,1,-2.598,,False
+2026-06-27,ADI,buy,23,396.89,zscore daily entry: most-fallen #9 (1d-avg z),,9,-1.528,,False
+2026-06-27,NXPI,buy,1,286.23,zscore daily entry: most-fallen #4 (1d-avg z),,4,-2.266,,False
+2026-06-27,ON,buy,1,95.7,zscore daily entry: most-fallen #1 (1d-avg z),,1,-2.598,,False
+2026-06-27,SEDG,sell,171,48.56,zscore daily: rebalance out (z rank 11),,11,-1.432,,False
