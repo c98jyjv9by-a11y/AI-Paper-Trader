@@ -32,7 +32,8 @@
     "bottom_n": 10,
     "bottom_lookback_days": 5,
     "bottom_refresh": "weekly",
-    "min_score": 0.7
+    "min_score": 0.7,
+    "exclude_dropping": true
   },
   "live_value": 99954.0
 }

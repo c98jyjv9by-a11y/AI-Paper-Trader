@@ -428,11 +428,10 @@ def _is_rebalance_day(freq: str, cal) -> bool:
     return True
 
 
-def _lookback_avg_scores(scenario: str, lookback_days: int = 60, as_of=None, valid_before=None):
-    """{ticker: trailing N-day AVG composite score} computed LIVE, ending at `as_of` (default today).
-    `as_of` lets the top sleeve be anchored to the first-of-month while the bottom uses today (the
-    staggered-refresh combo). A daily cross-sectional score averaged over `lookback_days`. `valid_before`
-    drops a phantom upcoming-session bar so the scores use real prices (see `_valid_before`)."""
+def _score_panel(scenario: str, lookback_days: int = 60, as_of=None, valid_before=None):
+    """Daily cross-sectional composite-score panel (rows = last `lookback_days` sessions, cols = tickers),
+    ending at `as_of` (default today). The source for both the lookback AVG and the score TRAJECTORY.
+    `valid_before` drops a phantom upcoming-session bar so scores use real prices (see `_valid_before`)."""
     import datetime as _dt
     from backtest import load_config, fetch_backtest_data
     from scenarios import load_scenario, build_config
@@ -448,7 +447,43 @@ def _lookback_avg_scores(scenario: str, lookback_days: int = 60, as_of=None, val
             for ts in pdata["Close"].index[-lookback_days:]
             for rf in [rank_candidates(calculate_signals(pdata.loc[:ts].iloc[-_SIGNAL_WINDOW:], uni),
                                        top_n=len(uni), weights=w, ticker_weights=tw)]]
-    return pd.DataFrame(rows).mean().to_dict()
+    return pd.DataFrame(rows)
+
+
+def _lookback_avg_scores(scenario: str, lookback_days: int = 60, as_of=None, valid_before=None):
+    """{ticker: trailing N-day AVG composite score} — `_score_panel` averaged over `lookback_days`."""
+    return _score_panel(scenario, lookback_days, as_of, valid_before).mean().to_dict()
+
+
+def _dropping_set(scenario: str, as_of=None, valid_before=None) -> set:
+    """Tickers whose composite-score TRAJECTORY is DROPPING as-of `as_of` — a SUDDEN recent drop, the
+    1-day score well below its 20-day average (recent = 1d - 20d-avg < -0.12). Mirrors the order
+    report's _score_pattern 'Dropping'. (Only the sudden drop, NOT the gradual 'Fading' decline.)"""
+    panel = _score_panel(scenario, 20, as_of=as_of, valid_before=valid_before)
+    if panel is None or panel.empty:
+        return set()
+    cur, a20 = panel.iloc[-1], panel.mean()
+    out = set()
+    for t in panel.columns:
+        recent = cur.get(t) - a20.get(t)
+        if pd.notna(recent) and recent < -0.12:
+            out.add(t)
+    return out
+
+
+def _top_pool(ranked, score_of, top_n: int, min_score: float, dropping: set) -> list:
+    """Up to `top_n` names from `ranked` (sorted best-first), NEVER one in `dropping`. Names scoring
+    >= min_score fill first; if fewer than `top_n` qualify, the next non-Dropping names by rank fill the
+    rest (min_score relaxed) so the sleeve reaches `top_n` without ever holding a Dropping name."""
+    nondrop = [t for t in ranked if t not in dropping]
+    pool = [t for t in nondrop if score_of[t] >= min_score][:top_n]
+    if len(pool) < top_n:
+        for t in nondrop:
+            if t not in pool:
+                pool.append(t)
+                if len(pool) >= top_n:
+                    break
+    return pool
 
 
 def _dec(reason: str, score=None, rank=None, z=None, pnl=None) -> Dict[str, Any]:
@@ -515,9 +550,10 @@ def _combo_targets(scenario: str, cli: ba.AlpacaPaper, current: Dict[str, float]
     anchor = cal[-1] if force else _period_anchor(cal, tm.get("top_refresh", "monthly"))
     vb = _valid_before(cli)                                         # rank off real prices, never a phantom bar
     ta = _lookback_avg_scores(scenario, int(tm.get("top_lookback_days", 60)), as_of=anchor, valid_before=vb)
-    min_score = float(tm.get("min_score", 0.0))                    # Top filter: only sustained leaders (60d-avg >= x)
-    top = [t for t in sorted(ta, key=lambda k: ta[k], reverse=True)
-           if pd.notna(ta[t]) and ta[t] >= min_score][:top_n]
+    min_score = float(tm.get("min_score", 0.0))                    # Top filter: sustained leaders (60d-avg >= x)
+    dropping = _dropping_set(scenario, as_of=anchor, valid_before=vb) if tm.get("exclude_dropping") else set()
+    ta_ranked = [t for t in sorted(ta, key=lambda k: ta[k], reverse=True) if pd.notna(ta[t])]
+    top = _top_pool(ta_ranked, ta, top_n, min_score, dropping)     # fill to top_n by rank, never a Dropping name
     ba = _lookback_avg_scores(scenario, int(tm.get("bottom_lookback_days", 5)), valid_before=vb)
     bottom = [t for t in sorted(ba, key=lambda k: ba[k]) if pd.notna(ba[t])][:bot_n]
     # refresh the top sleeve only on the month's FIRST weekly rebalance (or when forced / first deploy)
@@ -575,10 +611,13 @@ def _score_rebalance_targets(name: str, cli: ba.AlpacaPaper, current: Dict[str, 
     ranked = [t for t in sorted(avg, key=lambda k: avg[k], reverse=True) if pd.notna(avg[t])]
     rank_of = {t: i + 1 for i, t in enumerate(ranked)}
     top_n, bot_n = int(tm.get("top_n", 10)), int(tm.get("bottom_n", 0))
-    # TOP FILTER: only "sustained leaders" — names whose lookback-avg score >= min_score (the validated
-    # .70-.85 sweet spot, +5.7%/20d). Gates the top sleeve to that band; may hold < top_n if fewer clear.
+    # TOP sleeve = top_n names by lookback-avg rank, NEVER a "Dropping" trajectory (a leader that just
+    # cracked). Preference: names clearing min_score (the validated .70-.85 sustained-leadership sweet
+    # spot) fill first; if fewer than top_n qualify, fill the rest with the next non-Dropping names by
+    # rank (below min_score) until top_n — so the book stays full but holds no dropping name.
     min_score = float(tm.get("min_score", 0.0))
-    top_pool = [t for t in ranked if avg[t] >= min_score][:top_n]
+    dropping = _dropping_set(scenario, valid_before=_valid_before(cli)) if tm.get("exclude_dropping") else set()
+    top_pool = _top_pool(ranked, avg, top_n, min_score, dropping)
     picks = list(dict.fromkeys(top_pool + (ranked[-bot_n:] if bot_n else [])))
     if not picks:
         return held, {}, {}
@@ -1217,6 +1256,9 @@ def _cli(argv=None):
     p.add_argument("--top-filter", type=float, default=0.0,
                    help="score_rebalance TOP FILTER: only hold names whose lookback-avg score >= this "
                         "(0 = off; 0.70 = the validated sustained-leadership sweet spot)")
+    p.add_argument("--exclude-dropping", action="store_true",
+                   help="score_rebalance: never hold a name whose score TRAJECTORY is DROPPING (a sudden "
+                        "recent drop, 1d well below its 20d-avg); slots are filled by rank instead")
     p.add_argument("--size-pct", type=float, default=0.085,
                    help="per-name size as a fraction of equity for top_n / score_gate (default 0.085)")
     p.add_argument("--source", default="primary",
@@ -1240,7 +1282,7 @@ def _cli(argv=None):
         elif a.target_mode == "score_rebalance":
             tm = {"kind": "score_rebalance", "lookback_days": a.lookback_days, "top_n": a.top_n,
                   "bottom_n": a.bottom_n, "rebalance": a.rebalance, "gross": 0.90,
-                  "min_score": a.top_filter}
+                  "min_score": a.top_filter, "exclude_dropping": a.exclude_dropping}
         elif a.target_mode == "zscore_reversal":
             tm = {"kind": "zscore_reversal", "zscore_lookback": a.lookback_days, "avg_window": a.avg_window,
                   "n": a.top_n, "rebalance": a.rebalance, "regime_ma": a.regime_ma, "gross": 0.90}
@@ -1267,7 +1309,8 @@ def _cli(argv=None):
                 tm["rebalance"], tm["top_n"],
                 ("+bottom-%d" % tm["bottom_n"]) if tm["bottom_n"] else "",
                 tm.get("lookback_days", tm.get("top_lookback_days", 60)),
-                (", Top filter >=%.2f" % tm["min_score"]) if tm.get("min_score") else "")
+                ((", Top filter >=%.2f" % tm["min_score"]) if tm.get("min_score") else "")
+                + (", ex-Dropping" if tm.get("exclude_dropping") else ""))
         elif tm and tm["kind"] == "zscore_reversal":
             tmdesc = "zscore_reversal (%s rebal, bottom-%d by %dd-avg of %dd-z, cash<QQQ %ddMA)" % (
                 tm["rebalance"], tm["n"], tm["avg_window"], tm["zscore_lookback"], tm["regime_ma"])
