@@ -231,6 +231,39 @@ def _asof_signal(d, as_of, cache):
     return out
 
 
+def _trail_avg(scenario, as_of, cache):
+    """{ticker: (avg5, avg10, avg20)} — trailing 5/10/20-TRADING-DAY averages of the daily CLOSE composite
+    score, ending at `as_of`. Recomputes the daily cross-sectional composite (the rankings snapshots are too
+    sparse for a 20-day window), then rolls. Deterministic from price history; cached per (scenario, date)."""
+    key = (scenario, as_of)
+    if key in cache:
+        return cache[key]
+    out = {}
+    try:
+        import datetime as _dt
+        from backtest import load_config, fetch_backtest_data
+        from scenarios import load_scenario, build_config
+        from signals import calculate_signals, rank_candidates
+        from rank_report import _build_ticker_weights, _SIGNAL_WINDOW
+        cfg = build_config(load_config(ROOT / "config"), load_scenario(scenario))
+        uni, w = cfg["tickers"], cfg["signals"].get("weights")
+        tw = _build_ticker_weights(cfg) or None
+        end = _dt.date.fromisoformat(as_of)
+        pdata = fetch_backtest_data(uni, end - _dt.timedelta(days=20 * 2 + 420), end)
+        pdata = pdata[pdata.index <= pd.Timestamp(end)]
+        rows = [dict(zip(rf["ticker"], rf["composite_score"]))
+                for ts in pdata["Close"].index[-20:]
+                for rf in [rank_candidates(calculate_signals(pdata.loc[:ts].iloc[-_SIGNAL_WINDOW:], uni),
+                                           top_n=len(uni), weights=w, ticker_weights=tw)]]
+        sdf = pd.DataFrame(rows)
+        a5, a10, a20 = sdf.tail(5).mean(), sdf.tail(10).mean(), sdf.tail(20).mean()
+        out = {t: (a5.get(t), a10.get(t), a20.get(t)) for t in sdf.columns}
+    except Exception:
+        out = {}
+    cache[key] = out
+    return out
+
+
 def _order_reason(o, kind, dec_log):
     """The REAL logged reason + supporting data for an order (matched by ET date + symbol + side in
     decisions.csv), e.g. 'zscore weekly entry: most-fallen #1 (5d-avg z) · z-1.71'. Falls back to the
@@ -382,10 +415,11 @@ def _table(fig, rect, cols, cells, colw, fontsize=7.5):
     return ax, t
 
 
-def _render_account(pdf, d, bench=None, snapshots=None, sig_cache=None):
+def _render_account(pdf, d, bench=None, snapshots=None, sig_cache=None, trail_cache=None):
     bench = bench or {}
     snapshots = snapshots or []
     sig_cache = sig_cache if sig_cache is not None else {}
+    trail_cache = trail_cache if trail_cache is not None else {}
     name = d["name"]
     label, blurb = _blurb(name)
     title = "%s  —  %s" % (name, label)
@@ -452,15 +486,16 @@ def _render_account(pdf, d, bench=None, snapshots=None, sig_cache=None):
     orders = d["orders"]
     kind = d.get("kind")
     dec_log = d.get("dec_log") or {}
-    ocols = ["Submitted", "Filled", "Side", "Symbol", "FillQty", "Fill px", "Value", "Rlz $", "Unrlz $", "Ret %", "Score@sub", "Status", "Reason"]
-    oraw = [9, 9, 4, 6, 5, 7, 7, 7, 7, 6, 8, 7, 12]
+    ocols = ["Filled (CT)", "Side", "Symbol", "FillQty", "Fill px", "Value", "Rlz $", "Unrlz $", "Ret %",
+             "Score@sub", "Trail 5/10/20d", "Status", "Reason"]
+    oraw = [10, 4, 6, 5, 7, 7, 7, 7, 6, 8, 11, 7, 11]
     ow = [w / sum(oraw) for w in oraw]
     realized_sum = sum(o["rlz"] for o in orders if o.get("rlz") is not None)
     unrlz_sum = sum(o["unrlz"] for o in orders if o.get("unrlz") is not None)
     value_sum = sum(o["filled_qty"] * o["fill_price"] for o in orders
                     if o.get("fill_price") and o.get("filled_qty"))
     # account-wide TOTAL row (shown atop every page of this history): gross filled value + Σ Rlz/Unrlz
-    total_row = ["TOTAL", "", "", "", "", "", _money(value_sum), _money(realized_sum), _money(unrlz_sum), "", "", "", ""]
+    total_row = ["TOTAL", "", "", "", "", _money(value_sum), _money(realized_sum), _money(unrlz_sum), "", "", "", "", ""]
 
     def _scorecell(o):                                       # the book's OWN selection metric the batch was submitted under
         sym, side = o.get("symbol", ""), (o.get("side") or "").lower()
@@ -485,34 +520,42 @@ def _render_account(pdf, d, bench=None, snapshots=None, sig_cache=None):
             return "—"
         return ("%.2f #%d" % (sc, rk)) if rk else ("%.2f" % sc)
 
+    def _trailcell(o):                                       # trailing 5/10/20d avg of the close composite score
+        dt = _et_date(o.get("submitted_at") or o.get("filled_at"))
+        a = _trail_avg(d.get("scenario", "model_v4"), dt, trail_cache).get(o.get("symbol", "")) if dt else None
+        if not a or a[0] is None:
+            return "—"
+        return "/".join(("%.2f" % v).lstrip("0") if v is not None else "—" for v in a)   # e.g. .79/.77/.74
+
     def _orow(o):
         fp = o.get("fill_price")
         val = (o["filled_qty"] * fp) if (fp and o["filled_qty"]) else None
         rlz, unrlz, ret = o.get("rlz"), o.get("unrlz"), o.get("ret")
-        return [_ts(o.get("submitted_at")), _ts(o.get("filled_at")), (o.get("side") or "").upper(),
+        return [_ts(o.get("filled_at") or o.get("submitted_at")), (o.get("side") or "").upper(),
                 o.get("symbol", ""), "%g" % o["filled_qty"], ("$%.2f" % fp) if fp else "—",
                 _money(val) if val is not None else "—",
                 _money(rlz) if rlz is not None else "—",
                 _money(unrlz) if unrlz is not None else "—",
                 _pct(ret) if ret is not None else "—",
-                _scorecell(o), o.get("status", ""), _order_reason(o, kind, dec_log)]
+                _scorecell(o), _trailcell(o), o.get("status", ""), _order_reason(o, kind, dec_log)]
 
     def _color_orders(tbl, chunk, offset):                   # `offset` = table row of the first order
         # style the TOTAL header-data row (always at table row 1) once
         for j in range(len(ocols)):
             tbl[1, j].set_facecolor("#dfe6e9"); tbl[1, j].set_text_props(weight="bold")
-        tbl[1, 7].set_text_props(color=(GREEN if realized_sum >= 0 else RED), weight="bold")
-        tbl[1, 8].set_text_props(color=(GREEN if unrlz_sum >= 0 else RED), weight="bold")
+        tbl[1, 6].set_text_props(color=(GREEN if realized_sum >= 0 else RED), weight="bold")
+        tbl[1, 7].set_text_props(color=(GREEN if unrlz_sum >= 0 else RED), weight="bold")
         for i, o in enumerate(chunk):
             r = i + offset
             side = (o.get("side") or "").upper()
-            tbl[r, 2].set_text_props(color=(GREEN if side == "BUY" else RED), weight="bold")
+            tbl[r, 1].set_text_props(color=(GREEN if side == "BUY" else RED), weight="bold")
             if o.get("rlz") is not None:                       # realized SELL
-                tbl[r, 7].set_text_props(color=(GREEN if o["rlz"] >= 0 else RED), weight="bold")
+                tbl[r, 6].set_text_props(color=(GREEN if o["rlz"] >= 0 else RED), weight="bold")
             if o.get("unrlz") is not None:                     # mark-to-market of a held BUY
-                tbl[r, 8].set_text_props(color=(GREEN if o["unrlz"] >= 0 else RED), weight="bold")
+                tbl[r, 7].set_text_props(color=(GREEN if o["unrlz"] >= 0 else RED), weight="bold")
             if o.get("ret") is not None:
-                tbl[r, 9].set_text_props(color=(GREEN if o["ret"] >= 0 else RED), weight="bold")
+                tbl[r, 8].set_text_props(color=(GREEN if o["ret"] >= 0 else RED), weight="bold")
+            tbl[r, 10].set_text_props(color="#555")            # trailing avgs (muted)
             if o.get("status") != "filled":
                 tbl[r, 11].set_text_props(color=GREY, style="italic")
             tbl[r, 12].set_text_props(color="#555", style="italic")
@@ -523,15 +566,15 @@ def _render_account(pdf, d, bench=None, snapshots=None, sig_cache=None):
         sub = "order history (newest first)" + ("" if npages == 1 else " — page %d/%d" % (page, npages))
         fig = _new_page(pdf, title, sub=sub)
         cells = ([total_row] + [_orow(o) for o in chunk]) if orders else []   # TOTAL row pinned at the top
-        _, ot = _table(fig, [0.03, 0.05, 0.94, 0.84], ocols, cells, ow, fontsize=6.0)
+        _, ot = _table(fig, [0.03, 0.05, 0.94, 0.84], ocols, cells, ow, fontsize=6.2)
         if ot is not None:
             _color_orders(ot, chunk, offset=2)               # order rows start after header(0)+TOTAL(1)
-        fig.text(0.03, 0.92, "TOTAL row = account-wide gross filled Value + Σ Rlz/Unrlz.  Rlz/Unrlz = realized "
-                 "on SELLs / held BUYs marked to price; Ret %% pairs with whichever applies.  Score@sub = the "
-                 "book's OWN selection metric #rank as-of the order's SUBMISSION date — zscore books show z #rank "
-                 "(lowest z = #1), score-rebalance show 60d-avg score #rank, model_v4 show composite #rank; '—' "
-                 "for overlay/unscored.  Reason = the real logged rule (derived label for pre-logging orders).  Times in CT.",
-                 fontsize=7, color="#555")
+        fig.text(0.02, 0.92, "TOTAL row = account-wide gross filled Value + Σ Rlz/Unrlz.  Rlz/Unrlz = realized on "
+                 "SELLs / held BUYs marked to price.  Score@sub = the book's OWN selection metric #rank as-of the "
+                 "order's date (zscore: z #rank, lowest=#1; score-rebalance: 60d-avg score #rank; model_v4: composite "
+                 "#rank).  Trail 5/10/20d = trailing 5/10/20-trading-day averages of the daily CLOSE composite score "
+                 "(0.xx shown as .xx; '—' for overlay/unscored).  Reason = the logged rule.  Times in CT.",
+                 fontsize=6.5, color="#555")
         pdf.savefig(fig); plt.close(fig)
         if not rest:
             break
@@ -813,14 +856,14 @@ def run(accounts=None, end=None, out=None, status="all", limit=500, prepost=Fals
     panel = _bench_panel(today, min(incs)) if incs else None
     bench = {n: _bench(panel, data[n].get("inception"), ext) for n in accts if not data[n].get("err")}
     snapshots = _load_rank_snapshots()                         # close-based composite score+rank per day
-    sig_cache = {}                                             # memoizes as-of z / avg-score recomputes
+    sig_cache, trail_cache = {}, {}                            # memoize as-of z/avg-score and trailing-avg recomputes
     out = Path(out) if out else ROOT / "reports" / f"account_orders_{today}.pdf"
     out.parent.mkdir(parents=True, exist_ok=True)
     with PdfPages(out) as pdf:
         _render_cover(pdf, data, accts, today, bench, mark_note)
         _render_batch_summary(pdf, data, accts, today)         # page 2: submissions by batch & account
         for n in accts:
-            _render_account(pdf, data[n], bench.get(n, {}), snapshots, sig_cache)
+            _render_account(pdf, data[n], bench.get(n, {}), snapshots, sig_cache, trail_cache)
     return {"pdf": str(out), "data": data}
 
 
