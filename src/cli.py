@@ -157,6 +157,11 @@ def _cmd_agent(args: argparse.Namespace) -> None:
     agent.main()
 
 
+def _cmd_status(args: argparse.Namespace) -> None:
+    import status_check
+    status_check.run()
+
+
 # ─── Parser ───────────────────────────────────────────────────────────────────
 
 
@@ -166,6 +171,9 @@ def build_parser() -> argparse.ArgumentParser:
         description="AI Paper Trader — unified runner. Paper trading only; no live orders.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
+
+    st = sub.add_parser("status", help="Read-only ops dashboard: account keys+equity, launchd agents, logs, git")
+    st.set_defaults(func=_cmd_status)
 
     def _add_dates(sp: argparse.ArgumentParser, with_output: bool = False) -> None:
         sp.add_argument("--start", required=True, metavar="YYYY-MM-DD")

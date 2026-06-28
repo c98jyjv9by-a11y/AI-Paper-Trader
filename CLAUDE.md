@@ -269,6 +269,7 @@ python run.py account-continue --name primary --end … [--scenario <model>]    
 python run.py eod  [--account <name> | --scenario <s> --start … --end …] [--prepost]  # render the end-of-day PDF — from a frozen/living account ledger, or a fresh scenario run. --prepost marks the latest bar to the after-hours print (live session only)
 python run.py midday [--account <name> | --scenario <s> --start … --end …] [--prepost] # render the intraday Midday Pulse PDF — account mode marks the locked book to today's provisional price; --prepost marks to the latest extended-hours (pre/post-market) print (VWAP of last few 1-min bars, stamped "HH:MM ET post-market")
 python run.py agent                                          # live daily agent
+python run.py status                                         # read-only ops dashboard: per broker account keys (ok/placeholder/MISSING)+live equity/cash, launchd agents loaded, last /tmp/mv4_*.log line, git tree state (src/status_check.py)
 python run.py backtest           --start … --end …           # backtest + diagnostics + sensitivity
 python run.py experiments        --start … --end …           # strategy experiment profiles
 python run.py ticker-experiments --start … --end …           # grouped ticker overrides vs capital-matched BH
