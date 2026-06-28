@@ -265,12 +265,13 @@ def _collect(name, today, status="all", limit=500):
         total = eq - start
         cost = sum(p["cost_basis"] for p in pos)               # open-book return = Σ mkt / Σ cost - 1
         mv = sum(p["market_value"] for p in pos)
-        return {"name": name, "eq": eq, "cash": cash, "start": start, "pos": pos, "orders": orders,
-                "kind": (man.get("target_mode") or {}).get("kind"), "tm": (man.get("target_mode") or {}),
-                "scenario": man.get("scenario", "model_v4"), "inception": man.get("inception"),
+        realized = sum(o["rlz"] for o in orders if o.get("rlz") is not None)   # fills-derived (avg-cost),
+        return {"name": name, "eq": eq, "cash": cash, "start": start, "pos": pos, "orders": orders,   # same as
+                "kind": (man.get("target_mode") or {}).get("kind"), "tm": (man.get("target_mode") or {}),  # order
+                "scenario": man.get("scenario", "model_v4"), "inception": man.get("inception"),   # table & summary
                 "dec_log": _load_decision_log(name),
                 "book_cost": cost, "book_mv": mv, "book_ret": (mv / cost - 1) if cost > 0 else None,
-                "unreal": unreal, "total_pnl": total, "realized_est": total - unreal,
+                "unreal": unreal, "total_pnl": total, "realized_est": realized,
                 "tot_ret": (eq / start - 1 if start else 0.0), "err": None}
     except Exception as exc:
         return {"name": name, "err": str(exc)[:80]}
@@ -354,7 +355,7 @@ def _remark_prepost(d, ext, label):
     d["eq"] = d["cash"] + d["book_mv"]                          # EH-marked equity = cash + EH market value
     d["total_pnl"] = d["eq"] - d["start"]
     d["tot_ret"] = (d["eq"] / d["start"] - 1) if d["start"] else 0.0
-    d["realized_est"] = d["total_pnl"] - d["unreal"]
+    # realized_est is fills-derived (price-invariant) — do NOT recompute from total-unreal here
     _annotate_trade_pnl(d["orders"], price_now={p["ticker"]: p["price"] for p in d["pos"]})
     d["mark_label"], d["marked_ext"] = label, marked
     return d
@@ -419,7 +420,7 @@ def _render_account(pdf, d, bench=None, snapshots=None, sig_cache=None):
             fontsize=11, weight="bold", color=pnl_color, va="top")
     ax.text(0.34, 0.60, "Unrealized  %s" % _money(d["unreal"]),
             fontsize=10, color=(GREEN if d["unreal"] >= 0 else RED), va="top")
-    ax.text(0.60, 0.60, "Realized (est.)  %s" % _money(d["realized_est"]),
+    ax.text(0.60, 0.60, "Realized  %s" % _money(d["realized_est"]),
             fontsize=10, color=(GREEN if d["realized_est"] >= 0 else RED), va="top")
     # benchmark + open-book return, aligned to THIS account's inception window
     def _bpct(sym):
@@ -544,7 +545,7 @@ def _render_cover(pdf, data, accts, today, bench, mark_note=None):
         fig.text(0.5, 0.945, mark_note, ha="center", fontsize=8, color="#0b3d91", style="italic")
     ax = fig.add_axes([0.03, 0.30, 0.94, 0.55]); ax.axis("off")
     cols = ["Account", "Equity", "Cash", "Starting", "Total P&L", "Total %", "QQQ %", "SPY %",
-            "Unreal $", "Realized(est)", "Pos", "Orders"]
+            "Unreal $", "Realized", "Pos", "Orders"]
 
     def _bp(n, sym):                                          # account-aligned benchmark % (or "—")
         v = (bench.get(n) or {}).get(sym)
@@ -592,9 +593,10 @@ def _render_cover(pdf, data, accts, today, bench, mark_note=None):
         tr = len(accts) + 1
         for j in range(len(cols)):
             t[tr, j].set_facecolor("#dfe6e9"); t[tr, j].set_text_props(weight="bold")
-    fig.text(0.03, 0.24, "Total P&L = equity - starting value.  Unrealized = Σ (price - avg entry) x qty over open "
-             "positions.  Realized (est.) = Total - Unrealized (exact for a once-funded paper account).",
-             fontsize=7.5, color="#555", wrap=True)
+    fig.text(0.03, 0.24, "Total P&L = equity - starting (broker).  Unrealized = Σ (price - avg entry) x qty over open "
+             "positions (broker).  Realized = Σ realized P&L on sells (fills, avg-cost) — the SAME figure shown by the "
+             "order-history TOTAL and the Trade Summary (Total may differ from Realized+Unrealized by a small "
+             "broker-vs-fills residual).", fontsize=7.5, color="#555", wrap=True)
     fig.text(0.03, 0.205, "QQQ %% / SPY %% = benchmark total return measured over EACH account's own inception->today "
              "window (timelines aligned per account; TOTAL = starting-weighted blend).", fontsize=7.5, color="#555")
     fig.text(0.03, 0.17, "ERR rows = the account's Alpaca keys are unset/placeholder; see its page for detail.",
@@ -602,38 +604,53 @@ def _render_cover(pdf, data, accts, today, bench, mark_note=None):
     pdf.savefig(fig); plt.close(fig)
 
 
-def _buy_pnl(orders, price_now):
-    """Per-BUY-entry P&L via FIFO lot tracking, so each sale's realized P&L is credited back to the BUY
-    batch it came from (not the sell batch). Walks filled orders oldest->newest per symbol: a BUY opens a
-    lot (tagged with its submit-minute), a SELL consumes lots FIFO crediting (sell_px - lot_px) x qty to
-    each lot's buy; leftover open lots mark to current price. Returns {buy_oid: {ts, notional, realized,
-    unrealized}}. SELLS are NOT entries — they only feed realized back to the buys."""
+def _buy_pnl(orders, price_now, pos_unreal=None):
+    """Per-BUY-entry P&L, CONSISTENT with the order-history table / cover (which use AVERAGE-COST and the
+    broker's positions). Each sale's realized P&L uses the AVERAGE-COST magnitude (sell_px - running avg) x
+    qty — identical to the order table — and FIFO lot consumption is used only to decide WHICH buy batch it
+    is credited back to. Unrealized is the broker's actual per-position P&L (`pos_unreal`, avg-cost),
+    distributed across the still-open lots by quantity. So the trade-summary totals reconcile exactly with
+    the cover and order-history table (realized + unrealized + grand total all match). Returns
+    {buy_oid: {edate, phase, notional, realized, unrealized}}; SELLS are not entries."""
     import collections
     fills = [o for o in orders if o.get("fill_price") and o.get("filled_qty")]
     fills.sort(key=lambda o: (o.get("filled_at") or o.get("submitted_at") or ""))
-    queues, res, seq = collections.defaultdict(list), {}, 0
+    books = collections.defaultdict(lambda: {"qty": 0.0, "cost": 0.0, "lots": collections.deque()})
+    res, seq = {}, 0
     for o in fills:
         sym, q, px = o["symbol"], o["filled_qty"], o["fill_price"]
+        b = books[sym]
         if (o.get("side") or "").lower() == "buy":
             src = o.get("submitted_at") or o.get("filled_at") or ""
             oid = "%s#%d" % (o.get("id") or "b", seq); seq += 1
             res[oid] = {"edate": _ct_date(src) or "", "phase": _phase(src),
                         "notional": q * px, "realized": 0.0, "unrealized": 0.0}
-            queues[sym].append({"oid": oid, "qty": q, "price": px})
-        else:                                                          # sell -> realize against FIFO lots
+            b["qty"] += q; b["cost"] += q * px
+            b["lots"].append([oid, q])
+        else:                                                          # sell: avg-cost magnitude, FIFO attribution
+            avg = (b["cost"] / b["qty"]) if b["qty"] > 1e-9 else px
             sq = q
-            while sq > 1e-9 and queues[sym]:
-                lot = queues[sym][0]
-                take = min(lot["qty"], sq)
-                res[lot["oid"]]["realized"] += (px - lot["price"]) * take
-                lot["qty"] -= take; sq -= take
-                if lot["qty"] <= 1e-9:
-                    queues[sym].pop(0)
-    for sym, lots in queues.items():                                  # still-open lots -> unrealized
-        cur = price_now.get(sym)
-        if cur:
-            for lot in lots:
-                res[lot["oid"]]["unrealized"] += (cur - lot["price"]) * lot["qty"]
+            while sq > 1e-9 and b["lots"]:
+                lot = b["lots"][0]
+                take = min(lot[1], sq)
+                res[lot[0]]["realized"] += (px - avg) * take          # avg-cost $, credited to this buy batch
+                lot[1] -= take; sq -= take
+                if lot[1] <= 1e-9:
+                    b["lots"].popleft()
+            b["qty"] -= q; b["cost"] -= avg * q
+            if b["qty"] <= 1e-9:
+                b["qty"], b["cost"] = 0.0, 0.0
+    pos_unreal = pos_unreal or {}
+    for sym, b in books.items():                                       # unrealized -> broker per-position P&L
+        leftover = sum(l[1] for l in b["lots"])
+        if leftover <= 1e-9:
+            continue
+        bu = pos_unreal.get(sym)
+        if bu is None:                                                 # fallback: mark at current price vs avg cost
+            cur = price_now.get(sym); avg = (b["cost"] / b["qty"]) if b["qty"] > 1e-9 else None
+            bu = (cur - avg) * leftover if (cur and avg) else 0.0
+        for oid, lq in b["lots"]:
+            res[oid]["unrealized"] += bu * (lq / leftover)             # distribute across open lots by qty
     return res
 
 
@@ -661,7 +678,8 @@ def _batch_summaries(data, accts):
         if d.get("err"):
             continue
         price_now = {p["ticker"]: p["price"] for p in d["pos"]}
-        for v in _buy_pnl(d["orders"], price_now).values():
+        pos_unreal = {p["ticker"]: p["unrealized_pl"] for p in d["pos"]}   # broker avg-cost P&L (the cover's)
+        for v in _buy_pnl(d["orders"], price_now, pos_unreal).values():
             buyrows.append({"account": n, **v})
     g_acct, g_ts = {}, {}
     for r in buyrows:
