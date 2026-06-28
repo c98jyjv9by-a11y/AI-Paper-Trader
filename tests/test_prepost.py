@@ -19,6 +19,7 @@ def _panel(last_day: date, n: int = 30):
     """Daily OHLC-style panel (Close+Volume MultiIndex) ending on `last_day`. AAA's last
     (mark) close is 105 with a 100 prior close, so a 110 extended print is distinguishable."""
     idx = pd.bdate_range(end=pd.Timestamp(last_day), periods=n)
+    n = len(idx)          # bdate_range yields n-1 when last_day is a weekend; match arrays to the index
     close = {}
     for t in ["AAA", "BBB", "SPY", "QQQ"]:
         close[t] = 100.0 * 1.001 ** np.arange(n)
@@ -65,7 +66,8 @@ def test_prepost_overwrites_same_day_mark(monkeypatch):
     """Post-market: the extended print is for the SAME day as the latest daily bar → overwrite."""
     pdata = _panel(date.today())
     ext = {"AAA": 110.0, "BBB": 100.0, "SPY": 100.0, "QQQ": 100.0}
-    d = _build(pdata, True, monkeypatch, ext=ext, asof=date.today())
+    # asof = the panel's last bar (today on a weekday, last Fri on a weekend) so it's a SAME-day overwrite
+    d = _build(pdata, True, monkeypatch, ext=ext, asof=pdata.index[-1].date())
     assert d["prepost"] is True and d["mark_note"] == "19:59 ET post-market"
     # AAA return uses the 110 after-hours print over the 100 prior close (not the 105 mark)
     assert abs(d["ret"]("AAA") - 0.10) < 1e-9

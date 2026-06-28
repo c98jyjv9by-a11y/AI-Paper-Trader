@@ -1,6 +1,11 @@
 """
 broker_cron.py — cron-ready wrapper around the daily broker session.
 
+*** DEPRECATED / ARCHIVED (2026-06) ***  Superseded by the launchd close-to-close agents
+(`deploy/com.mv4.{eod,midday}.plist` -> `deploy/eod_finalize.sh` / `deploy/midday_summary.sh`):
+trading is now ONE event at 16:05 ET, not the per-phase open/retry/close flow below. Kept for
+reference only; do NOT install the old `mv4_crontab.txt`.
+
 Runs ONE phase of the trading day, self-guards on the market calendar (via the Alpaca clock),
 and appends a timestamped line to accounts/<name>/broker/cron.log. Designed to be dropped into
 crontab with three fixed ET times (or one --phase auto job that self-selects).

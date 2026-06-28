@@ -69,7 +69,7 @@ account uses it. Older/experimental versions (v2, v3, v5, v6) and one-off script
   **close-to-close** event at 16:05 ET (`com.mv4.eod` → `deploy/eod_finalize.sh`) — compute each book off the
   close and **execute immediately** (post-market, fills now in the paper sim) so order execution is glued to
   when the score was computed; plus a 12:30 ET midday info report (`com.mv4.midday`). (The old per-phase
-  `deploy/mv4_crontab.txt` open/retry/close cron is superseded; agents raise the fd `ulimit` for the launchd
+  `archive/mv4_crontab.txt` open/retry/close cron is superseded; agents raise the fd `ulimit` for the launchd
   environment.)
 - **Why the z-score books exist — a SIGNAL-LATENCY play (not merely "mean reversion").** The momentum books
   (model_v4 + the `score_rebalance` books) decide purely on the **close** score/rank. That backtests well —
@@ -178,8 +178,8 @@ account uses it. Older/experimental versions (v2, v3, v5, v6) and one-off script
   `deploy/midday_summary.sh` (read-only). The agents raise the fd `ulimit` (launchd's ~256 default broke
   the model_v4 decision) and rerun a missed job on wake; install via `cp deploy/com.mv4.*.plist
   ~/Library/LaunchAgents/ + launchctl bootstrap gui/$(id -u) …`. The **open (9:35) + retry (10:05) agents
-  were REMOVED** — no open-session trading. **Legacy/superseded:** `src/broker_cron.py`
-  (open/retry/close/midday/auto wrapper, dry-run unless `--live`) + `deploy/mv4_crontab.txt` remain for
+  were REMOVED** — no open-session trading. **Legacy/superseded (moved to `archive/`):** `archive/broker_cron.py`
+  (open/retry/close/midday/auto wrapper, dry-run unless `--live`) + `archive/mv4_crontab.txt` remain for
   reference only. (`--submit-plan … --extended-hours` = the EOD agent's FILL-NOW pass: marketable
   `extended_hours` day orders for the current session, crossing the spread at the wider retry collar.)
   `run.py midday --account <name>` renders the intraday Midday Pulse PDF from the account's own ledger
@@ -261,6 +261,8 @@ All runners share one entry point — `python run.py <command>` (see `python run
 ```bash
 cd ai-paper-trader
 pip install -r requirements.txt
+# Optional dev tool: `brew install poppler` to preview the generated report PDFs locally
+# (pdftoppm — required for the Read tool to rasterize reports/*.pdf; not needed to RUN anything).
 
 python run.py account-freeze --name primary --scenario model_v4 --start … --end …  # freeze a scenario's trades+state over a window into an IMMUTABLE account ledger (accounts/<name>/: trades/equity/positions/rankings + rendered reports + manifest hashes); survives model/config changes & price revisions. account-verify --name <n> checks integrity. Reports read it via build_report(..., account=<n>)
 python run.py account-continue --name primary --end … [--scenario <model>]          # extend a living account forward from its latest state (seeds cash/positions/governor; resets transient streak state at the seam). Appends under continuation/, leaves the frozen core untouched, AND renders+archives that day's EOD+status reports; --scenario defaults to the account base (pass current model to "follow active")

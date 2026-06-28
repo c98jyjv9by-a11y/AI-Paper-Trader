@@ -77,7 +77,7 @@ def test_commentary_flags_inversion_and_governor():
     assert "inverted" in text                  # negative spread => momentum reversal called out
     assert "governor" in text and "0.82" in " ".join(comm["observations"])  # de-risk noted
     recs = " ".join(comm["recommendations"])
-    assert "AMAT" in recs                       # gate-clearing, not-held => buy candidate
+    assert "No buys queued" in recs             # full book (90% inv vs governor 73% cap) => no adds surfaced
     assert "SOFI" in recs                       # ▲14 below gate => watchlist
     assert "defensive" in recs.lower()          # em<1 and spread<0 => defensive stance
 
