@@ -95,20 +95,22 @@ def _collect(name, today):
 
 
 def _benchmarks(today):
-    """{sym: day_return} for QQQ/SPY from the price feed (latest close vs the prior close)."""
+    """({sym: day_return}, last_session_iso) for QQQ/SPY — latest close vs the prior close, plus the
+    date of that latest close (the last trading session; used to flag non-trading-day runs)."""
     try:
         import datetime as _dt
         from backtest import fetch_backtest_data
         end = _dt.date.fromisoformat(today)
         cl = fetch_backtest_data(["QQQ", "SPY"], end - _dt.timedelta(days=10), end)["Close"]
-        out = {}
+        out, last = {}, None
         for s in ("QQQ", "SPY"):
             v = (cl[s] if (hasattr(cl, "columns") and s in cl.columns) else cl).dropna()
             if len(v) >= 2 and float(v.iloc[-2]) > 0:
                 out[s] = float(v.iloc[-1] / v.iloc[-2] - 1)
-        return out
+                last = v.index[-1]
+        return out, (last.date().isoformat() if last is not None else None)
     except Exception:
-        return {}
+        return {}, None
 
 
 def run(accounts=None, end=None, out=None):
@@ -150,8 +152,13 @@ def run(accounts=None, end=None, out=None):
                       _money(tot.get("day_pnl", 0.0)), _pct(tot_day), _pct(tot_ret), "—",
                       str(tot_pos), str(tot_trd)])
         # benchmark rows: QQQ/SPY today's index return (in the Day % col; the rest N/A for an index)
-        bm = _benchmarks(today)
+        bm, last_session = _benchmarks(today)
         bm_syms = [s for s in ("QQQ", "SPY") if s in bm]
+        closed = bool(last_session and last_session < today)   # report run on a non-trading day (weekend/holiday)
+        if closed:
+            fig.text(0.5, 0.925, "MARKET CLOSED on %s  —  equity / P&L are as of the last session "
+                     "(%s close); any orders submitted now queue for the next open."
+                     % (today, last_session), ha="center", fontsize=8.5, color=RED, weight="bold")
         for s in bm_syms:
             cells.append([s, "benchmark (index)", "—", "—", "—", _pct(bm[s]), "—", "—", "—", "—"])
         raw = [11, 24, 11, 10, 10, 9, 8, 6, 5, 7]          # Strategy widest; normalized to sum 1
@@ -196,6 +203,10 @@ def run(accounts=None, end=None, out=None):
         # Page 2: today's activity (fills)
         fig = plt.figure(figsize=(11, 8.5))
         fig.suptitle("Today's Activity (fills) - %s" % today, fontsize=13, weight="bold")
+        if closed:
+            fig.text(0.5, 0.945, "Market closed on %s — no fills expected; orders queue for the next "
+                     "session (last close %s)." % (today, last_session), ha="center", fontsize=8,
+                     color=RED, style="italic")
         ax = fig.add_axes([0.05, 0.04, 0.9, 0.88]); ax.axis("off")
         y = 1.0
         for n in accts:
