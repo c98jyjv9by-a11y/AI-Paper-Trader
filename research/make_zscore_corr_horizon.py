@@ -4,26 +4,19 @@ trailing {1,5,10}-day average of the per-ticker 60-day z-score of the model_v4 c
 Negative = reversal (low z -> high forward return). Reuses the cached score panel + close.
 2020+; survivorship-biased. -> reports/corr_tails_zscore.pdf"""
 import sys
-import warnings
-from datetime import date
 from pathlib import Path
 
-warnings.filterwarnings("ignore")
-ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))    # so `import _common` resolves
+from _common import load_ctx
 import numpy as np
 import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
-from backtest import load_config, fetch_backtest_data
-from scenarios import load_scenario, build_config
 
-cfg = build_config(load_config(ROOT / "config"), load_scenario("model_v4"))
-close = fetch_backtest_data(cfg["tickers"], date(2018, 6, 1), date.today())["Close"]
-S = pd.read_csv(ROOT / "backtests" / "daily_scores_model_v4.csv", index_col=0, parse_dates=True)
-Z = (S - S.rolling(60).mean()) / S.rolling(60).std()        # per-ticker 60-day z of the composite
+ctx = load_ctx()                                            # close panel + cached score panel (model_v4)
+close, Z, ROOT = ctx.close, ctx.Z, ctx.ROOT                 # Z = per-ticker 60-day z of the composite
 
 WIN, FWD = [1, 5, 10], [1, 5, 10]
 dates = Z.index[Z.index.year >= 2020]

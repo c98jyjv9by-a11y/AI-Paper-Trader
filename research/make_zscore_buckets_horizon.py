@@ -4,26 +4,19 @@ MEAN forward return at {1,5,10}d, plus the count. Answers "names whose trailing-
 earn X% over the next 1/5/10 days." Reversal => low-z buckets earn more than high-z buckets.
 Reuses the cached score panel + close. 2020+; survivorship-biased. -> reports/zscore_buckets_horizon.pdf"""
 import sys
-import warnings
-from datetime import date
 from pathlib import Path
 
-warnings.filterwarnings("ignore")
-ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))    # so `import _common` resolves
+from _common import load_ctx
 import numpy as np
 import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
-from backtest import load_config, fetch_backtest_data
-from scenarios import load_scenario, build_config
 
-cfg = build_config(load_config(ROOT / "config"), load_scenario("model_v4"))
-close = fetch_backtest_data(cfg["tickers"], date(2018, 6, 1), date.today())["Close"]
-S = pd.read_csv(ROOT / "backtests" / "daily_scores_model_v4.csv", index_col=0, parse_dates=True)
-Z = (S - S.rolling(60).mean()) / S.rolling(60).std()
+ctx = load_ctx()                                            # close panel + cached score panel (model_v4)
+close, Z, ROOT = ctx.close, ctx.Z, ctx.ROOT
 
 WIN, FWD = [1, 5, 10], [1, 5, 10]
 EDGES = [-np.inf, -2, -1, 0, 1, 2, np.inf]

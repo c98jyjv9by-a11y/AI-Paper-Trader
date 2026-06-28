@@ -5,23 +5,15 @@ loaded into the overnight gap, it bleeds to execution latency (live << frictionl
 momentum top-10 (by the close composite score) vs z-reversal bottom-10 (by the 1-day 60-day z). Daily
 selection. Reuses the cached score panel + OHLC. 2020+; survivorship-biased."""
 import sys
-import warnings
-from datetime import date
 from pathlib import Path
 
-warnings.filterwarnings("ignore")
-ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))    # so `import _common` resolves
+from _common import load_ctx
 import numpy as np
 import pandas as pd
-from backtest import load_config, fetch_backtest_data
-from scenarios import load_scenario, build_config
 
-cfg = build_config(load_config(ROOT / "config"), load_scenario("model_v4"))
-px = fetch_backtest_data(cfg["tickers"], date(2018, 6, 1), date.today())
-close, openp = px["Close"], px["Open"]
-S = pd.read_csv(ROOT / "backtests" / "daily_scores_model_v4.csv", index_col=0, parse_dates=True)
-Z = (S - S.rolling(60).mean()) / S.rolling(60).std()
+ctx = load_ctx()                                            # full OHLC panel + cached score panel (model_v4)
+close, openp, S, Z = ctx.close, ctx.px["Open"], ctx.S, ctx.Z
 
 ov = (openp.shift(-1) / close - 1)               # close T -> open T+1   (overnight; missed at open-exec)
 intr = (close.shift(-1) / openp.shift(-1) - 1)   # open T+1 -> close T+1 (intraday; captured at open-exec)
