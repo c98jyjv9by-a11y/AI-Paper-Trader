@@ -232,24 +232,28 @@ def _asof_signal(d, as_of, cache):
 
 
 def _score_pattern(cur, a5, a20, a60):
-    """Classify a score profile (from the 2018-2026 forward-return study, where the 60-DAY-avg dominates):
-      Top      — 60d-avg >= .70: SUSTAINED top-ranking, the durable sweet spot (+5.7%/20d excess, t=14.6),
-      Emerging — current > .85 with a 60d base >= .55: high now + 60d building (+1.0%/20d, t=5.3),
-      Flash    — current > .85 but 60d < .55: a spike with NO 60d base = head-fake (~0 edge, t=0.9),
-      Chase    — mid .40-.85 with a RISING current score: chasing late momentum = the trap (-0.3%/20d),
-      Reversal — current < .40: beaten-down (z-reversal zone; weak edge),
-      Neutral  — the dead middle."""
+    """Classify the TRAJECTORY of the composite score (60d base -> 20d -> 5d -> 1d/order date), splitting
+    a SUDDEN recent change from a GRADUAL trend. Two legs: recent = 1d - 20d (latest vs the ~monthly
+    baseline) and base = 20d - 60d (the ~monthly vs ~quarterly trend):
+      Surging  — sudden recent JUMP up (1d well above the 20d baseline),
+      Dropping — sudden recent DROP (1d well below the 20d baseline),
+      Climbing — gradual rise (20d above 60d), no sudden recent move,
+      Fading   — gradual decline (20d below 60d), no sudden recent move,
+      Stable   — flat across the 60d->1d trajectory."""
     if cur is None:
         return "—"
-    a60 = a60 if a60 is not None else cur
-    if a60 >= 0.70:
-        return "Top"
-    if cur > 0.85:
-        return "Emerging" if a60 >= 0.55 else "Flash"
-    if cur < 0.40:
-        return "Reversal"
-    trend = (a5 if a5 is not None else cur) - (a20 if a20 is not None else cur)
-    return "Chase" if trend > 0.05 else "Neutral"
+    a20 = a20 if a20 is not None else cur
+    a60 = a60 if a60 is not None else a20
+    recent, base = cur - a20, a20 - a60        # latest-vs-monthly (suddenness), monthly-vs-quarterly (trend)
+    if recent > 0.12:
+        return "Surging"
+    if recent < -0.12:
+        return "Dropping"
+    if base > 0.05:
+        return "Climbing"
+    if base < -0.05:
+        return "Fading"
+    return "Stable"
 
 
 def _trail_avg(scenario, as_of, cache):
@@ -585,9 +589,9 @@ def _render_account(pdf, d, bench=None, snapshots=None, sig_cache=None, trail_ca
             if o.get("ret") is not None:
                 tbl[r, 8].set_text_props(color=(GREEN if o["ret"] >= 0 else RED), weight="bold")
             tbl[r, 10].set_text_props(color="#555")            # trailing avgs (muted)
-            pat = _patterncell(o)                              # color the pattern by the study's read
-            tbl[r, 11].set_text_props(weight="bold", color=(GREEN if pat in ("Top", "Emerging")
-                                      else RED if pat in ("Chase", "Flash") else "#555"))
+            pat = _patterncell(o)                              # color by trajectory direction (rising/falling)
+            tbl[r, 11].set_text_props(weight="bold", color=(GREEN if pat in ("Surging", "Climbing")
+                                      else RED if pat in ("Dropping", "Fading") else "#555"))
             if o.get("status") != "filled":
                 tbl[r, 12].set_text_props(color=GREY, style="italic")
             tbl[r, 13].set_text_props(color="#555", style="italic")
@@ -605,9 +609,10 @@ def _render_account(pdf, d, bench=None, snapshots=None, sig_cache=None, trail_ca
                  "lowest=#1; score-rebalance: 60d-avg score; model_v4: composite).  Trail 1/5/10/20/60d = the 1-day "
                  "(current) close composite score + its trailing 5/10/20/60-day averages (0.xx shown as .xx).",
                  fontsize=6.3, color="#555")
-        fig.text(0.02, 0.915, "Pattern (2018-26 fwd-return study; the 60d-avg dominates): Top (60d>=.70 sustained "
-                 "leader = sweet spot, green) · Emerging (cur>.85 + 60d>=.55, green) · Flash (cur>.85 but 60d<.55 = "
-                 "head-fake, red) · Chase (mid + rising = trap, red) · Reversal (<.40) · Neutral.  Times in CT.",
+        fig.text(0.02, 0.915, "Pattern = composite-score TRAJECTORY (60d->20d->5d->1d): recent leg (1d - 20d) flags a "
+                 "SUDDEN move, base leg (20d - 60d) the gradual trend.  Surging (sudden jump up, green) · Climbing "
+                 "(gradual rise, green) · Stable · Fading (gradual decline, red) · Dropping (sudden drop, red).  "
+                 "Color = trend direction (note: fwd returns MEAN-REVERT — drops/fades bounce, climbs fade).  Times in CT.",
                  fontsize=6.3, color="#555")
         pdf.savefig(fig); plt.close(fig)
         if not rest:
