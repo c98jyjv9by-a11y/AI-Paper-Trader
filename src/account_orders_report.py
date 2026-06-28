@@ -231,10 +231,31 @@ def _asof_signal(d, as_of, cache):
     return out
 
 
+def _score_pattern(cur, a5, a20, a60):
+    """Classify a score profile (from the 2018-2026 forward-return study, where the 60-DAY-avg dominates):
+      Top      — 60d-avg >= .70: SUSTAINED top-ranking, the durable sweet spot (+5.7%/20d excess, t=14.6),
+      Emerging — current > .85 with a 60d base >= .55: high now + 60d building (+1.0%/20d, t=5.3),
+      Flash    — current > .85 but 60d < .55: a spike with NO 60d base = head-fake (~0 edge, t=0.9),
+      Chase    — mid .40-.85 with a RISING current score: chasing late momentum = the trap (-0.3%/20d),
+      Reversal — current < .40: beaten-down (z-reversal zone; weak edge),
+      Neutral  — the dead middle."""
+    if cur is None:
+        return "—"
+    a60 = a60 if a60 is not None else cur
+    if a60 >= 0.70:
+        return "Top"
+    if cur > 0.85:
+        return "Emerging" if a60 >= 0.55 else "Flash"
+    if cur < 0.40:
+        return "Reversal"
+    trend = (a5 if a5 is not None else cur) - (a20 if a20 is not None else cur)
+    return "Chase" if trend > 0.05 else "Neutral"
+
+
 def _trail_avg(scenario, as_of, cache):
-    """{ticker: (avg5, avg10, avg20)} — trailing 5/10/20-TRADING-DAY averages of the daily CLOSE composite
-    score, ending at `as_of`. Recomputes the daily cross-sectional composite (the rankings snapshots are too
-    sparse for a 20-day window), then rolls. Deterministic from price history; cached per (scenario, date)."""
+    """{ticker: (cur, avg5, avg10, avg20, avg60)} — the 1-DAY (current-close) composite score plus its
+    trailing 5/10/20/60-TRADING-DAY averages, ending at `as_of`. Recomputes the daily cross-sectional
+    composite (the rankings snapshots are too sparse), then rolls. Cached per (scenario, date)."""
     key = (scenario, as_of)
     if key in cache:
         return cache[key]
@@ -249,15 +270,16 @@ def _trail_avg(scenario, as_of, cache):
         uni, w = cfg["tickers"], cfg["signals"].get("weights")
         tw = _build_ticker_weights(cfg) or None
         end = _dt.date.fromisoformat(as_of)
-        pdata = fetch_backtest_data(uni, end - _dt.timedelta(days=20 * 2 + 420), end)
+        pdata = fetch_backtest_data(uni, end - _dt.timedelta(days=60 * 2 + 420), end)
         pdata = pdata[pdata.index <= pd.Timestamp(end)]
         rows = [dict(zip(rf["ticker"], rf["composite_score"]))
-                for ts in pdata["Close"].index[-20:]
+                for ts in pdata["Close"].index[-60:]
                 for rf in [rank_candidates(calculate_signals(pdata.loc[:ts].iloc[-_SIGNAL_WINDOW:], uni),
                                            top_n=len(uni), weights=w, ticker_weights=tw)]]
         sdf = pd.DataFrame(rows)
-        a5, a10, a20 = sdf.tail(5).mean(), sdf.tail(10).mean(), sdf.tail(20).mean()
-        out = {t: (a5.get(t), a10.get(t), a20.get(t)) for t in sdf.columns}
+        cur = sdf.iloc[-1]
+        a5, a10, a20, a60 = (sdf.tail(n).mean() for n in (5, 10, 20, 60))
+        out = {t: (cur.get(t), a5.get(t), a10.get(t), a20.get(t), a60.get(t)) for t in sdf.columns}
     except Exception:
         out = {}
     cache[key] = out
@@ -487,15 +509,15 @@ def _render_account(pdf, d, bench=None, snapshots=None, sig_cache=None, trail_ca
     kind = d.get("kind")
     dec_log = d.get("dec_log") or {}
     ocols = ["Filled (CT)", "Side", "Symbol", "FillQty", "Fill px", "Value", "Rlz $", "Unrlz $", "Ret %",
-             "Score@sub", "Trail 5/10/20d", "Status", "Reason"]
-    oraw = [10, 4, 6, 5, 7, 7, 7, 7, 6, 8, 11, 7, 11]
+             "Score@sub", "Trail 1/5/10/20/60d", "Pattern", "Status", "Reason"]
+    oraw = [10, 4, 6, 5, 7, 7, 7, 7, 6, 8, 16, 9, 7, 11]
     ow = [w / sum(oraw) for w in oraw]
     realized_sum = sum(o["rlz"] for o in orders if o.get("rlz") is not None)
     unrlz_sum = sum(o["unrlz"] for o in orders if o.get("unrlz") is not None)
     value_sum = sum(o["filled_qty"] * o["fill_price"] for o in orders
                     if o.get("fill_price") and o.get("filled_qty"))
     # account-wide TOTAL row (shown atop every page of this history): gross filled value + Σ Rlz/Unrlz
-    total_row = ["TOTAL", "", "", "", "", _money(value_sum), _money(realized_sum), _money(unrlz_sum), "", "", "", "", ""]
+    total_row = ["TOTAL", "", "", "", "", _money(value_sum), _money(realized_sum), _money(unrlz_sum), "", "", "", "", "", ""]
 
     def _scorecell(o):                                       # the book's OWN selection metric the batch was submitted under
         sym, side = o.get("symbol", ""), (o.get("side") or "").lower()
@@ -520,12 +542,19 @@ def _render_account(pdf, d, bench=None, snapshots=None, sig_cache=None, trail_ca
             return "—"
         return ("%.2f #%d" % (sc, rk)) if rk else ("%.2f" % sc)
 
-    def _trailcell(o):                                       # trailing 5/10/20d avg of the close composite score
+    def _trail(o):                                          # (cur, a5, a10, a20) composite scores at order date
         dt = _et_date(o.get("submitted_at") or o.get("filled_at"))
-        a = _trail_avg(d.get("scenario", "model_v4"), dt, trail_cache).get(o.get("symbol", "")) if dt else None
+        return _trail_avg(d.get("scenario", "model_v4"), dt, trail_cache).get(o.get("symbol", "")) if dt else None
+
+    def _trailcell(o):                                      # 1/5/10/20-day trailing close composite scores
+        a = _trail(o)
         if not a or a[0] is None:
             return "—"
-        return "/".join(("%.2f" % v).lstrip("0") if v is not None else "—" for v in a)   # e.g. .79/.77/.74
+        return "/".join(("%.2f" % v).lstrip("0") if v is not None else "—" for v in a)   # e.g. .81/.80/.86/.76
+
+    def _patterncell(o):                                    # pattern category from score level + trend + 60d base
+        a = _trail(o)
+        return _score_pattern(a[0], a[1], a[3], a[4]) if a else "—"
 
     def _orow(o):
         fp = o.get("fill_price")
@@ -537,7 +566,7 @@ def _render_account(pdf, d, bench=None, snapshots=None, sig_cache=None, trail_ca
                 _money(rlz) if rlz is not None else "—",
                 _money(unrlz) if unrlz is not None else "—",
                 _pct(ret) if ret is not None else "—",
-                _scorecell(o), _trailcell(o), o.get("status", ""), _order_reason(o, kind, dec_log)]
+                _scorecell(o), _trailcell(o), _patterncell(o), o.get("status", ""), _order_reason(o, kind, dec_log)]
 
     def _color_orders(tbl, chunk, offset):                   # `offset` = table row of the first order
         # style the TOTAL header-data row (always at table row 1) once
@@ -556,9 +585,12 @@ def _render_account(pdf, d, bench=None, snapshots=None, sig_cache=None, trail_ca
             if o.get("ret") is not None:
                 tbl[r, 8].set_text_props(color=(GREEN if o["ret"] >= 0 else RED), weight="bold")
             tbl[r, 10].set_text_props(color="#555")            # trailing avgs (muted)
+            pat = _patterncell(o)                              # color the pattern by the study's read
+            tbl[r, 11].set_text_props(weight="bold", color=(GREEN if pat in ("Top", "Emerging")
+                                      else RED if pat in ("Chase", "Flash") else "#555"))
             if o.get("status") != "filled":
-                tbl[r, 11].set_text_props(color=GREY, style="italic")
-            tbl[r, 12].set_text_props(color="#555", style="italic")
+                tbl[r, 12].set_text_props(color=GREY, style="italic")
+            tbl[r, 13].set_text_props(color="#555", style="italic")
 
     rest, page, npages = orders, 1, max(1, (len(orders) + ORDERS_PER_PAGE - 1) // ORDERS_PER_PAGE)
     while rest or page == 1:                                  # always emit at least one (possibly empty) page
@@ -566,15 +598,17 @@ def _render_account(pdf, d, bench=None, snapshots=None, sig_cache=None, trail_ca
         sub = "order history (newest first)" + ("" if npages == 1 else " — page %d/%d" % (page, npages))
         fig = _new_page(pdf, title, sub=sub)
         cells = ([total_row] + [_orow(o) for o in chunk]) if orders else []   # TOTAL row pinned at the top
-        _, ot = _table(fig, [0.03, 0.05, 0.94, 0.84], ocols, cells, ow, fontsize=6.2)
+        _, ot = _table(fig, [0.02, 0.05, 0.96, 0.84], ocols, cells, ow, fontsize=5.5)
         if ot is not None:
             _color_orders(ot, chunk, offset=2)               # order rows start after header(0)+TOTAL(1)
-        fig.text(0.02, 0.92, "TOTAL row = account-wide gross filled Value + Σ Rlz/Unrlz.  Rlz/Unrlz = realized on "
-                 "SELLs / held BUYs marked to price.  Score@sub = the book's OWN selection metric #rank as-of the "
-                 "order's date (zscore: z #rank, lowest=#1; score-rebalance: 60d-avg score #rank; model_v4: composite "
-                 "#rank).  Trail 5/10/20d = trailing 5/10/20-trading-day averages of the daily CLOSE composite score "
-                 "(0.xx shown as .xx; '—' for overlay/unscored).  Reason = the logged rule.  Times in CT.",
-                 fontsize=6.5, color="#555")
+        fig.text(0.02, 0.93, "Score@sub = the book's OWN selection metric #rank as-of the order's date (zscore: z, "
+                 "lowest=#1; score-rebalance: 60d-avg score; model_v4: composite).  Trail 1/5/10/20/60d = the 1-day "
+                 "(current) close composite score + its trailing 5/10/20/60-day averages (0.xx shown as .xx).",
+                 fontsize=6.3, color="#555")
+        fig.text(0.02, 0.915, "Pattern (2018-26 fwd-return study; the 60d-avg dominates): Top (60d>=.70 sustained "
+                 "leader = sweet spot, green) · Emerging (cur>.85 + 60d>=.55, green) · Flash (cur>.85 but 60d<.55 = "
+                 "head-fake, red) · Chase (mid + rising = trap, red) · Reversal (<.40) · Neutral.  Times in CT.",
+                 fontsize=6.3, color="#555")
         pdf.savefig(fig); plt.close(fig)
         if not rest:
             break
