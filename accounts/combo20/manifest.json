@@ -31,7 +31,8 @@
     "top_refresh": "monthly",
     "bottom_n": 10,
     "bottom_lookback_days": 5,
-    "bottom_refresh": "weekly"
+    "bottom_refresh": "weekly",
+    "min_score": 0.7
   },
   "live_value": 99954.0
 }

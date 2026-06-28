@@ -515,7 +515,9 @@ def _combo_targets(scenario: str, cli: ba.AlpacaPaper, current: Dict[str, float]
     anchor = cal[-1] if force else _period_anchor(cal, tm.get("top_refresh", "monthly"))
     vb = _valid_before(cli)                                         # rank off real prices, never a phantom bar
     ta = _lookback_avg_scores(scenario, int(tm.get("top_lookback_days", 60)), as_of=anchor, valid_before=vb)
-    top = [t for t in sorted(ta, key=lambda k: ta[k], reverse=True) if pd.notna(ta[t])][:top_n]
+    min_score = float(tm.get("min_score", 0.0))                    # Top filter: only sustained leaders (60d-avg >= x)
+    top = [t for t in sorted(ta, key=lambda k: ta[k], reverse=True)
+           if pd.notna(ta[t]) and ta[t] >= min_score][:top_n]
     ba = _lookback_avg_scores(scenario, int(tm.get("bottom_lookback_days", 5)), valid_before=vb)
     bottom = [t for t in sorted(ba, key=lambda k: ba[k]) if pd.notna(ba[t])][:bot_n]
     # refresh the top sleeve only on the month's FIRST weekly rebalance (or when forced / first deploy)
@@ -573,7 +575,11 @@ def _score_rebalance_targets(name: str, cli: ba.AlpacaPaper, current: Dict[str, 
     ranked = [t for t in sorted(avg, key=lambda k: avg[k], reverse=True) if pd.notna(avg[t])]
     rank_of = {t: i + 1 for i, t in enumerate(ranked)}
     top_n, bot_n = int(tm.get("top_n", 10)), int(tm.get("bottom_n", 0))
-    picks = list(dict.fromkeys(ranked[:top_n] + (ranked[-bot_n:] if bot_n else [])))
+    # TOP FILTER: only "sustained leaders" — names whose lookback-avg score >= min_score (the validated
+    # .70-.85 sweet spot, +5.7%/20d). Gates the top sleeve to that band; may hold < top_n if fewer clear.
+    min_score = float(tm.get("min_score", 0.0))
+    top_pool = [t for t in ranked if avg[t] >= min_score][:top_n]
+    picks = list(dict.fromkeys(top_pool + (ranked[-bot_n:] if bot_n else [])))
     if not picks:
         return held, {}, {}
     equity = float(cli.account().get("equity") or 0.0)
@@ -1208,6 +1214,9 @@ def _cli(argv=None):
                    help="rebalance frequency for score_rebalance / zscore_reversal (default monthly)")
     p.add_argument("--min-score", type=float, default=0.9,
                    help="score threshold for --target-mode score_gate (default 0.9)")
+    p.add_argument("--top-filter", type=float, default=0.0,
+                   help="score_rebalance TOP FILTER: only hold names whose lookback-avg score >= this "
+                        "(0 = off; 0.70 = the validated sustained-leadership sweet spot)")
     p.add_argument("--size-pct", type=float, default=0.085,
                    help="per-name size as a fraction of equity for top_n / score_gate (default 0.085)")
     p.add_argument("--source", default="primary",
@@ -1230,7 +1239,8 @@ def _cli(argv=None):
                   "size_pct": a.size_pct, "graduate_at": a.graduate_at}
         elif a.target_mode == "score_rebalance":
             tm = {"kind": "score_rebalance", "lookback_days": a.lookback_days, "top_n": a.top_n,
-                  "bottom_n": a.bottom_n, "rebalance": a.rebalance, "gross": 0.90}
+                  "bottom_n": a.bottom_n, "rebalance": a.rebalance, "gross": 0.90,
+                  "min_score": a.top_filter}
         elif a.target_mode == "zscore_reversal":
             tm = {"kind": "zscore_reversal", "zscore_lookback": a.lookback_days, "avg_window": a.avg_window,
                   "n": a.top_n, "rebalance": a.rebalance, "regime_ma": a.regime_ma, "gross": 0.90}
@@ -1253,9 +1263,11 @@ def _cli(argv=None):
             tmdesc = "score_gate_rampup (buy >%.2f, sell per model_v4, until %.0f%% deployed)" % (
                 tm["min_score"], tm["graduate_at"] * 100)
         elif tm and tm["kind"] == "score_rebalance":
-            tmdesc = "score_rebalance (%s rebal, top-%d%s, %dD-avg score, equal-wt)" % (
+            tmdesc = "score_rebalance (%s rebal, top-%d%s, %dD-avg score, equal-wt%s)" % (
                 tm["rebalance"], tm["top_n"],
-                ("+bottom-%d" % tm["bottom_n"]) if tm["bottom_n"] else "", tm["lookback_days"])
+                ("+bottom-%d" % tm["bottom_n"]) if tm["bottom_n"] else "",
+                tm.get("lookback_days", tm.get("top_lookback_days", 60)),
+                (", Top filter >=%.2f" % tm["min_score"]) if tm.get("min_score") else "")
         elif tm and tm["kind"] == "zscore_reversal":
             tmdesc = "zscore_reversal (%s rebal, bottom-%d by %dd-avg of %dd-z, cash<QQQ %ddMA)" % (
                 tm["rebalance"], tm["n"], tm["avg_window"], tm["zscore_lookback"], tm["regime_ma"])
