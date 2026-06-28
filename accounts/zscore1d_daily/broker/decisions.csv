@@ -17,3 +17,7 @@ asof,symbol,side,qty,limit_price,reason,score,rank,z,pnl,retry
 2026-06-27,NXPI,buy,1,286.23,zscore daily entry: most-fallen #3 (1d-avg z),,3,-2.294,,False
 2026-06-27,ON,buy,1,95.7,zscore daily entry: most-fallen #1 (1d-avg z),,1,-2.597,,False
 2026-06-27,SEDG,sell,171,48.56,zscore daily: rebalance out (z rank 11),,11,-1.434,,False
+2026-06-28,ADI,buy,23,397.24,zscore daily entry: most-fallen #9 (1d-avg z),,9,-1.528,,False
+2026-06-28,NXPI,buy,1,286.23,zscore daily entry: most-fallen #3 (1d-avg z),,3,-2.294,,False
+2026-06-28,ON,buy,1,95.7,zscore daily entry: most-fallen #1 (1d-avg z),,1,-2.597,,False
+2026-06-28,SEDG,sell,171,48.56,zscore daily: rebalance out (z rank 11),,11,-1.439,,False
