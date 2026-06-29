@@ -29,7 +29,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
 from broker_adapter import AlpacaPaper
-from eod_accounts import BLURBS, DEFAULT_ACCOUNTS, _blurb, _money, _pct
+from eod_accounts import BLURBS, DEFAULT_ACCOUNTS, _blurb, _money, _pct, disp
 
 ROOT = Path(__file__).resolve().parent.parent
 GREEN, RED, GREY = "#1a7f37", "#c0392b", "#777"
@@ -570,7 +570,7 @@ def _render_account(pdf, d, bench=None, snapshots=None, sig_cache=None, trail_ca
     trail_cache = trail_cache if trail_cache is not None else {}
     name = d["name"]
     label, blurb = _blurb(name)
-    title = "%s  —  %s" % (name, label)
+    title = "%s  —  %s" % (disp(name), label)
 
     # ── broker error -> a single explanatory page (e.g. placeholder/unset keys) ──
     if d.get("err"):
@@ -681,11 +681,11 @@ def _render_cover(pdf, data, accts, today, bench, mark_note=None):
     for n in accts:
         d = data[n]
         if d.get("err"):
-            cells.append([n, "—", "—", "—", "ERR", "—", "—", "—", "—", "—", "—", "—", "—", "—"])
+            cells.append([disp(n), "—", "—", "—", "ERR", "—", "—", "—", "—", "—", "—", "—", "—", "—"])
             continue
         ok.append(d)
         dpnl, dret = _dp(d)
-        cells.append([n, _money(d["eq"]), _money(d["cash"]), _money(d["start"]), _money(d["total_pnl"]),
+        cells.append([disp(n), _money(d["eq"]), _money(d["cash"]), _money(d["start"]), _money(d["total_pnl"]),
                       _pct(d["tot_ret"]), dpnl, dret, _bp(n, "QQQ"), _bp(n, "SPY"), _money(d["unreal"]),
                       _money(d["realized_est"]), str(len(d["pos"])), str(len(d["orders"]))])
     if ok:
@@ -917,7 +917,7 @@ def _render_batch_summary(pdf, data, accts, today):
     araw = [16, 12, 5, 11, 10, 10, 9, 9, 6]
 
     def _acells(r, is_total):
-        return [("TOTAL" if is_total else r["account"]), ("" if is_total else _sess(r)), str(r["n"]),
+        return [("TOTAL" if is_total else disp(r["account"])), ("" if is_total else _sess(r)), str(r["n"]),
                 _m(r, "invested"), _m(r, "realized"), _m(r, "unreal"), _m(r, "avgwin"), _m(r, "avglose"), _hit(r)]
     _render_summary_table(pdf, "Trade Summary — by account & session phase", today,
                           acols, araw, acct_rows, total, _acells)

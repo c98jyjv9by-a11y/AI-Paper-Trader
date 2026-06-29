@@ -60,7 +60,7 @@ def _book_view(scenario: str, end: Optional[date], account: Optional[str] = None
     pdf: Optional[Path] = None
     if want_pdf:
         pdf = pdf_report.build_pdf(d, cfg, pdf_report.report_path(scenario, account, d["mark"]))
-    label = MS._account_label(account, man) if account else f"{scenario} · scenario"
+    label = MS.disp(account) if account else f"{scenario} · scenario"
     return d, label, pdf
 
 
@@ -87,7 +87,7 @@ def build_summary(end: Optional[date] = None, accounts: Optional[List[str]] = No
                 "pdf": str(pdf) if pdf else None,
             })
         except Exception as e:                       # one bad book shouldn't sink the summary
-            rows.append({"label": (acct or scen), "account": acct,
+            rows.append({"label": (MS.disp(acct) if acct else scen), "account": acct,
                          "error": f"{type(e).__name__}: {e}"})
     return rows
 

@@ -42,7 +42,7 @@ import account_orders_report as AO
 from account_orders_report import (
     _collect, _bench_panel, _bench, _load_rank_snapshots,
     _order_builders, _order_total_row, _color_orders, _table, _new_page,
-    ORDER_COLS, ORDER_RAW, _money, _pct, DEFAULT_ACCOUNTS, GREEN, RED, GREY,
+    ORDER_COLS, ORDER_RAW, _money, _pct, DEFAULT_ACCOUNTS, GREEN, RED, GREY, disp,
 )
 from broker_adapter import AlpacaPaper
 
@@ -198,7 +198,7 @@ def _render_summary(pdf, data, accts, today, panel, ibench, dbench, prior_day, b
     for n in accts:
         d = data[n]
         if d.get("err"):
-            cells.append([n, "—", "—", "—", "ERR", "—", "—", "—", "—", "—", "—"])
+            cells.append([disp(n), "—", "—", "—", "ERR", "—", "—", "—", "—", "—", "—"])
             continue
         ok.append(d)
         ib = ibench.get(n) or {}
@@ -206,7 +206,7 @@ def _render_summary(pdf, data, accts, today, panel, ibench, dbench, prior_day, b
         inv = max(d["eq"] - d["cash"], 0.0)               # invested capital — cash EXCLUDED from the denominator
         dret = (d["day_pnl"] / inv) if (inv > 0 and d.get("day_pnl") is not None) else None
         tret = (d["total_pnl"] / inv) if inv > 0 else None
-        cells.append([n, _money(d["eq"]),
+        cells.append([disp(n), _money(d["eq"]),
                       _money(d["day_pnl"]) if d.get("day_pnl") is not None else "—", _b(dret),
                       _money(d["total_pnl"]), _b(tret), _b(ib.get("QQQ")), _b(ib.get("SPY")),
                       str(len(d["pos"])), str(len(d["orders"])), str(days) if days is not None else "—"])
@@ -293,7 +293,7 @@ def _render_orders_by_account(pdf, data, accts, today, win_start, win_end, win_l
     for n in accts:
         d = data[n]
         if d.get("err"):
-            cells.append([n, "—", "—", "—", "—", "—", "—", "—"]); meta.append(None); continue
+            cells.append([disp(n), "—", "—", "—", "—", "—", "—", "—"]); meta.append(None); continue
         td = _today_orders(d["orders"], win_start, win_end)
         nb = sum(1 for o in td if (o.get("side") or "").lower() == "buy")
         ns = sum(1 for o in td if (o.get("side") or "").lower() == "sell")
@@ -301,7 +301,7 @@ def _render_orders_by_account(pdf, data, accts, today, win_start, win_end, win_l
         val = sum(o["filled_qty"] * o["fill_price"] for o in td if o.get("fill_price") and o.get("filled_qty"))
         rlz = sum(o["rlz"] for o in td if o.get("rlz") is not None)
         unrlz = sum(o["unrlz"] for o in td if o.get("unrlz") is not None)
-        cells.append([n, str(len(td)), str(nb), str(ns), str(nf), _money(val), _money(rlz), _money(unrlz)])
+        cells.append([disp(n), str(len(td)), str(nb), str(ns), str(nf), _money(val), _money(rlz), _money(unrlz)])
         meta.append((rlz, unrlz))
         for k, v in (("orders", len(td)), ("buys", nb), ("sells", ns), ("filled", nf),
                      ("value", val), ("rlz", rlz), ("unrlz", unrlz)):
@@ -352,7 +352,7 @@ def _render_orders_today(pdf, data, accts, today, win_start, win_end, win_lbl, s
         while rest:
             chunk, rest = rest[:ORDERS_PER_PAGE], rest[ORDERS_PER_PAGE:]
             sub = "Orders Today — %s%s" % (win_lbl, "" if npages == 1 else "  (page %d/%d)" % (page, npages))
-            fig = _new_page(pdf, "Orders Today — %s  (%d)" % (n, len(todays)), sub=sub)
+            fig = _new_page(pdf, "Orders Today — %s  (%d)" % (disp(n), len(todays)), sub=sub)
             cells = [total_row] + [_orow(o) for o in chunk]
             _, ot = _table(fig, [0.02, 0.05, 0.96, 0.84], ORDER_COLS, cells, ow, fontsize=5.5)
             if ot is not None:

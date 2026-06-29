@@ -52,6 +52,25 @@ BLURBS = {
 }
 DEFAULT_ACCOUNTS = list(BLURBS)
 
+# Friendly display names shown for each account IN REPORTS (the internal keys / manifests / .env are
+# unchanged). Single source of truth — every report labels accounts via `disp()`.
+DISPLAY = {
+    "topten": "Seed Top 10",
+    "copymodel": "Seed Model 10",
+    "rampup": "Seed Realistic Ramp-up",
+    "monthly10": "Top-60D-Monthly",
+    "weekly10": "Top-60D-Weekly",
+    "combo20": "Top-60D+Btm-5D",
+    "zscore10d_biweekly": "zReversion-10D",
+    "zscore5d_weekly": "zReversion-5D",
+    "zscore1d_daily": "zReversion-1D",
+}
+
+
+def disp(name):
+    """Friendly report display name for an account key (falls back to the raw key if unmapped)."""
+    return DISPLAY.get(name, name)
+
 
 def _blurb(name):
     if name in BLURBS:
@@ -134,9 +153,9 @@ def run(accounts=None, end=None, out=None):
         for n in accts:
             d, label = data[n], textwrap.fill(_blurb(n)[0], 24)
             if d.get("err"):
-                cells.append([n, label, "—", "—", "ERR", "—", "—", "—", "—", "—"])
+                cells.append([disp(n), label, "—", "—", "ERR", "—", "—", "—", "—", "—"])
             else:
-                cells.append([n, label, _money(d["eq"]), _money(d["cash"]), _money(d["day_pnl"]),
+                cells.append([disp(n), label, _money(d["eq"]), _money(d["cash"]), _money(d["day_pnl"]),
                               _pct(_dayinv(d)), _pct(d["tot_ret"]),
                               (str(d["days"]) if d.get("days") is not None else "—"),
                               str(len(d["pos"])), str(len(d["fills"]))])
@@ -194,7 +213,7 @@ def run(accounts=None, end=None, out=None):
         y = 0.92
         for n in accts:
             label, blurb = _blurb(n)
-            ax2.text(0, y, "%s  —  %s" % (n, label), fontsize=8.5, weight="bold", va="top"); y -= 0.045
+            ax2.text(0, y, "%s  —  %s" % (disp(n), label), fontsize=8.5, weight="bold", va="top"); y -= 0.045
             for line in textwrap.wrap(blurb, 130):
                 ax2.text(0.02, y, line, fontsize=7.5, va="top", color="#333"); y -= 0.038
             y -= 0.02
@@ -211,7 +230,7 @@ def run(accounts=None, end=None, out=None):
         y = 1.0
         for n in accts:
             d = data[n]
-            ax.text(0, y, "%s  (%s)" % (n, _blurb(n)[0]), fontsize=10, weight="bold", va="top"); y -= 0.04
+            ax.text(0, y, "%s  (%s)" % (disp(n), _blurb(n)[0]), fontsize=10, weight="bold", va="top"); y -= 0.04
             if d.get("err"):
                 ax.text(0.03, y, "broker error: %s" % d["err"], fontsize=8, color=RED, va="top"); y -= 0.05
                 continue
