@@ -97,16 +97,22 @@ account uses it. Older/experimental versions (v2, v3, v5, v6) and one-off script
   (model_v4 reference vs live accounts) incl. a realized **Hedge P&L** column. `src/snapshot.py` (`run.py snapshot
   [--end …] [--accounts …]`) renders the daily **snapshot** PDF (`reports/snapshot_<date>.pdf`) across ALL broker
   accounts: **page 1** is a summary table (the order-history cover, re-cut) showing each account's **current-day P&L
-  so far** (equity − prior-close equity) + **Day %** vs the **daily QQQ/SPY benchmark move** (the market's prior-close→now
-  return, one market-wide number), then **Since-Inception P&L + % vs inception-aligned QQQ/SPY** (each account's own
-  start→today window), plus **#positions / #orders / #days-trading**, with a TOTAL row (Day % = Σ day P&L ÷ Σ prior-close
-  equity; inception benchmark = starting-weighted blend). **Page 2+ = "Orders Today"**: one page per account of every
-  order whose submission falls in the CURRENT session window — from the **prior trading day's market close (16:00 ET)
-  through now** (so the post-close EOD-agent fills + the pre-open auction orders are included) — shown with the SAME
-  per-order stats columns as the order-history report (Score@sub / Trail 1/5/10/20/60d / Pattern / Rlz / Unrlz / Ret /
-  Reason). The order-row builders + coloring are **shared** with `account_orders_report.py` (`_order_builders`,
-  `_order_total_row`, `_color_orders`, `ORDER_COLS/ORDER_RAW`) so the two reports never drift. (The old "performance
-  snapshot — 3 ways to implement model_v4" view is replaced by this report.)
+  so far** (equity − prior-close equity) + **Day %**, then **Since-Inception P&L + %** and **inception-aligned QQQ/SPY**
+  (each account's own start→today window), plus **#positions / #orders / #days-trading** and a TOTAL row. **Account
+  returns (Day % / Incep %) are on INVESTED capital — P&L ÷ (equity − cash), cash EXCLUDED** (matches eod_accounts'
+  "Day % inv") so they're comparable to the fully-invested benchmarks. **Below TOTAL sit three benchmark rows — QQQ,
+  SPY, and the equal-weight model_v4 Universe average** — each with its daily return (prior-close→now) and its
+  since-inception return (starting-weighted across the fleet). **Page 2 = "Orders Today, totals by account"**: a
+  per-account roll-up (orders / buys / sells / filled / traded $ / realized / unrealized) of the current session
+  window — no per-ticker detail. **Page 3+ = "Orders Today"** per-account detail: every order whose submission falls in
+  the CURRENT session window — from the **prior trading day's market close (16:00 ET) through now** (so the post-close
+  EOD-agent fills + the pre-open auction orders are included) — shown with the SAME per-order stats columns as the
+  order-history report (Score@sub / Trail 1/5/10/20/60d / Pattern / Rlz / Unrlz / Ret / **Held** / Reason). The order-row
+  builders + coloring are **shared** with `account_orders_report.py` (`_order_builders`, `_order_total_row`,
+  `_color_orders`, `ORDER_COLS/ORDER_RAW`) so the two reports never drift. **`Held` = days the order's shares were/are
+  held** (a held BUY → its fill date→today; a SELL → the position's entry→the sell), computed in `_annotate_trade_pnl`
+  and shown in BOTH this report and the order-history report. (The old "performance snapshot — 3 ways to implement
+  model_v4" view is replaced by this report.)
   `src/intraday_check.py` (`run.py intraday-check [--accounts …] [--extended-hours] [--summary] [--qqq/--spread/--vol-z
   what-if]`) is the one-shot **intraday trade-determination** check: live overlay signals (rebound + hedge — fire/idle
   + gate values) and the **dry-run order plan** for each account (model reconcile + overlay buy with its funding), read-only.
