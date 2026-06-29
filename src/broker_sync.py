@@ -69,6 +69,35 @@ def _broker_dir(name: str) -> Path:
     return d
 
 
+# Cadence-rebalance books trade on a fixed calendar (first day of week/month, etc.), so they must
+# submit AT MOST ONCE per day — re-running the rebalance intraday re-scores off the moving live bar,
+# producing an unstable target that trades against itself (the zscore1d_daily self-churn bug).
+_CADENCE_KINDS = ("score_rebalance", "zscore_reversal", "options")
+
+
+def _is_cadence_account(man: Optional[Dict[str, Any]]) -> bool:
+    return (man or {}).get("target_mode", {}).get("kind") in _CADENCE_KINDS
+
+
+def _rebalance_marker(name: str) -> Path:
+    return _acct_dir(name) / "broker" / "last_rebalance.txt"        # path only — no mkdir on read
+
+
+def _already_rebalanced_today(name: str, asof: str) -> bool:
+    f = _rebalance_marker(name)
+    try:
+        return f.exists() and f.read_text().strip() == asof
+    except Exception:
+        return False
+
+
+def _mark_rebalanced(name: str, asof: str) -> None:
+    try:
+        f = _rebalance_marker(name); f.parent.mkdir(parents=True, exist_ok=True); f.write_text(asof)
+    except Exception:
+        pass
+
+
 # ── pure cores (unit-testable, no broker) ──────────────────────────────────────────
 def compute_slippage(fills: List[Dict[str, Any]], refs: Dict[str, float]) -> pd.DataFrame:
     """Realized slippage per fill vs its decision reference price.
@@ -1168,6 +1197,12 @@ def submit_session(name: str, cli: ba.AlpacaPaper = None, submit: bool = False,
     asof = clk.get("timestamp", _utcnow())[:10]
     man = load_manifest(name) or {}
     is_opt = _is_options_account(man)
+    if submit and _is_cadence_account(man):                       # one rebalance per ET day
+        import os as _os
+        _force = _os.environ.get("BROKER_REBALANCE_FORCE_TODAY", "").lower() in ("1", "yes", "true")
+        if not _force and _already_rebalanced_today(name, asof):
+            return {"asof": asof, "n_orders": 0, "submitted": 0, "dry_run": True, "blocked": True,
+                    "reason": "already rebalanced today (one run per day)", "orders": [], "suppressed": []}
     current = {p["ticker"]: p["qty"] for p in cli.positions()}
     targets, _refpx, decisions = compute_targets(name, cli, current)
     # No-trade deadband: snap away tiny resizes (<= min_resize_shares) of names we're KEEPING (both sides
@@ -1245,6 +1280,8 @@ def submit_session(name: str, cli: ba.AlpacaPaper = None, submit: bool = False,
     results = [cli.submit({k: v for k, v in o.items() if not k.startswith("_")}, confirm=submit)
                for o in orders]
     sent = sum(1 for r in results if not r.get("dry_run"))
+    if submit and sent > 0 and _is_cadence_account(man):         # mark done -> block intraday re-triggers
+        _mark_rebalanced(name, asof)
     return {"asof": asof, "n_orders": len(orders), "submitted": sent,
             "dry_run": sent == 0, "window": win["reason"], "orders": orders, "suppressed": suppressed}
 
