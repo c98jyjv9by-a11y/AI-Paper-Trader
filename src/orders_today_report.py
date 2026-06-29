@@ -29,7 +29,7 @@ warnings.filterwarnings("ignore")
 from broker_adapter import AlpacaPaper
 import broker_sync as bs
 import positions_report as pr
-from positions_report import _money, _draw_table, _avg_quad, _ret_quad, _entry_dates
+from positions_report import _money, _avg_quad, _ret_quad, _entry_dates
 from intraday_check import _build_enrichment, _pct, _sc
 from account_orders_report import (_score_pattern, _et_date, _load_decision_log, _order_reason,
                                    _annotate_trade_pnl)
@@ -38,6 +38,70 @@ from eod_accounts import disp
 ROOT = Path(__file__).resolve().parent.parent
 GREEN, RED, GREY, HEAD, ENTRY_HEAD = pr.GREEN, pr.RED, pr.GREY, pr.HEAD, pr.ENTRY_HEAD
 DEFAULT_ACCOUNTS = pr.DEFAULT_ACCOUNTS
+BLUE = "#2563eb"
+_TREND_UP = {"Climbing", "Surging"}      # score trajectory rising
+_TREND_DN = {"Dropping", "Fading"}       # score trajectory falling
+
+
+def _score_color(sc):
+    """Threshold colors for a composite score: >0.85 green · 0.70-0.85 blue · 0.40-0.70 none · <0.40 red."""
+    if sc is None:
+        return None
+    if sc > 0.85:
+        return GREEN
+    if sc >= 0.70:
+        return BLUE
+    if sc >= 0.40:
+        return None
+    return RED
+
+
+def _trend_color(trend, is_rev):
+    """Trend text color. Momentum books: rising=green, falling=red. REVERSION books invert (a falling/
+    oversold name is what they want to BUY -> green; an already-surged name -> red). Stable = grey."""
+    if trend == "Stable":
+        return GREY
+    if trend in _TREND_UP:
+        return RED if is_rev else GREEN
+    if trend in _TREND_DN:
+        return GREEN if is_rev else RED
+    return None
+
+
+def _stat_rules(rowidx, e, is_rev, score_col, trend_col, rules):
+    """Append (non-bold) color rules for a single Score cell + a Trend cell from one enrichment dict."""
+    if not e:
+        return
+    c = _score_color(e.get("score"))
+    if c:
+        rules.append((rowidx, score_col, c, "normal"))
+    c = _trend_color(_trend(e), is_rev)
+    if c:
+        rules.append((rowidx, trend_col, c, "normal"))
+
+
+def _draw_table(ax, cols, cells, colw, color_rules, fontsize=7.0, head_tints=None):
+    """Banded table filling `ax`. color_rules = (row, col, color) [bold] or (row, col, color, weight)."""
+    head_tints = head_tints or {}
+    ax.axis("off")
+    if not cells:
+        ax.text(0.0, 0.95, "— none —", fontsize=8, color=GREY, va="top")
+        return
+    t = ax.table(cellText=cells, colLabels=cols, colWidths=colw, loc="upper center",
+                 cellLoc="center", bbox=[0, 0, 1, 1])
+    t.auto_set_font_size(False)
+    t.set_fontsize(fontsize)
+    for j in range(len(cols)):
+        c = t[0, j]; c.set_facecolor(head_tints.get(j, HEAD))
+        c.set_text_props(color="white", weight="bold"); c.set_fontsize(fontsize - 0.2)
+    for i in range(len(cells)):
+        if i % 2:
+            for j in range(len(cols)):
+                t[i + 1, j].set_facecolor("#f2f4f6")
+    for rule in color_rules:
+        i, j, color = rule[0], rule[1], rule[2]
+        weight = rule[3] if len(rule) > 3 else "bold"
+        t[i + 1, j].set_text_props(color=color, weight=weight)
 
 
 def _trend(e):
@@ -87,6 +151,7 @@ def _collect(name, today):
 
 def _account_page(pdf, d, enrich, entry_enrich, today):
     name = d["name"]
+    is_rev = d.get("kind") == "zscore_reversal"
     fig = plt.figure(figsize=(11, 8.5))
     if d.get("err"):
         fig.suptitle("%s — broker error" % disp(name), fontsize=13, weight="bold")
@@ -120,6 +185,8 @@ def _account_page(pdf, d, enrich, entry_enrich, today):
                        _money(p["market_value"]), "%s (%s)" % (_money(upl), _pct(plpc)),
                        (ed[5:] if ed else "—"), *_entry_stat_cells(ee), *_stat_cells(enrich.get(sym))])
         prules.append((i, 5, GREEN if upl >= 0 else RED))
+        _stat_rules(i, ee, is_rev, 7, 8, prules)                  # @Entry score + trend
+        _stat_rules(i, enrich.get(sym), is_rev, 11, 13, prules)   # Now score + trend
     nrow = max(len(pcells), 1)
     ph = min(0.52, 0.05 + 0.027 * nrow)
     axp = fig.add_axes([0.02, 0.885 - ph, 0.96, ph])
@@ -147,6 +214,7 @@ def _account_page(pdf, d, enrich, entry_enrich, today):
                        ("$%.2f" % float(fp)) if fp else "—", _money(val) if val else "—",
                        *_stat_cells(enrich.get(sym)), reason])
         orules.append((i, 0, GREEN if side == "BUY" else RED))
+        _stat_rules(i, enrich.get(sym), is_rev, 5, 7, orules)
     if rows:
         ocells.append(["TOTAL", "", "", "", _money(tot), "", "", "", "", "", ""])
     oh = min(0.32, 0.04 + 0.026 * max(len(ocells), 1))
@@ -176,6 +244,7 @@ def _summary_page(pdf, data, accts, enrich, today, side):
             rows.append({"acct": disp(n), "sym": sym, "val": ordr["filled_qty"] * ordr["fill_price"],
                          "pnl": (ordr.get("unrlz") if is_buy else ordr.get("rlz")), "e": e,
                          "oneD": (e["ret"].get(1) if (e and e.get("ret")) else None),
+                         "is_rev": (d.get("kind") == "zscore_reversal"),
                          "reason": _order_reason(ordr, d.get("kind"), d.get("dec"))})
     rows.sort(key=lambda r: (r["pnl"] is not None, r["pnl"] if r["pnl"] is not None else 0.0), reverse=True)
 
@@ -195,15 +264,16 @@ def _summary_page(pdf, data, accts, enrich, today, side):
         tv += r["val"]; tp += (pnl or 0.0)
         reason = r["reason"]; reason = (reason[:46] + "…") if len(reason) > 47 else reason
         body.append(([r["acct"], r["sym"], _money(r["val"]), score, rank, _trend(e), avgq, oneD,
-                      _money(pnl) if pnl is not None else "—", reason], pnl))
+                      _money(pnl) if pnl is not None else "—", reason], pnl, e, r["is_rev"]))
     cells, rules = [], []
     if rows:                                              # TOTAL as the TOP row
         cells.append(["TOTAL", "", _money(tv), "", "", "", "", "", _money(tp), ""])
         rules += [(0, 0, HEAD), (0, 2, HEAD), (0, 8, GREEN if tp >= 0 else RED)]
-    for k, (cell, pnl) in enumerate(body):
+    for k, (cell, pnl, e, is_rev) in enumerate(body):
         cells.append(cell)
         if pnl is not None:
             rules.append((k + 1, 8, GREEN if pnl >= 0 else RED))
+        _stat_rules(k + 1, e, is_rev, 3, 5, rules)               # Score col 3, Trend col 5
     h = min(0.84, 0.06 + 0.029 * max(len(cells), 1))
     ax = fig.add_axes([0.03, max(0.05, 0.90 - h), 0.94, h])
     _draw_table(ax, cols, cells, colw, rules, fontsize=6.6)
