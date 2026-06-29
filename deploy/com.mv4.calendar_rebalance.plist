@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- launchd 10:00 Chicago calendar-book rebalance (replaces com.mv4.preopen). Install:
+       cp deploy/com.mv4.calendar_rebalance.plist ~/Library/LaunchAgents/
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mv4.calendar_rebalance.plist
+     Verify: launchctl list | grep mv4   ·   logs: /tmp/mv4_calendar_rebalance.log
+     Fires 10:00 local (Chicago) Mon-Fri; each book self-gates to its own rebalance day (weekly=Mon,
+     biweekly=first Mon of an even ISO week, monthly=month's first trading day). Reruns on wake if asleep. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.mv4.calendar_rebalance</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/david/PyCharmMiscProject/ai-paper-trader/deploy/calendar_rebalance.sh</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>10</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>10</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>10</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>10</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>10</integer><key>Minute</key><integer>0</integer></dict>
+  </array>
+  <key>StandardOutPath</key><string>/tmp/mv4_calendar_rebalance.log</string>
+  <key>StandardErrorPath</key><string>/tmp/mv4_calendar_rebalance.log</string>
+  <key>SoftResourceLimits</key>
+  <dict><key>NumberOfFiles</key><integer>10240</integer></dict>
+  <key>HardResourceLimits</key>
+  <dict><key>NumberOfFiles</key><integer>10240</integer></dict>
+  <key>RunAtLoad</key><false/>
+</dict>
+</plist>

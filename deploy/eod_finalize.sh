@@ -14,9 +14,9 @@ ulimit -n 10240 2>/dev/null || true        # launchd starts with a ~256 fd limit
 PY=/Users/david/PyCharmMiscProject/.venv/bin/python
 ACCTS="topten copymodel rampup monthly10 weekly10 combo20 zscore1d_daily zscore5d_weekly zscore10d_biweekly"
 # Close-traded books: the model_v4 accounts + the DAILY z-score book. The CALENDAR books (weekly10,
-# combo20, zscore5d_weekly, zscore10d_biweekly, monthly10) now rebalance at the OPEN via
-# deploy/preopen_rebalance.sh (com.mv4.preopen, 1 hr before open) — they are NOT traded here, only
-# reconciled + reported below (their open fills are captured by step 2's reconcile).
+# combo20, zscore5d_weekly, zscore10d_biweekly, monthly10) now rebalance at 10:00 Chicago via
+# deploy/calendar_rebalance.sh (com.mv4.calendar_rebalance) — they are NOT traded here, only
+# reconciled + reported below (their fills are captured by step 2's reconcile).
 TRADE_ACCTS="topten copymodel rampup zscore1d_daily"
 TODAY="$(TZ=America/New_York date +%F)"
 echo "===== EOD $TODAY  (run $(date)) ====="
