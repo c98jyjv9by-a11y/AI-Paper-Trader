@@ -388,6 +388,13 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--out", help="output PDF path (default reports/positions_report_<date>.pdf)")
     pr.set_defaults(func=_cmd_positions_report)
 
+    ot = sub.add_parser("orders-today-report",
+                        help="PDF: each account's positions + ALL orders placed today, trend = order-history pattern")
+    ot.add_argument("--accounts", nargs="+", help="override the account list (default: all 9 broker accounts)")
+    ot.add_argument("--end", metavar="YYYY-MM-DD", help="as-of date for labels/filename (default: today)")
+    ot.add_argument("--out", help="output PDF path (default reports/orders_today_<date>.pdf)")
+    ot.set_defaults(func=_cmd_orders_today_report)
+
     oh = sub.add_parser("order-history",
                         help="Combined PDF: each account's full Alpaca order history + positions + P&L (realized/unrealized)")
     oh.add_argument("--accounts", nargs="+", help="override the account list (default: all broker accounts)")
@@ -553,6 +560,12 @@ def _cmd_eod_accounts(args: argparse.Namespace) -> None:
 def _cmd_positions_report(args: argparse.Namespace) -> None:
     import positions_report
     r = positions_report.run(accounts=getattr(args, "accounts", None), end=args.end, out=args.out)
+    print("wrote", r["pdf"])
+
+
+def _cmd_orders_today_report(args: argparse.Namespace) -> None:
+    import orders_today_report
+    r = orders_today_report.run(accounts=getattr(args, "accounts", None), end=args.end, out=args.out)
     print("wrote", r["pdf"])
 
 
