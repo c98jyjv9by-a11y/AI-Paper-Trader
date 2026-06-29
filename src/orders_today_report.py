@@ -134,7 +134,8 @@ _ET_TZ = ZoneInfo("America/New_York")
 
 def _session(o):
     """Session phase of a fill by its ET clock time: extended (pre-market <9:30 / after-hours >=16:00),
-    opening (9:30-9:45, incl. the open auction), intraday (9:45-15:30), closing (15:30-16:00)."""
+    opening (9:30-12:00 — the open auction + the morning rebalance ~11:00 ET), intraday (12:00-15:30),
+    closing (15:30-16:00)."""
     import datetime as _d
     ts = o.get("filled_at") or o.get("submitted_at")
     if not ts:
@@ -146,9 +147,9 @@ def _session(o):
     m = t.hour * 60 + t.minute
     if m < 570 or m >= 960:
         return "extended"
-    if m < 585:
+    if m < 720:                  # 9:30-12:00 ET — open auction + morning rebalance
         return "opening"
-    if m < 930:
+    if m < 930:                  # 12:00-15:30 ET
         return "intraday"
     return "closing"
 
