@@ -19,3 +19,35 @@ asof,symbol,side,qty,limit_price,reason,score,rank,z,pnl,retry
 2026-06-29,MRVL,sell,33,247.4,EXIT — score_rebalance weekly: dropped (rank 1 of 83),0.7772,1,,,False
 2026-06-29,ON,sell,79,87.85,EXIT — score_rebalance weekly: dropped (rank 6 of 83),0.6979,6,,,False
 2026-06-29,PANW,sell,2,295.83,TRIM to target weight — score_rebalance weekly: top #9 of 10 (60d-avg score),0.6507,9,,,False
+2026-06-29,AMAT,buy,13,717.03,OPEN — score_rebalance weekly: top #10 of 10 (60d-avg score),0.6521,10,,,False
+2026-06-29,AMD,sell,17,489.69,EXIT — score_rebalance weekly: dropped (rank 2 of 83),0.7353,2,,,False
+2026-06-29,ARM,sell,25,313.78,EXIT — score_rebalance weekly: dropped (rank 5 of 83),0.7026,5,,,False
+2026-06-29,ASML,buy,4,1921.26,OPEN — score_rebalance weekly: top #23 of 10 (60d-avg score),0.5683,23,,,False
+2026-06-29,CRWD,buy,12,761.02,OPEN — score_rebalance weekly: top #14 of 10 (60d-avg score),0.6221,14,,,False
+2026-06-29,DDOG,buy,36,252.66,OPEN — score_rebalance weekly: top #16 of 10 (60d-avg score),0.6053,16,,,False
+2026-06-29,DELL,sell,20,373.54,EXIT — score_rebalance weekly: dropped (rank 7 of 83),0.6785,7,,,False
+2026-06-29,FTNT,buy,57,160.56,OPEN — score_rebalance weekly: top #12 of 10 (60d-avg score),0.6322,12,,,False
+2026-06-29,INTC,buy,3,131.03,ADD to target weight — score_rebalance weekly: top #4 of 10 (60d-avg score),0.7164,4,,,False
+2026-06-29,KLAC,sell,3,249.56,TRIM to target weight — score_rebalance weekly: top #11 of 10 (60d-avg score),0.6429,11,,,False
+2026-06-29,LRCX,sell,4,393.65,TRIM to target weight — score_rebalance weekly: top #8 of 10 (60d-avg score),0.6565,8,,,False
+2026-06-29,MRVL,sell,33,252.7,EXIT — score_rebalance weekly: dropped (rank 1 of 83),0.7684,1,,,False
+2026-06-29,MU,sell,8,1008.51,EXIT — score_rebalance weekly: dropped (rank 3 of 83),0.7342,3,,,False
+2026-06-29,ON,sell,79,84.74,EXIT — score_rebalance weekly: dropped (rank 6 of 83),0.6917,6,,,False
+2026-06-29,PANW,sell,4,320.11,TRIM to target weight — score_rebalance weekly: top #9 of 10 (60d-avg score),0.6521,9,,,False
+2026-06-29,TWLO,buy,46,197.83,OPEN — score_rebalance weekly: top #19 of 10 (60d-avg score),0.5878,19,,,False
+2026-06-29,AMAT,buy,13,716.52,OPEN — score_rebalance weekly: top #10 of 10 (60d-avg score),0.6522,10,,,False
+2026-06-29,AMD,sell,17,489.86,EXIT — score_rebalance weekly: dropped (rank 2 of 83),0.7353,2,,,False
+2026-06-29,ARM,sell,25,313.78,EXIT — score_rebalance weekly: dropped (rank 5 of 83),0.7025,5,,,False
+2026-06-29,ASML,buy,4,1923.83,OPEN — score_rebalance weekly: top #23 of 10 (60d-avg score),0.5684,23,,,False
+2026-06-29,CRWD,buy,12,761.02,OPEN — score_rebalance weekly: top #14 of 10 (60d-avg score),0.6221,14,,,False
+2026-06-29,DDOG,buy,35,260.0,OPEN — score_rebalance weekly: top #16 of 10 (60d-avg score),0.6052,16,,,False
+2026-06-29,DELL,sell,20,373.4,EXIT — score_rebalance weekly: dropped (rank 7 of 83),0.6783,7,,,False
+2026-06-29,FTNT,buy,57,160.39,OPEN — score_rebalance weekly: top #12 of 10 (60d-avg score),0.6323,12,,,False
+2026-06-29,INTC,buy,3,130.71,ADD to target weight — score_rebalance weekly: top #4 of 10 (60d-avg score),0.7164,4,,,False
+2026-06-29,KLAC,sell,3,250.54,TRIM to target weight — score_rebalance weekly: top #11 of 10 (60d-avg score),0.6429,11,,,False
+2026-06-29,LRCX,sell,4,393.47,TRIM to target weight — score_rebalance weekly: top #8 of 10 (60d-avg score),0.6565,8,,,False
+2026-06-29,MRVL,sell,33,252.47,EXIT — score_rebalance weekly: dropped (rank 1 of 83),0.7683,1,,,False
+2026-06-29,MU,sell,8,1008.51,EXIT — score_rebalance weekly: dropped (rank 3 of 83),0.7342,3,,,False
+2026-06-29,ON,sell,79,83.64,EXIT — score_rebalance weekly: dropped (rank 6 of 83),0.6917,6,,,False
+2026-06-29,PANW,sell,4,319.78,TRIM to target weight — score_rebalance weekly: top #9 of 10 (60d-avg score),0.6522,9,,,False
+2026-06-29,TWLO,buy,45,203.07,OPEN — score_rebalance weekly: top #19 of 10 (60d-avg score),0.5878,19,,,False

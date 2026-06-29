@@ -20,3 +20,39 @@ asof,symbol,side,qty,limit_price,reason,score,rank,z,pnl,retry
 2026-06-29,TTD,sell,4,17.74,"TRIM to target weight — combo BOTTOM sleeve #5 (5d-avg score, weekly refresh)",0.2406,5.0,,,False
 2026-06-29,WDAY,sell,36,118.88,EXIT — combo: dropped (out of top10/bottom10),,,,,False
 2026-06-29,ZS,sell,35,128.27,EXIT — combo: dropped (out of top10/bottom10),,,,,False
+2026-06-29,ADBE,sell,22,197.16,EXIT — combo: dropped (out of top10/bottom10),,,,,False
+2026-06-29,AMD,sell,8,488.29,EXIT — combo: dropped (out of top10/bottom10),,,,,False
+2026-06-29,COIN,buy,30,158.13,"OPEN — combo BOTTOM sleeve #4 (5d-avg score, weekly refresh)",0.2247,4.0,,,False
+2026-06-29,INTC,sell,34,117.6,EXIT — combo: dropped (out of top10/bottom10),,,,,False
+2026-06-29,KLAC,sell,18,249.55,EXIT — combo: dropped (out of top10/bottom10),,,,,False
+2026-06-29,LRCX,sell,12,393.65,EXIT — combo: dropped (out of top10/bottom10),,,,,False
+2026-06-29,NOW,sell,47,97.55,EXIT — combo: dropped (out of top10/bottom10),,,,,False
+2026-06-29,ON,sell,40,83.74,EXIT — combo: dropped (out of top10/bottom10),,,,,False
+2026-06-29,ORCL,buy,30,152.46,"OPEN — combo BOTTOM sleeve #3 (5d-avg score, weekly refresh)",0.2076,3.0,,,False
+2026-06-29,PLTR,buy,38,122.11,"OPEN — combo BOTTOM sleeve #6 (5d-avg score, weekly refresh)",0.2582,6.0,,,False
+2026-06-29,QCOM,buy,24,194.4,"OPEN — combo BOTTOM sleeve #7 (5d-avg score, weekly refresh)",0.2822,7.0,,,False
+2026-06-29,SAP,sell,27,150.86,EXIT — combo: dropped (out of top10/bottom10),,,,,False
+2026-06-29,SEDG,sell,3,48.43,"TRIM to target weight — combo BOTTOM sleeve #1 (5d-avg score, weekly refresh)",0.1512,1.0,,,False
+2026-06-29,SNAP,buy,44,4.53,"ADD to target weight — combo BOTTOM sleeve #2 (5d-avg score, weekly refresh)",0.1961,2.0,,,False
+2026-06-29,TEAM,buy,57,81.98,"OPEN — combo BOTTOM sleeve #8 (5d-avg score, weekly refresh)",0.2823,8.0,,,False
+2026-06-29,TTD,sell,11,18.31,"TRIM to target weight — combo BOTTOM sleeve #9 (5d-avg score, weekly refresh)",0.293,9.0,,,False
+2026-06-29,WDAY,sell,36,117.58,EXIT — combo: dropped (out of top10/bottom10),,,,,False
+2026-06-29,ZS,sell,35,131.43,EXIT — combo: dropped (out of top10/bottom10),,,,,False
+2026-06-29,ADBE,sell,22,197.23,EXIT — combo: dropped (out of top10/bottom10),,,,,False
+2026-06-29,AMD,sell,8,496.47,EXIT — combo: dropped (out of top10/bottom10),,,,,False
+2026-06-29,COIN,buy,30,158.13,"OPEN — combo BOTTOM sleeve #4 (5d-avg score, weekly refresh)",0.225,4.0,,,False
+2026-06-29,INTC,sell,34,117.7,EXIT — combo: dropped (out of top10/bottom10),,,,,False
+2026-06-29,KLAC,sell,18,256.66,EXIT — combo: dropped (out of top10/bottom10),,,,,False
+2026-06-29,LRCX,sell,12,383.32,EXIT — combo: dropped (out of top10/bottom10),,,,,False
+2026-06-29,NOW,sell,47,97.52,EXIT — combo: dropped (out of top10/bottom10),,,,,False
+2026-06-29,ON,sell,40,84.45,EXIT — combo: dropped (out of top10/bottom10),,,,,False
+2026-06-29,ORCL,buy,30,152.46,"OPEN — combo BOTTOM sleeve #3 (5d-avg score, weekly refresh)",0.2076,3.0,,,False
+2026-06-29,PLTR,buy,38,121.5,"OPEN — combo BOTTOM sleeve #6 (5d-avg score, weekly refresh)",0.2573,6.0,,,False
+2026-06-29,QCOM,buy,24,194.4,"OPEN — combo BOTTOM sleeve #7 (5d-avg score, weekly refresh)",0.2811,7.0,,,False
+2026-06-29,SAP,sell,27,150.94,EXIT — combo: dropped (out of top10/bottom10),,,,,False
+2026-06-29,SEDG,sell,3,48.58,"TRIM to target weight — combo BOTTOM sleeve #1 (5d-avg score, weekly refresh)",0.1513,1.0,,,False
+2026-06-29,SNAP,buy,41,4.54,"ADD to target weight — combo BOTTOM sleeve #2 (5d-avg score, weekly refresh)",0.1973,2.0,,,False
+2026-06-29,TEAM,buy,55,84.45,"OPEN — combo BOTTOM sleeve #8 (5d-avg score, weekly refresh)",0.2823,8.0,,,False
+2026-06-29,TTD,sell,11,18.3,"TRIM to target weight — combo BOTTOM sleeve #9 (5d-avg score, weekly refresh)",0.2935,9.0,,,False
+2026-06-29,WDAY,sell,36,117.58,EXIT — combo: dropped (out of top10/bottom10),,,,,False
+2026-06-29,ZS,sell,35,135.42,EXIT — combo: dropped (out of top10/bottom10),,,,,False

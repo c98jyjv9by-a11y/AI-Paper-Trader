@@ -21,3 +21,35 @@ asof,symbol,side,qty,limit_price,reason,score,rank,z,pnl,retry
 2026-06-29,SAP,sell,59,150.02,EXIT — zscore weekly: rebalance out (z rank 15),,15,-0.904,,False
 2026-06-29,SNAP,buy,63,4.51,ADD to target weight — zscore weekly entry: most-fallen #4 (5d-avg z),,4,-1.311,,False
 2026-06-29,TWLO,sell,49,183.7,EXIT — zscore weekly: rebalance out (z rank 26),,26,-0.591,,False
+2026-06-29,ARM,buy,28,352.13,OPEN — zscore weekly entry: most-fallen #1 (5d-avg z),,1,-2.006,,False
+2026-06-29,AVGO,buy,25,393.42,OPEN — zscore weekly entry: most-fallen #9 (5d-avg z),,9,-1.129,,False
+2026-06-29,DDOG,sell,41,233.74,EXIT — zscore weekly: rebalance out (z rank 32),,32,-0.246,,False
+2026-06-29,MCHP,buy,109,90.95,OPEN — zscore weekly entry: most-fallen #10 (5d-avg z),,10,-1.082,,False
+2026-06-29,MDB,sell,29,311.3,EXIT — zscore weekly: rebalance out (z rank 23),,23,-0.76,,False
+2026-06-29,MRVL,buy,34,285.21,OPEN — zscore weekly entry: most-fallen #3 (5d-avg z),,3,-1.696,,False
+2026-06-29,MSFT,sell,25,363.7,EXIT — zscore weekly: rebalance out (z rank 28),,28,-0.439,,False
+2026-06-29,NVDA,sell,46,188.07,EXIT — zscore weekly: rebalance out (z rank 14),,14,-0.989,,False
+2026-06-29,NXPI,buy,33,287.88,OPEN — zscore weekly entry: most-fallen #4 (5d-avg z),,4,-1.562,,False
+2026-06-29,ON,buy,106,91.53,OPEN — zscore weekly entry: most-fallen #2 (5d-avg z),,2,-1.772,,False
+2026-06-29,ORCL,buy,4,152.46,ADD to target weight — zscore weekly entry: most-fallen #5 (5d-avg z),,5,-1.469,,False
+2026-06-29,PLUG,sell,3564,2.36,EXIT — zscore weekly: rebalance out (z rank 11),,11,-1.071,,False
+2026-06-29,QCOM,buy,49,194.4,OPEN — zscore weekly entry: most-fallen #8 (5d-avg z),,8,-1.149,,False
+2026-06-29,SAP,sell,59,150.85,EXIT — zscore weekly: rebalance out (z rank 26),,26,-0.469,,False
+2026-06-29,SNAP,buy,55,4.53,ADD to target weight — zscore weekly entry: most-fallen #6 (5d-avg z),,6,-1.264,,False
+2026-06-29,TWLO,sell,49,185.63,EXIT — zscore weekly: rebalance out (z rank 35),,35,-0.207,,False
+2026-06-29,ARM,buy,27,352.13,OPEN — zscore weekly entry: most-fallen #1 (5d-avg z),,1,-2.008,,False
+2026-06-29,AVGO,buy,24,390.24,OPEN — zscore weekly entry: most-fallen #9 (5d-avg z),,9,-1.129,,False
+2026-06-29,DDOG,sell,41,240.52,EXIT — zscore weekly: rebalance out (z rank 32),,32,-0.246,,False
+2026-06-29,MCHP,buy,106,88.47,OPEN — zscore weekly entry: most-fallen #10 (5d-avg z),,10,-1.084,,False
+2026-06-29,MDB,sell,29,319.32,EXIT — zscore weekly: rebalance out (z rank 23),,23,-0.76,,False
+2026-06-29,MRVL,buy,34,285.31,OPEN — zscore weekly entry: most-fallen #3 (5d-avg z),,3,-1.711,,False
+2026-06-29,MSFT,sell,25,364.48,EXIT — zscore weekly: rebalance out (z rank 28),,28,-0.429,,False
+2026-06-29,NVDA,sell,46,187.81,EXIT — zscore weekly: rebalance out (z rank 14),,14,-0.989,,False
+2026-06-29,NXPI,buy,33,287.88,OPEN — zscore weekly entry: most-fallen #4 (5d-avg z),,4,-1.558,,False
+2026-06-29,ON,buy,106,91.13,OPEN — zscore weekly entry: most-fallen #2 (5d-avg z),,2,-1.772,,False
+2026-06-29,ORCL,buy,4,152.46,ADD to target weight — zscore weekly entry: most-fallen #5 (5d-avg z),,5,-1.469,,False
+2026-06-29,PLUG,sell,3564,2.36,EXIT — zscore weekly: rebalance out (z rank 11),,11,-1.07,,False
+2026-06-29,QCOM,buy,49,194.4,OPEN — zscore weekly entry: most-fallen #8 (5d-avg z),,8,-1.147,,False
+2026-06-29,SAP,sell,59,150.85,EXIT — zscore weekly: rebalance out (z rank 26),,26,-0.461,,False
+2026-06-29,SNAP,buy,54,4.53,ADD to target weight — zscore weekly entry: most-fallen #6 (5d-avg z),,6,-1.255,,False
+2026-06-29,TWLO,sell,49,185.45,EXIT — zscore weekly: rebalance out (z rank 36),,36,-0.208,,False
