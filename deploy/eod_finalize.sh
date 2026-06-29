@@ -1,6 +1,6 @@
 #!/bin/bash
 # Close-to-close end-of-day flow for the 9 paper broker accounts — the SINGLE daily trading event.
-# Scheduled by com.mv4.eod at 15:05 local Central (= 16:05 ET, 5 min after the close). It computes each
+# Scheduled by com.mv4.eod at 14:40 local Central (= 15:40 ET, 20 min BEFORE the close). It computes each
 # account's rebalance off the CLOSE and executes it immediately (--extended-hours / post-market, fills
 # now in the paper sim) so order execution is glued to when the score was computed, then reconciles,
 # reports, and commits. The open/retry agents are removed — trading happens once, at the close.
