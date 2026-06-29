@@ -53,39 +53,50 @@ def _ts(s):
         return s[:16] if len(s) >= 16 else "—"
 
 
-def _annotate_trade_pnl(orders, price_now=None):
+def _annotate_trade_pnl(orders, price_now=None, today=None):
     """Per-order P&L via running AVERAGE-COST accounting (matches Alpaca's avg_entry_price). Walks FILLED
-    orders oldest->newest, maintaining {qty, cost} per symbol:
+    orders oldest->newest, maintaining {qty, cost, entry-date} per symbol:
       • a SELL realizes (fill_px - avg_entry) x qty -> `rlz`,
       • a BUY of a STILL-HELD symbol marks to market (current_px - fill_px) x qty -> `unrlz`
         (a BUY of a name no longer held gets no `unrlz` — its outcome shows on the SELL rows).
     `ret` is the single return that pairs with whichever applies (realized return for sells, unrealized
-    return for held buys). Annotates each order dict in place with `rlz` / `unrlz` / `ret` (None when N/A).
-    `price_now` = {symbol: current price} for currently-held names. Accurate when the full opening history
-    is within the pulled window (true for these young books)."""
+    return for held buys). `days_held` = calendar days the order's shares were/are held: for a held BUY,
+    its fill date → `today`; for a SELL, the position's entry (streak open) → the sell date. Annotates each
+    order dict in place with `rlz` / `unrlz` / `ret` / `days_held` (None when N/A). `price_now` =
+    {symbol: current price} for currently-held names. Accurate when the full opening history is in window."""
+    import datetime as _dt
     price_now = price_now or {}
+    today_d = (_dt.date.fromisoformat(today) if isinstance(today, str) else today) or _dt.date.today()
     books = {}
     for o in orders:
-        o["rlz"] = o["unrlz"] = o["ret"] = None
+        o["rlz"] = o["unrlz"] = o["ret"] = o["days_held"] = None
     # Any order with a filled qty + price counts — INCLUDING partial fills that ended 'expired'/'canceled'
     # (filled_qty is the actually-executed share count; realize on that, not on the terminal status).
     fills = [o for o in orders if o.get("fill_price") and o.get("filled_qty")]
     for o in sorted(fills, key=lambda x: (x.get("filled_at") or x.get("submitted_at") or "")):
         sym, q, px = o["symbol"], o["filled_qty"], o["fill_price"]
-        b = books.setdefault(sym, {"qty": 0.0, "cost": 0.0})
+        b = books.setdefault(sym, {"qty": 0.0, "cost": 0.0, "entry": None})
+        od = _et_date(o.get("filled_at") or o.get("submitted_at"))
+        od = _dt.date.fromisoformat(od) if od else None
         if (o.get("side") or "").lower() == "buy":
+            if b["qty"] <= 1e-9:                               # opening a fresh holding streak
+                b["entry"] = od
             b["qty"] += q; b["cost"] += q * px
             cur = price_now.get(sym)
             if cur:                                            # mark the buy to market only if still held
                 o["unrlz"] = (cur - px) * q
                 o["ret"] = (cur / px - 1) if px > 0 else None
+                if od:                                         # held since this buy → days to today
+                    o["days_held"] = max(0, (today_d - od).days)
         else:                                                  # sell -> realize vs running average cost
             avg = (b["cost"] / b["qty"]) if b["qty"] > 1e-9 else px
             o["rlz"] = (px - avg) * q
             o["ret"] = (px / avg - 1) if avg > 0 else None
+            if b["entry"] and od:                              # held from the position's entry to this sell
+                o["days_held"] = max(0, (od - b["entry"]).days)
             b["qty"] -= q; b["cost"] -= avg * q
             if b["qty"] <= 1e-9:                               # flat (or rounding) -> reset the book
-                b["qty"], b["cost"] = 0.0, 0.0
+                b["qty"], b["cost"], b["entry"] = 0.0, 0.0, None
     return orders
 
 
@@ -319,7 +330,7 @@ def _collect(name, today, status="all", limit=500):
             p["unrealized_pl"] = (p["price"] - p["avg_entry"]) * p["qty"]
             p["cost_basis"] = p["avg_entry"] * p["qty"]
         orders = _annotate_trade_pnl(cli.orders(status=status, limit=limit) or [],   # newest-first; +per-trade P&L
-                                     price_now={p["ticker"]: p["price"] for p in pos})
+                                     price_now={p["ticker"]: p["price"] for p in pos}, today=today)
         man = json.load(open(glob.glob(str(ROOT / "accounts" / name / "*.json"))[0]))
         start = float(man.get("starting_value") or eq)
         unreal = sum(p["unrealized_pl"] for p in pos)
@@ -448,8 +459,8 @@ def _table(fig, rect, cols, cells, colw, fontsize=7.5):
 
 # ── shared order-table spec + cell builders (used by the full history page AND the snapshot report) ──
 ORDER_COLS = ["Filled (CT)", "Side", "Symbol", "FillQty", "Fill px", "Value", "Rlz $", "Unrlz $", "Ret %",
-              "Score@sub", "Trail 1/5/10/20/60d", "Pattern", "Status", "Reason"]
-ORDER_RAW = [10, 4, 6, 5, 7, 7, 7, 7, 6, 8, 16, 9, 7, 11]
+              "Score@sub", "Trail 1/5/10/20/60d", "Pattern", "Status", "Held", "Reason"]
+ORDER_RAW = [10, 4, 6, 5, 7, 7, 7, 7, 6, 8, 16, 9, 7, 5, 11]
 
 
 def _order_builders(d, snapshots, sig_cache, trail_cache):
@@ -506,7 +517,9 @@ def _order_builders(d, snapshots, sig_cache, trail_cache):
                 _money(rlz) if rlz is not None else "—",
                 _money(unrlz) if unrlz is not None else "—",
                 _pct(ret) if ret is not None else "—",
-                _scorecell(o), _trailcell(o), _patterncell(o), o.get("status", ""), _order_reason(o, kind, dec_log)]
+                _scorecell(o), _trailcell(o), _patterncell(o), o.get("status", ""),
+                ("%dd" % o["days_held"]) if o.get("days_held") is not None else "—",
+                _order_reason(o, kind, dec_log)]
 
     return _orow, _patterncell
 
@@ -519,7 +532,7 @@ def _order_total_row(orders):
     value_sum = sum(o["filled_qty"] * o["fill_price"] for o in orders
                     if o.get("fill_price") and o.get("filled_qty"))
     row = ["TOTAL", "", "", "", "", _money(value_sum), _money(realized_sum), _money(unrlz_sum),
-           "", "", "", "", "", ""]
+           "", "", "", "", "", "", ""]
     return row, realized_sum, unrlz_sum
 
 
@@ -546,7 +559,8 @@ def _color_orders(tbl, chunk, offset, patterncell, realized_sum, unrlz_sum):
                                   else RED if pat in ("Dropping", "Fading") else "#555"))
         if o.get("status") != "filled":
             tbl[r, 12].set_text_props(color=GREY, style="italic")
-        tbl[r, 13].set_text_props(color="#555", style="italic")
+        tbl[r, 13].set_text_props(color="#555")            # days held (muted)
+        tbl[r, 14].set_text_props(color="#555", style="italic")   # reason
 
 
 def _render_account(pdf, d, bench=None, snapshots=None, sig_cache=None, trail_cache=None):
