@@ -360,6 +360,22 @@ def build_parser() -> argparse.ArgumentParser:
     ic.add_argument("--summary", action="store_true", help="also print the cross-book midday table")
     ic.set_defaults(func=_cmd_intraday_check)
 
+    osn = sub.add_parser("options-snapshot",
+                         help="Daily yfinance option-chain capture (83 tickers + SPY/QQQ, calls+puts, <=1mo)")
+    osn.add_argument("--max-dte", type=int, default=31, help="keep expiries within this many days (default 31)")
+    osn.add_argument("--tickers", help="comma-separated override of the underlyings")
+    osn.add_argument("--out", help="output path (default data/options/options_<date>.csv.gz)")
+    osn.add_argument("--force", action="store_true", help="overwrite today's snapshot if it exists")
+    osn.set_defaults(func=_cmd_options_snapshot)
+
+    oc = sub.add_parser("options-check",
+                        help="Read-only options dry-run: chain selection + contract-keyed plan (nothing sent)")
+    oc.add_argument("--accounts", nargs="+", help="options account name(s) (default: all options books)")
+    oc.add_argument("--underlyings", help="ad-hoc chain preview for these underlyings (no account needed)")
+    oc.add_argument("--right", default="call", choices=["call", "put", "both"], help="contract right (ad-hoc)")
+    oc.add_argument("--equity", type=float, default=100000.0, help="equity for ad-hoc sizing (default 100k)")
+    oc.set_defaults(func=_cmd_options_check)
+
     ea = sub.add_parser("eod-accounts",
                         help="Consolidated EOD PDF: daily activity + P&L for all broker accounts, with strategy descriptions")
     ea.add_argument("--accounts", nargs="+", help="override the account list (default: all 6 broker accounts)")
@@ -497,6 +513,24 @@ def _cmd_eod_summary(args: argparse.Namespace) -> None:
     for r in rows:
         if r.get("error"):
             print(f"  ! {r['label']}: {r['error']}")
+
+
+def _cmd_options_snapshot(args: argparse.Namespace) -> None:
+    import options_snapshot
+    tks = [t.strip().upper() for t in args.tickers.split(",")] if getattr(args, "tickers", None) else None
+    r = options_snapshot.run(max_dte=args.max_dte, out=getattr(args, "out", None),
+                             tickers=tks, force=args.force)
+    if r.get("skipped"):
+        print("OPTIONS SNAPSHOT %s: SKIPPED (%s)" % (r["asof"], r["reason"]))
+    else:
+        print("OPTIONS SNAPSHOT %s: %d rows, %d/%d underlyings, %d expiries, %d errors -> %s" % (
+            r["asof"], r["rows"], r["with_data"], r["underlyings"], r["expiries"], r["errors"], r["path"]))
+
+
+def _cmd_options_check(args: argparse.Namespace) -> None:
+    import options_check
+    options_check.run(getattr(args, "accounts", None), getattr(args, "underlyings", None),
+                      args.right, args.equity)
 
 
 def _cmd_intraday_check(args: argparse.Namespace) -> None:

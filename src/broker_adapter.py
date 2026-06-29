@@ -124,13 +124,18 @@ class AlpacaPaper:
                 # last_equity = equity at the PRIOR trading day's close → real intraday portfolio
                 # return = equity / last_equity - 1 (works even for a 1-day-old ledger).
                 "last_equity": float(a.get("last_equity", 0)),
+                "options_trading_level": int(a.get("options_trading_level", 0) or 0),
                 "is_paper": True, "blocked": a.get("trading_blocked")}
 
     def positions(self) -> List[Dict[str, Any]]:
+        # asset_class is "us_equity" or "us_option" — surfaced so the option-aware paths can branch.
+        # For options Alpaca reports avg_entry_price / current_price as PER-SHARE premium and
+        # market_value already includes the 100x contract multiplier.
         return [{"ticker": p["symbol"], "qty": float(p["qty"]),
                  "avg_entry": float(p["avg_entry_price"]),
                  "price": float(p["current_price"]), "market_value": float(p["market_value"]),
-                 "unrealized_plpc": float(p.get("unrealized_plpc", 0))}
+                 "unrealized_plpc": float(p.get("unrealized_plpc", 0)),
+                 "asset_class": p.get("asset_class", "us_equity")}
                 for p in self._get(f"{self.host}/v2/positions")]
 
     def latest_prices(self, symbols: List[str]) -> Dict[str, Dict[str, float]]:
@@ -148,6 +153,69 @@ class AlpacaPaper:
 
     def clock(self) -> Dict[str, Any]:
         return self._get(f"{self.host}/v2/clock")
+
+    # ── options: contract universe + chain data (read-only) ─────────────────────────
+    def option_contracts(self, underlying: str, expiration_gte: Optional[str] = None,
+                         expiration_lte: Optional[str] = None, strike_gte: Optional[float] = None,
+                         strike_lte: Optional[float] = None, type: Optional[str] = None,
+                         limit: int = 1000) -> List[Dict[str, Any]]:
+        """Tradable option contracts for `underlying` from the Trading API
+        (/v2/options/contracts) — the contract UNIVERSE (strike/expiry/type/open_interest), the
+        options analogue of the fixed equity ticker list. `type` is 'call'|'put'. Paginates."""
+        params = {"underlying_symbols": underlying.upper(), "status": "active", "limit": limit}
+        if expiration_gte:
+            params["expiration_date_gte"] = expiration_gte
+        if expiration_lte:
+            params["expiration_date_lte"] = expiration_lte
+        if strike_gte is not None:
+            params["strike_price_gte"] = strike_gte
+        if strike_lte is not None:
+            params["strike_price_lte"] = strike_lte
+        if type:
+            params["type"] = type
+        out: List[Dict[str, Any]] = []
+        page_token = None
+        while True:
+            if page_token:
+                params["page_token"] = page_token
+            resp = self._get(f"{self.host}/v2/options/contracts", params)
+            out.extend(resp.get("option_contracts", []) or [])
+            page_token = resp.get("next_page_token")
+            if not page_token or len(out) >= limit:
+                break
+        return out
+
+    def option_snapshots(self, underlying: str, feed: str = "indicative") -> Dict[str, Any]:
+        """Chain snapshot for `underlying` from the Data API
+        (/v1beta1/options/snapshots/{underlying}) — per-contract latest quote + greeks + IV.
+        `feed`: 'indicative' (free, 15-min delayed) or 'opra' (real-time, needs the OPRA sub).
+        Returns {occ_symbol: {quote, greeks, impliedVolatility, ...}}."""
+        out: Dict[str, Any] = {}
+        page_token = None
+        while True:
+            params: Dict[str, Any] = {"feed": feed, "limit": 1000}
+            if page_token:
+                params["page_token"] = page_token
+            resp = self._get(f"{DATA_HOST}/v1beta1/options/snapshots/{underlying.upper()}", params)
+            out.update(resp.get("snapshots", {}) or {})
+            page_token = resp.get("next_page_token")
+            if not page_token:
+                break
+        return out
+
+    def option_quotes(self, occ_symbols: List[str], feed: str = "indicative") -> Dict[str, Dict[str, float]]:
+        """Latest bid/ask/mid per OCC contract (sizing + limit reference), from
+        /v1beta1/options/quotes/latest. Mirrors latest_prices() but for the options feed."""
+        if not occ_symbols:
+            return {}
+        q = self._get(f"{DATA_HOST}/v1beta1/options/quotes/latest",
+                      {"symbols": ",".join(sorted(set(occ_symbols))), "feed": feed}).get("quotes", {})
+        out: Dict[str, Dict[str, float]] = {}
+        for s, v in q.items():
+            bid, ask = float(v.get("bp", 0)), float(v.get("ap", 0))
+            mid = (bid + ask) / 2 if (bid and ask) else (ask or bid)
+            out[s] = {"bid": bid, "ask": ask, "mid": mid}
+        return out
 
     def orders(self, status: str = "closed", after: Optional[str] = None,
                limit: int = 500) -> List[Dict[str, Any]]:
@@ -253,6 +321,41 @@ def build_reconcile_orders(targets: Dict[str, float], current: Dict[str, float],
         if extended:
             o["extended_hours"] = True              # fill in the current pre/post-market session
         orders.append(o)
+    return orders
+
+
+def build_option_reconcile_orders(targets: Dict[str, float], current: Dict[str, float],
+                                  quotes: Dict[str, Dict[str, float]], asof: str,
+                                  spread_pct: float = 0.10) -> List[Dict[str, Any]]:
+    """RECONCILE-TO-TARGET for OPTION contracts: same delta diff as build_reconcile_orders, but keyed
+    on OCC symbols and adapted to Alpaca's options order rules:
+      • time_in_force is DAY only — options have no opg/cls auctions and no extended_hours.
+      • limit is MARKETABLE across the spread (buy at ask, sell at bid) so it fills in regular hours,
+        but capped at mid*(1 ± spread_pct/2) so an absurdly wide quote can't be chased.
+      • qty is integer CONTRACTS (1 contract = 100 underlying shares; Alpaca applies the multiplier).
+    `targets`/`current` are {occ_symbol: contracts}. Contracts with no usable quote are skipped."""
+    orders = []
+    for s in sorted(set(targets) | set(current)):
+        tgt, cur = int(round(targets.get(s, 0))), int(round(current.get(s, 0)))
+        delta = tgt - cur
+        if delta == 0:
+            continue
+        q = quotes.get(s) or {}
+        bid, ask, mid = float(q.get("bid") or 0), float(q.get("ask") or 0), float(q.get("mid") or 0)
+        if mid <= 0:
+            continue
+        side = "buy" if delta > 0 else "sell"
+        cross = ask if (side == "buy" and ask > 0) else (bid if (side == "sell" and bid > 0) else mid)
+        cap = mid * (1 + spread_pct / 2) if side == "buy" else mid * (1 - spread_pct / 2)
+        lim = min(cross, cap) if side == "buy" else max(cross, cap)
+        orders.append({
+            "symbol": s, "qty": str(abs(delta)), "side": side, "type": "limit",
+            "limit_price": round(lim, 2), "time_in_force": "day",
+            "client_order_id": f"mv4-{asof}-{side}-{s}",
+            "_plan": {"ref_mid": mid, "spread_pct": spread_pct, "target": tgt, "current": cur,
+                      "tif": "day-opt", "collar": spread_pct,
+                      "est_value": round(abs(delta) * mid * 100, 2)},  # 100x contract multiplier
+        })
     return orders
 
 

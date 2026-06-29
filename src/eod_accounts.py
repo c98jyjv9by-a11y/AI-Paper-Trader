@@ -218,10 +218,14 @@ def run(accounts=None, end=None, out=None):
             if not d["fills"]:
                 ax.text(0.03, y, "— no trades today —", fontsize=8, color="#777", va="top"); y -= 0.05
                 continue
+            import options_symbols as _osym
             for o in sorted(d["fills"], key=lambda x: x.get("symbol", "")):
                 q = float(o.get("filled_qty") or 0); px = float(o.get("fill_price") or 0)
                 side = o.get("side", "").upper()
-                ax.text(0.03, y, "%-4s %-6s %5d @ $%-9.2f   = %s" % (side, o.get("symbol", ""), q, px, _money(q * px)),
+                sym = o.get("symbol", "")
+                mult = 100 if _osym.is_occ(sym) else 1            # option fills are priced per share, x100
+                label = _osym.occ_label(sym)
+                ax.text(0.03, y, "%-4s %-20s %5d @ $%-9.2f   = %s" % (side, label, q, px, _money(q * px * mult)),
                         fontsize=8, family="monospace", va="top", color=(GREEN if side == "BUY" else RED))
                 y -= 0.032
             y -= 0.02

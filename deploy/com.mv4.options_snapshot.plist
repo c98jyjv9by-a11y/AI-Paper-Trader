@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- launchd daily option-chain capture. Install:
+       cp deploy/com.mv4.options_snapshot.plist ~/Library/LaunchAgents/
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mv4.options_snapshot.plist
+     Verify: launchctl list | grep mv4   ·   logs: /tmp/mv4_options_snapshot.log
+     Runs 15:15 local Central (= 16:15 ET, ~10 min after the close), Mon-Fri; reruns on wake if asleep. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.mv4.options_snapshot</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/david/PyCharmMiscProject/ai-paper-trader/deploy/options_snapshot.sh</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>15</integer></dict>
+  </array>
+  <key>StandardOutPath</key><string>/tmp/mv4_options_snapshot.log</string>
+  <key>StandardErrorPath</key><string>/tmp/mv4_options_snapshot.log</string>
+  <key>SoftResourceLimits</key>
+  <dict><key>NumberOfFiles</key><integer>10240</integer></dict>
+  <key>HardResourceLimits</key>
+  <dict><key>NumberOfFiles</key><integer>10240</integer></dict>
+  <key>RunAtLoad</key><false/>
+</dict>
+</plist>

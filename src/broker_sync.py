@@ -39,6 +39,22 @@ REBOUND_SYM = "TQQQ"       # the 1-day rebound overlay instrument (+3x QQQ); man
                            # excluded from the model decision and added to the target only when it fires
 COLLAR_CACHE = ROOT / "backtests" / "collars.csv"
 
+# Ledger schemas. Option books ADD contract columns to the equity schema (additive / backward
+# compatible — equity books keep the original headers byte-for-byte; readers select by name).
+_POS_COLS = ["ticker", "shares", "entry_price", "entry_date", "current_price",
+             "highest_price", "lowest_price"]
+_OPT_POS_EXTRA = ["underlying", "expiry", "strike", "right", "multiplier", "occ_symbol"]
+_TRADE_COLS = ["date", "action", "ticker", "shares", "price", "trade_value", "reason",
+               "realized_pnl", "holding_days", "entry_price", "highest_price", "lowest_price"]
+_OPT_TRADE_EXTRA = ["underlying", "expiry", "strike", "right", "multiplier", "open_close", "premium"]
+
+
+def _is_options_account(man: Optional[Dict[str, Any]]) -> bool:
+    """True if this account trades options (manifest asset_class or target_mode.kind)."""
+    man = man or {}
+    return (man.get("asset_class") == "us_option"
+            or (man.get("target_mode") or {}).get("kind") == "options")
+
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -75,13 +91,22 @@ def ledger_from_broker(positions: List[Dict[str, Any]], cash: float, equity: flo
                        prior_entry_dates: Optional[Dict[str, str]] = None) -> Dict[str, pd.DataFrame]:
     """Build continuation positions + an equity row from a broker snapshot (broker = truth)."""
     ped = prior_entry_dates or {}
-    _pcols = ["ticker", "shares", "entry_price", "entry_date", "current_price",
-              "highest_price", "lowest_price"]
-    pos = pd.DataFrame([{
-        "ticker": p["ticker"], "shares": p["qty"], "entry_price": p["avg_entry"],
-        "entry_date": ped.get(p["ticker"], asof), "current_price": p["price"],
-        "highest_price": p["price"], "lowest_price": p["price"]} for p in positions],
-        columns=_pcols)   # keep the header even when the broker book is empty (fresh account)
+    import options_symbols as osym
+    has_options = any(p.get("asset_class") == "us_option" or osym.is_occ(p["ticker"]) for p in positions)
+    _pcols = _POS_COLS + (_OPT_POS_EXTRA if has_options else [])
+    rows = []
+    for p in positions:
+        row = {"ticker": p["ticker"], "shares": p["qty"], "entry_price": p["avg_entry"],
+               "entry_date": ped.get(p["ticker"], asof), "current_price": p["price"],
+               "highest_price": p["price"], "lowest_price": p["price"]}
+        if has_options:                                    # parse the contract identity into columns
+            opt = osym.parse_occ(p["ticker"]) if osym.is_occ(p["ticker"]) else {}
+            row.update({"underlying": opt.get("underlying", p["ticker"]),
+                        "expiry": opt["expiry"].isoformat() if opt else "",
+                        "strike": opt.get("strike", ""), "right": opt.get("right", ""),
+                        "multiplier": opt.get("multiplier", 1), "occ_symbol": p["ticker"] if opt else ""})
+        rows.append(row)
+    pos = pd.DataFrame(rows, columns=_pcols)   # keep the header even when the broker book is empty
     open_val = float(sum(p["market_value"] for p in positions))
     eq = pd.DataFrame([{"date": asof, "cash": cash, "open_positions_value": open_val,
                         "total_portfolio_value": equity, "realized_pnl_to_date": 0.0,
@@ -738,6 +763,138 @@ def _zscore_reversal_targets(name: str, cli: ba.AlpacaPaper, current: Dict[str, 
     return targets, refs, dec
 
 
+def _options_select_underlyings(man: Dict[str, Any], tm: Dict[str, Any],
+                                cli: ba.AlpacaPaper) -> List[str]:
+    """The underlyings an options book trades: an explicit manifest list, or the top-N of the
+    account's equity scenario by trailing-avg composite score (reusing the equity ranker)."""
+    ocfg = man.get("options") or {}
+    spec = ocfg.get("underlyings", "scenario")
+    if isinstance(spec, list):
+        return [s.upper() for s in spec]
+    scenario = man.get("scenario", "model_v4")
+    avg = _lookback_avg_scores(scenario, int(tm.get("lookback_days", 60)), valid_before=_valid_before(cli))
+    ranked = [t for t in sorted(avg, key=lambda k: avg[k], reverse=True) if pd.notna(avg[t])]
+    return ranked[:int(tm.get("top_n", 10))]
+
+
+def _option_candidates(cli: ba.AlpacaPaper, unders: List[str], ocfg: Dict[str, Any],
+                       asof) -> List[Dict[str, Any]]:
+    """Candidate contracts per underlying: enumerate the chain in the expiry/moneyness band, keep
+    only liquid contracts (open-interest floor + max bid/ask spread), enrich with snapshot
+    quote/greeks/IV. Pure selection — no order side decided here (that's the strategy leaf)."""
+    import datetime as _dt
+    import options_symbols as osym
+    lo, hi = ocfg.get("expiry_window_days", [25, 45])
+    exp_gte = (asof + _dt.timedelta(days=int(lo))).isoformat()
+    exp_lte = (asof + _dt.timedelta(days=int(hi))).isoformat()
+    mlo, mhi = ocfg.get("moneyness", [-0.05, 0.05])
+    min_oi = int(ocfg.get("min_open_interest", 0) or 0)
+    max_spread = float(ocfg.get("max_spread_pct", 1.0))
+    spots = _sanitize_quotes(cli.latest_prices(unders) or {}, _last_closes(unders))
+    cands: List[Dict[str, Any]] = []
+    for u in unders:
+        spot = (spots.get(u) or {}).get("mid")
+        if not spot or float(spot) <= 0:
+            continue
+        spot = float(spot)
+        contracts = cli.option_contracts(u, expiration_gte=exp_gte, expiration_lte=exp_lte,
+                                         strike_gte=round(spot * (1 + mlo), 2),
+                                         strike_lte=round(spot * (1 + mhi), 2))
+        if not contracts:
+            continue
+        snaps = cli.option_snapshots(u)
+        for c in contracts:
+            occ = c.get("symbol")
+            if not occ or not osym.is_occ(occ):
+                continue
+            if int(c.get("open_interest") or 0) < min_oi:
+                continue
+            snap = snaps.get(occ) or {}
+            q = snap.get("latestQuote") or {}
+            bid, ask = float(q.get("bp", 0) or 0), float(q.get("ap", 0) or 0)
+            mid = (bid + ask) / 2 if (bid and ask) else (ask or bid)
+            if mid <= 0:
+                continue
+            if bid and ask and (ask - bid) / mid > max_spread:
+                continue
+            p = osym.parse_occ(occ)
+            cands.append({"occ": occ, "underlying": u, "expiry": p["expiry"], "strike": p["strike"],
+                          "right": p["right"], "dte": (p["expiry"] - asof).days, "spot": spot,
+                          "bid": bid, "ask": ask, "mid": mid,
+                          "oi": int(c.get("open_interest") or 0),
+                          "iv": snap.get("impliedVolatility"),
+                          "delta": (snap.get("greeks") or {}).get("delta")})
+    return cands
+
+
+def _options_strategy_targets(strategy: str, cands: List[Dict[str, Any]], tm: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """STRATEGY LEAF (pure, archetype-specific): pick contracts from the candidate set. The only
+    function that changes per archetype. v1 ships `long_directional`; others raise NotImplementedError
+    so an unconfigured book fails loud instead of trading blind."""
+    right = str(tm.get("right", "call")).lower()
+    if strategy == "long_directional":
+        # one ATM contract per underlying (strike closest to spot) of the requested right
+        best: Dict[str, Dict[str, Any]] = {}
+        for c in cands:
+            if right != "both" and c["right"] != right:
+                continue
+            cur = best.get(c["underlying"])
+            if cur is None or abs(c["strike"] - c["spot"]) < abs(cur["strike"] - cur["spot"]):
+                best[c["underlying"]] = c
+        return list(best.values())
+    raise NotImplementedError(f"options strategy {strategy!r} not implemented (have: long_directional)")
+
+
+def _options_targets(name: str, cli: ba.AlpacaPaper, current: Dict[str, float],
+                     tm: Dict[str, Any]) -> "tuple[Dict[str,int], Dict[str,float], dict]":
+    """OPTIONS scaffold (`target_mode: {kind: options, strategy, right, top_n, rebalance, gross}` +
+    manifest `options` selection/lifecycle block). Calendar-gated like the equity rebalance books,
+    PLUS a force-roll: any held contract within `roll_dte` of expiry triggers a recompute off-cadence
+    so nothing is ever held into expiry. Targets/current are {OCC: contracts}. No model/overlay."""
+    import os
+    import datetime as _dt
+    import options_symbols as osym
+    man = load_manifest(name) or {}
+    ocfg = man.get("options") or {}
+    asof = _dt.date.today()
+    force = os.environ.get("BROKER_REBALANCE_FORCE_TODAY", "").lower() in ("1", "yes", "true")
+    held = {t: int(round(s)) for t, s in (current or {}).items() if int(round(s)) > 0}
+    roll_dte = int(ocfg.get("roll_dte", 7))
+    near_expiry = any(osym.is_occ(t) and osym.dte(t, asof) <= roll_dte for t in held)
+    cal = _recent_trading_days()
+    freq = tm.get("rebalance", "weekly")
+    if held and not force and not near_expiry and not _is_rebalance_day(freq, cal):
+        return held, {}, {}                                        # off-cadence, nothing expiring -> hold
+    unders = _options_select_underlyings(man, tm, cli)
+    cands = _option_candidates(cli, unders, ocfg, asof)
+    picks = _options_strategy_targets(tm.get("strategy", "long_directional"), cands, tm) if cands else []
+    if not picks:
+        # nothing to open; still roll out any expiring/held contracts (flatten -> reconcile sells)
+        dec = {t: _dec("options: roll/exit (no candidate, DTE %s)" % (osym.dte(t, asof) if osym.is_occ(t) else "—"))
+               for t in (held or {})}
+        return {}, {}, dec
+    equity = float(cli.account().get("equity") or 0.0)
+    per = float(tm.get("gross", 0.30)) * equity / len(picks)       # premium budget per contract sleeve
+    targets: Dict[str, int] = {}
+    refs: Dict[str, float] = {}
+    dec: Dict[str, Any] = {}
+    for c in picks:
+        contracts = int(per / (c["mid"] * 100)) if c["mid"] > 0 else 0    # 100x multiplier
+        if contracts < 1:
+            continue
+        targets[c["occ"]] = contracts
+        refs[c["occ"]] = c["mid"]
+        dec[c["occ"]] = _dec(
+            "options %s: %s ATM %s ~%dd (strike %g vs spot %.2f)" % (
+                freq, tm.get("strategy", "long_directional"), c["right"], c["dte"], c["strike"], c["spot"]),
+            score=c.get("delta"))
+    for t in (held or {}):                                         # held contracts not re-picked -> roll/exit
+        if t not in targets:
+            d = osym.dte(t, asof) if osym.is_occ(t) else None
+            dec[t] = _dec("options %s: roll/exit (DTE %s)" % (freq, d if d is not None else "—"))
+    return targets, refs, dec
+
+
 def compute_targets(name: str, cli: ba.AlpacaPaper,
                     current: Optional[Dict[str, float]] = None) -> "tuple[Dict[str,int], Dict[str,float], dict]":
     """TARGET book {symbol: shares} for the next session, computed from the broker's actual book.
@@ -770,6 +927,10 @@ def compute_targets(name: str, cli: ba.AlpacaPaper,
     names. Returns (targets, ref_prices)."""
     current = current if current is not None else {p["ticker"]: p["qty"] for p in cli.positions()}
     tm = (load_manifest(name) or {}).get("target_mode") or {}
+    if tm.get("kind") == "options":
+        # contract-keyed options book: select underlyings -> candidate contracts -> strategy leaf
+        # -> size by premium*100. Calendar+expiry gated. No model_v4 rules, no hedge/rebound overlay.
+        return _options_targets(name, cli, current or {}, tm)
     if tm.get("kind") == "zscore_reversal":
         # buy the n lowest-z (most-fallen) names, regime-gated to cash in QQQ downtrends. No overlay.
         return _zscore_reversal_targets(name, cli, current or {}, tm)
@@ -961,18 +1122,35 @@ def submit_session(name: str, cli: ba.AlpacaPaper = None, submit: bool = False,
     cli = cli or ba.AlpacaPaper(account=name)
     clk = cli.clock()
     asof = clk.get("timestamp", _utcnow())[:10]
+    man = load_manifest(name) or {}
+    is_opt = _is_options_account(man)
     current = {p["ticker"]: p["qty"] for p in cli.positions()}
     targets, _refpx, decisions = compute_targets(name, cli, current)
     delta_syms = sorted({s for s in set(targets) | set(current)
                          if int(round(targets.get(s, 0))) != int(round(current.get(s, 0)))})
-    prices = cli.latest_prices(delta_syms) if delta_syms else {}
-    prices = _sanitize_quotes(prices, _last_closes(delta_syms))    # one-sided/stale quote -> last close
-    collars = compute_collars(delta_syms, cache_day=asof)
-    orders = ba.build_reconcile_orders(targets, current, prices, collars, asof, retry=retry, extended=extended)
-    for o in orders:                                # the REBOUND overlay EXIT is a 1-day hold sold AT THE
-        if o["symbol"] == REBOUND_SYM and o["side"] == "sell":   # CLOSE — force market/limit-on-close even
-            o["time_in_force"] = "cls"; o.pop("extended_hours", None)   # in retry / extended-hours mode
-            o["_plan"]["tif"] = "cls"
+    if is_opt:
+        # OPTIONS path: quotes from the options feed, day-TIF marketable-limit orders across the
+        # spread (no opg/cls auctions, no extended_hours, no overnight-gap collar). Guard the level.
+        need_level = int((man.get("options") or {}).get("level", 1))
+        have_level = int(cli.account().get("options_trading_level") or 0)
+        if submit and have_level < need_level:
+            return {"asof": asof, "n_orders": 0, "submitted": 0, "dry_run": True, "blocked": True,
+                    "reason": f"options level {have_level} < required {need_level} (enable in Alpaca)",
+                    "orders": []}
+        feed = (man.get("options") or {}).get("feed", "indicative")
+        prices = cli.option_quotes(delta_syms, feed=feed) if delta_syms else {}
+        spread_pct = float((man.get("options") or {}).get("max_spread_pct", 0.10))
+        collars = {}                                   # options use a spread collar, not the gap cache
+        orders = ba.build_option_reconcile_orders(targets, current, prices, asof, spread_pct=spread_pct)
+    else:
+        prices = cli.latest_prices(delta_syms) if delta_syms else {}
+        prices = _sanitize_quotes(prices, _last_closes(delta_syms))    # one-sided/stale quote -> last close
+        collars = compute_collars(delta_syms, cache_day=asof)
+        orders = ba.build_reconcile_orders(targets, current, prices, collars, asof, retry=retry, extended=extended)
+        for o in orders:                                # the REBOUND overlay EXIT is a 1-day hold sold AT THE
+            if o["symbol"] == REBOUND_SYM and o["side"] == "sell":   # CLOSE — force market/limit-on-close even
+                o["time_in_force"] = "cls"; o.pop("extended_hours", None)   # in retry / extended-hours mode
+                o["_plan"]["tif"] = "cls"
     orders = _dedupe_order_ids(cli, asof, orders)   # idempotent: skip live dupes, make ids unique
     refs = {o["client_order_id"]: o["_plan"]["ref_mid"] for o in orders}
     (_broker_dir(name) / f"plan_{asof}.json").write_text(json.dumps(
@@ -986,7 +1164,7 @@ def submit_session(name: str, cli: ba.AlpacaPaper = None, submit: bool = False,
     _log_decisions(name, asof, orders, decisions, retry)          # append the per-trade audit row(s)
     # retry orders are intraday DAY limits (submitted while the market is open), so they bypass the
     # pre-open/on-open window guard that governs the first (opg/cls) attempt.
-    win = submit_window(clk, prequeue=prequeue or retry or extended)
+    win = submit_window(clk, prequeue=prequeue or retry or extended or is_opt)
     if submit and not win["ok"]:
         return {"asof": asof, "n_orders": len(orders), "submitted": 0, "dry_run": True,
                 "blocked": True, "reason": win["reason"], "orders": orders}
@@ -1052,24 +1230,27 @@ def flatten_overlay(name: str, cli: ba.AlpacaPaper = None, submit: bool = False,
 def create_broker_account(name: str, scenario: str = "model_v4", starting: float = 100000.0,
                           ramp_up: Optional[Dict[str, Any]] = None, asof: Optional[str] = None,
                           broker_keys: Optional[Dict[str, str]] = None,
-                          target_mode: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                          target_mode: Optional[Dict[str, Any]] = None,
+                          options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Create a fresh broker-driven account: an empty frozen ledger (cash only, no positions) that
     reconcile_session() then drives forward from the real Alpaca fills (broker = source of truth).
     `broker_keys` = {"key_env": "...", "secret_env": "..."} names the .env vars holding THIS
-    account's Alpaca paper keys, so multiple accounts can each use their own credentials."""
+    account's Alpaca paper keys, so multiple accounts can each use their own credentials.
+    `options` (a config dict) marks this as an OPTIONS book: the ledger carries the extra contract
+    columns and the manifest gets asset_class=us_option + the options selection/lifecycle block."""
     d = _acct_dir(name); d.mkdir(parents=True, exist_ok=True)
     asof = asof or _utcnow()[:10]
-    pd.DataFrame(columns=["date", "action", "ticker", "shares", "price", "trade_value", "reason",
-                          "realized_pnl", "holding_days", "entry_price", "highest_price",
-                          "lowest_price"]).to_csv(d / "trades.csv", index=False)
+    is_opt = bool(options) or (target_mode or {}).get("kind") == "options"
+    tcols = _TRADE_COLS + (_OPT_TRADE_EXTRA if is_opt else [])
+    pcols = _POS_COLS + (_OPT_POS_EXTRA if is_opt else [])
+    pd.DataFrame(columns=tcols).to_csv(d / "trades.csv", index=False)
     pd.DataFrame([{"date": asof, "cash": starting, "open_positions_value": 0.0,
                    "total_portfolio_value": starting, "realized_pnl_to_date": 0.0,
                    "unrealized_pnl": 0.0, "daily_return": 0.0, "cumulative_return": 0.0,
                    "spy_cumulative_return": 0.0, "qqq_cumulative_return": 0.0,
                    "equal_weight_cumulative_return": 0.0, "forecast_vol": "",
                    "exposure_mult": 1.0}]).to_csv(d / "equity.csv", index=False)
-    pd.DataFrame(columns=["ticker", "shares", "entry_price", "entry_date", "current_price",
-                          "highest_price", "lowest_price"]).to_csv(d / "positions.csv", index=False)
+    pd.DataFrame(columns=pcols).to_csv(d / "positions.csv", index=False)
     man = {"name": name, "scenario": scenario, "status": "frozen", "inception": asof,
            "frozen_through": asof, "live_through": asof, "starting_value": starting,
            "ending_value": starting, "total_return": 0.0, "n_trades": 0, "n_positions": 0,
@@ -1078,6 +1259,9 @@ def create_broker_account(name: str, scenario: str = "model_v4", starting: float
                                           "secret_env": "APCA_API_SECRET_KEY_FIRST"},
            "ramp_up": ramp_up or {"entry_score": 0.9, "entry_size_pct": 0.085, "hedge": True},
            "hashes": {}}
+    if is_opt:
+        man["asset_class"] = "us_option"
+        man["options"] = options or {}
     if target_mode:
         man["target_mode"] = target_mode
     for f in ["trades.csv", "equity.csv", "positions.csv"]:
@@ -1125,6 +1309,39 @@ def reconcile_session(name: str, cli: ba.AlpacaPaper = None) -> Dict[str, Any]:
             "equity": acct["equity"], "positions": len(snap["positions"])}
 
 
+def _apply_option_marks(d: Dict[str, Any], account: str, cli: ba.AlpacaPaper) -> bool:
+    """Overlay the live Alpaca OPTION book onto a report dict. Options can't use the equity yfinance
+    mark path (no contract prices there) — mark from the broker (current_price is the per-share
+    premium; market_value already includes the 100x multiplier), parse OCC for display columns, set
+    pv/cash/day-return from the account. No hedge/overlay artifacts (options books trade neither)."""
+    import options_symbols as osym
+    acct = cli.account()
+    bpos = cli.positions()
+    cols = _POS_COLS + _OPT_POS_EXTRA
+    rows = []
+    for p in bpos:
+        occ = p["ticker"]; now = float(p["price"]); opt = osym.parse_occ(occ) if osym.is_occ(occ) else {}
+        rows.append({"ticker": occ, "shares": int(p["qty"]), "entry_price": float(p["avg_entry"]),
+                     "entry_date": d.get("mark"), "current_price": now,
+                     "highest_price": now, "lowest_price": now,
+                     "underlying": opt.get("underlying", occ),
+                     "expiry": opt["expiry"].isoformat() if opt else "",
+                     "strike": opt.get("strike", ""), "right": opt.get("right", ""),
+                     "multiplier": opt.get("multiplier", 1), "occ_symbol": occ if opt else ""})
+    d["positions"] = pd.DataFrame(rows, columns=cols)
+    eq = float(acct.get("equity") or 0) or d.get("pv")
+    if eq:
+        d["pv"] = eq
+    d["cash"] = float(acct.get("cash") or d.get("cash") or 0)
+    d["hedge"] = None                                  # options books never trade the model_v4 hedge
+    le = float(acct.get("last_equity") or 0)
+    if le > 0 and eq:
+        day = eq / le - 1
+        d.setdefault("stats", {}).setdefault("1D", {})["port"] = day
+        d["broker_day_return"] = day
+    return True
+
+
 def apply_live_broker_marks(d: Dict[str, Any], account: str, cli: ba.AlpacaPaper = None) -> bool:
     """Overlay the LIVE Alpaca book onto a rank_report.build_report dict `d` (in place) so an
     account's intraday returns reflect REAL fills + live prices instead of the (possibly 1-day-old)
@@ -1139,6 +1356,8 @@ def apply_live_broker_marks(d: Dict[str, Any], account: str, cli: ba.AlpacaPaper
     if not (man.get("broker_keys") or man.get("broker") == "alpaca_paper"):
         return False
     cli = cli or ba.AlpacaPaper(account=account)
+    if _is_options_account(man):
+        return _apply_option_marks(d, account, cli)
     acct = cli.account()
     bpos = cli.positions()
     # Rebuild the held book from the BROKER (source of truth) so positions held at the broker but not
@@ -1229,7 +1448,7 @@ def _cli(argv=None):
     p.add_argument("--secret-env", help="env-var NAME holding this account's APCA secret key")
     p.add_argument("--target-mode",
                    choices=["ramp_up", "top_n", "model_equal", "score_gate", "model_v4",
-                            "score_gate_rampup", "score_rebalance", "zscore_reversal"],
+                            "score_gate_rampup", "score_rebalance", "zscore_reversal", "options"],
                    default="ramp_up",
                    help="SEED modes: top_n / model_equal / score_gate. STEADY-STATE: model_v4 (follow "
                         "model_v4's own buy/sell rules on the account's book). score_gate_rampup (buy "
@@ -1265,6 +1484,17 @@ def _cli(argv=None):
                    help="source account whose holdings to replicate for --target-mode model_equal (default primary)")
     p.add_argument("--gross", type=float, default=1.0,
                    help="total invested fraction split equally across the source's names for model_equal (default 1.0)")
+    # options scaffolding (--target-mode options)
+    p.add_argument("--strategy", default="long_directional",
+                   help="options strategy leaf (default long_directional)")
+    p.add_argument("--right", default="call", choices=["call", "put", "both"],
+                   help="options contract right for directional strategies (default call)")
+    p.add_argument("--underlyings", help="comma-separated options underlyings, or 'scenario' to rank "
+                                         "the account's equity scenario (default scenario)")
+    p.add_argument("--expiry-window", default="25,45",
+                   help="options DTE selection band 'lo,hi' (default 25,45)")
+    p.add_argument("--roll-dte", type=int, default=7, help="roll/exit an option this many DTE from expiry (default 7)")
+    p.add_argument("--options-level", type=int, default=2, help="expected Alpaca options trading level (default 2)")
     a = p.parse_args(argv)
     if a.create_account:
         bk = {"key_env": a.key_env, "secret_env": a.secret_env} if (a.key_env and a.secret_env) else None
@@ -1286,11 +1516,24 @@ def _cli(argv=None):
         elif a.target_mode == "zscore_reversal":
             tm = {"kind": "zscore_reversal", "zscore_lookback": a.lookback_days, "avg_window": a.avg_window,
                   "n": a.top_n, "rebalance": a.rebalance, "regime_ma": a.regime_ma, "gross": 0.90}
+        elif a.target_mode == "options":
+            tm = {"kind": "options", "strategy": a.strategy, "right": a.right, "top_n": a.top_n,
+                  "rebalance": a.rebalance, "gross": a.gross if a.gross != 1.0 else 0.30,
+                  "lookback_days": a.lookback_days}
         else:
             tm = None
-        man = create_broker_account(a.account, broker_keys=bk, target_mode=tm)
+        opt_cfg = None
+        if a.target_mode == "options":
+            lo, hi = (a.expiry_window.split(",") + ["45"])[:2]
+            unders = ("scenario" if (not a.underlyings or a.underlyings == "scenario")
+                      else [s.strip().upper() for s in a.underlyings.split(",")])
+            opt_cfg = {"level": a.options_level, "underlyings": unders,
+                       "expiry_window_days": [int(lo), int(hi)], "roll_dte": a.roll_dte,
+                       "moneyness": [-0.05, 0.05], "min_open_interest": 500,
+                       "max_spread_pct": 0.10, "feed": "indicative"}
+        man = create_broker_account(a.account, broker_keys=bk, target_mode=tm, options=opt_cfg)
         # these modes don't ramp up via next_session_decision → the manifest must carry NO ramp_up
-        if tm and tm["kind"] in ("model_v4", "score_gate_rampup", "score_rebalance", "zscore_reversal"):
+        if tm and tm["kind"] in ("model_v4", "score_gate_rampup", "score_rebalance", "zscore_reversal", "options"):
             man.pop("ramp_up", None)
             _manifest_path(a.account).write_text(json.dumps(man, indent=2))
         if tm and tm["kind"] == "top_n":
@@ -1314,6 +1557,10 @@ def _cli(argv=None):
         elif tm and tm["kind"] == "zscore_reversal":
             tmdesc = "zscore_reversal (%s rebal, bottom-%d by %dd-avg of %dd-z, cash<QQQ %ddMA)" % (
                 tm["rebalance"], tm["n"], tm["avg_window"], tm["zscore_lookback"], tm["regime_ma"])
+        elif tm and tm["kind"] == "options":
+            tmdesc = "options/%s (%s rebal, %s, top-%d underlyings, %.0f%% gross, DTE %s, roll@%dd, lvl%d)" % (
+                tm["strategy"], tm["rebalance"], tm["right"], tm["top_n"], tm["gross"] * 100,
+                opt_cfg["expiry_window_days"], opt_cfg["roll_dte"], opt_cfg["level"])
         else:
             tmdesc = "ramp_up entry>=%.2f" % (man.get("ramp_up") or {}).get("entry_score", 0.9)
         print("CREATED broker account '%s' (scenario=%s, $%s cash, %s, keys=%s). "
