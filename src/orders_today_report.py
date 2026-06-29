@@ -31,7 +31,8 @@ import broker_sync as bs
 import positions_report as pr
 from positions_report import _money, _draw_table, _avg_quad, _ret_quad, _entry_dates
 from intraday_check import _build_enrichment, _pct, _sc
-from account_orders_report import _score_pattern, _et_date, _load_decision_log, _order_reason
+from account_orders_report import (_score_pattern, _et_date, _load_decision_log, _order_reason,
+                                   _annotate_trade_pnl)
 from eod_accounts import disp
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -71,6 +72,8 @@ def _collect(name, today):
         pos = cli.positions() or []
         kind = (bs.load_manifest(name) or {}).get("target_mode", {}).get("kind")
         allord = cli.orders(status="all", limit=500) or []
+        price_now = {p["ticker"]: float(p["price"]) for p in pos}
+        _annotate_trade_pnl(allord, price_now=price_now, today=today)   # adds rlz (sells) / unrlz (buys)
         todays = [o for o in allord
                   if _et_date(o.get("filled_at") or o.get("submitted_at")) == today]
         dec = _load_decision_log(name)
@@ -153,6 +156,58 @@ def _account_page(pdf, d, enrich, entry_enrich, today):
     pdf.savefig(fig); plt.close(fig)
 
 
+def _summary_page(pdf, data, accts, enrich, today, side):
+    """Cross-account summary of today's BUYS (Unrealized P&L) or SELLS (Realized P&L). One row per
+    filled order: account, ticker analytics, 1-day return, P&L, reason — with a TOTAL row."""
+    is_buy = (side == "buy")
+    pnl_lbl = "Unrlzd P&L" if is_buy else "Rlzd P&L"
+    title = "Orders Placed Today — %s (all accounts)" % ("BUYS" if is_buy else "SELLS")
+    sub = ("Every BUY filled today, marked to current price → Unrealized P&L." if is_buy
+           else "Every SELL filled today → Realized P&L vs average cost.")
+    rows = []
+    for n in accts:
+        d = data[n]
+        if d.get("err"):
+            continue
+        for ordr in d.get("orders", []):
+            if (ordr.get("side") or "").lower() != side or not (ordr.get("fill_price") and ordr.get("filled_qty")):
+                continue
+            sym = ordr["symbol"]; e = enrich.get(sym)
+            rows.append({"acct": disp(n), "sym": sym, "val": ordr["filled_qty"] * ordr["fill_price"],
+                         "pnl": (ordr.get("unrlz") if is_buy else ordr.get("rlz")), "e": e,
+                         "oneD": (e["ret"].get(1) if (e and e.get("ret")) else None),
+                         "reason": _order_reason(ordr, d.get("kind"), d.get("dec"))})
+    rows.sort(key=lambda r: (r["pnl"] is not None, r["pnl"] if r["pnl"] is not None else 0.0), reverse=True)
+
+    fig = plt.figure(figsize=(11, 8.5))
+    fig.suptitle(title + "   (%s)" % today, fontsize=14, weight="bold")
+    fig.text(0.5, 0.95, sub, ha="center", fontsize=8.5, color="#555")
+    cols = ["Account", "Ticker", "Value $", "Score", "Rank", "Trend", "Avg 1/5/20/60d", "1D Ret", pnl_lbl, "Reason"]
+    raw = [16, 7, 9, 6, 7, 9, 16, 8, 11, 30]
+    colw = [w / sum(raw) for w in raw]
+    cells, rules, tv, tp = [], [], 0.0, 0.0
+    for i, r in enumerate(rows):
+        e = r["e"]; pnl = r["pnl"]
+        score = _sc(e.get("score")) if e else "—"
+        rank = f"#{e['rank']}/{e['n_uni']}" if (e and e.get("rank")) else "—"
+        avgq = _avg_quad(e) if e else "—"
+        oneD = _pct(r["oneD"]) if r["oneD"] is not None else "—"
+        tv += r["val"]; tp += (pnl or 0.0)
+        reason = r["reason"]; reason = (reason[:46] + "…") if len(reason) > 47 else reason
+        cells.append([r["acct"], r["sym"], _money(r["val"]), score, rank, _trend(e), avgq, oneD,
+                      _money(pnl) if pnl is not None else "—", reason])
+        if pnl is not None:
+            rules.append((i, 8, GREEN if pnl >= 0 else RED))
+    if rows:
+        cells.append(["TOTAL", "", _money(tv), "", "", "", "", "", _money(tp), ""])
+        tr = len(rows)
+        rules += [(tr, 0, HEAD), (tr, 2, HEAD), (tr, 8, GREEN if tp >= 0 else RED)]
+    h = min(0.84, 0.06 + 0.029 * max(len(cells), 1))
+    ax = fig.add_axes([0.03, max(0.05, 0.90 - h), 0.94, h])
+    _draw_table(ax, cols, cells, colw, rules, fontsize=6.6)
+    pdf.savefig(fig); plt.close(fig)
+
+
 def run(accounts=None, end=None, out=None):
     today = end or date.today().isoformat()
     accts = accounts or DEFAULT_ACCOUNTS
@@ -200,6 +255,9 @@ def run(accounts=None, end=None, out=None):
                 "Overlay names (TQQQ/SQQQ) sit outside the universe so score/rank/avg show '—'.",
                 fontsize=7.5, va="top", color="#666")
         pdf.savefig(fig); plt.close(fig)
+
+        _summary_page(pdf, data, accts, enrich, today, "buy")    # buys across all accounts (unrealized)
+        _summary_page(pdf, data, accts, enrich, today, "sell")   # sells across all accounts (realized)
 
         for n in accts:
             _account_page(pdf, data[n], enrich, entry_enrich, today)
