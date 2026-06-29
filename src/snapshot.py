@@ -3,14 +3,19 @@
 Two parts (replaces the old performance-snapshot):
 
   • PAGE 1 — a summary table (the order-history report's cover, re-cut): per account, the CURRENT DAY's
-    P&L so far vs the daily QQQ/SPY benchmark move, then SINCE-INCEPTION P&L vs the QQQ/SPY benchmark over
-    that same inception→today window, plus #positions, #orders, and #days trading. A TOTAL row aggregates.
+    P&L so far + Day %, then SINCE-INCEPTION P&L + % vs the QQQ/SPY benchmark over each account's own
+    inception→today window, plus #positions, #orders, and #days trading. A TOTAL row aggregates, and below
+    it three BENCHMARK ROWS — QQQ, SPY, and the equal-weight model_v4 Universe average — each showing the
+    daily return and the since-inception return (starting-weighted across the fleet).
 
-  • PAGE 2+ — "Orders Today": every order whose submission falls in the CURRENT session window — from the
-    PRIOR trading day's market close (16:00 ET) through now (so the post-close EOD-agent fills and the
-    pre-open auction orders that set up today's book are included). One page per account that traded,
-    with the SAME per-order stats columns as the account order-history report (Score@sub / Trail / Pattern
-    / Rlz / Unrlz / Ret / Reason — reused verbatim from account_orders_report so the two always agree).
+  • PAGE 2 — "Orders Today, totals by account": a per-account roll-up (counts + traded $ + realized /
+    unrealized) of the orders in the current session window — no per-ticker detail.
+
+  • PAGE 3+ — "Orders Today" per-account detail: every order whose submission falls in the CURRENT session
+    window — from the PRIOR trading day's market close (16:00 ET) through now (so the post-close EOD-agent
+    fills and the pre-open auction orders that set up today's book are included) — with the SAME per-order
+    stats columns as the account order-history report (Score@sub / Trail / Pattern / Rlz / Unrlz / Ret /
+    Held / Reason — reused verbatim from account_orders_report so the two always agree).
 
     python run.py snapshot [--end YYYY-MM-DD] [--accounts a b c] [--out FILE]
 """
@@ -97,6 +102,49 @@ def _daily_bench(panel, prior_day, live_px) -> Dict[str, float]:
     return out
 
 
+def _universe_panel(today, start):
+    """Close panel for the model_v4 universe (the ~83 names) from `start` through `today` — the source for
+    the equal-weight UNIVERSE-AVERAGE benchmark row. None on failure."""
+    try:
+        import datetime as _dt
+        from backtest import load_config, fetch_backtest_data
+        from scenarios import load_scenario, build_config
+        cfg = build_config(load_config(ROOT / "config"), load_scenario("model_v4"))
+        s = _dt.date.fromisoformat(start) - _dt.timedelta(days=10)
+        cl = fetch_backtest_data(cfg["tickers"], s, _dt.date.fromisoformat(today))["Close"]
+        return cl if hasattr(cl, "columns") else None
+    except Exception:
+        return None
+
+
+def _avg_ret(panel, base_date):
+    """Equal-weight mean across columns of (latest bar / close on-or-before `base_date` − 1) — the universe
+    avg return from `base_date` to now. base_date = prior close → daily; = inception → since-inception.
+    None when the base date isn't covered."""
+    if panel is None or not base_date:
+        return None
+    try:
+        base = panel.loc[:base_date]
+        if base.empty:
+            return None
+        b0, b1 = base.iloc[-1], panel.iloc[-1]
+        rets = [float(b1[c]) / float(b0[c]) - 1 for c in panel.columns
+                if float(b0[c]) > 0 and b0[c] == b0[c] and b1[c] == b1[c]]
+        return (sum(rets) / len(rets)) if rets else None
+    except Exception:
+        return None
+
+
+def _session_window(today, prior_day):
+    """(win_start, win_end, label) for the CURRENT session: the prior trading-day close (16:00 ET) → now.
+    Orders submitted in this window are 'today's' (incl. post-close EOD fills + pre-open auction orders)."""
+    win_end = datetime.combine(date.fromisoformat(today), time(23, 59, 59), tzinfo=_ET)
+    win_start = (datetime.combine(date.fromisoformat(prior_day), time(16, 0), tzinfo=_ET)
+                 if prior_day else win_end - timedelta(days=1))
+    lbl = ("since the prior close (%s 16:00 ET) through now" % prior_day) if prior_day else "today"
+    return win_start, win_end, lbl
+
+
 def _days_trading(panel, inception) -> Optional[int]:
     """# trading sessions from inception (inclusive) through today, off the price calendar."""
     if panel is None or not inception:
@@ -129,19 +177,19 @@ def _today_orders(orders, win_start, win_end):
 
 
 # ── page 1: summary table ────────────────────────────────────────────────────────
-def _render_summary(pdf, data, accts, today, panel, ibench, dbench, prior_day):
+def _render_summary(pdf, data, accts, today, panel, ibench, dbench, prior_day, bench_rows):
     fig = plt.figure(figsize=(11, 8.5))
     fig.suptitle("Snapshot — daily & since-inception P&L vs benchmarks   %s" % today,
                  fontsize=14, weight="bold")
-    dq, ds = dbench.get("QQQ"), dbench.get("SPY")
-    sub = ("Day = today's change so far vs the prior close (%s)   ·   Since inception = each account's "
-           "own start→today window" % (prior_day or "—"))
+    sub = ("Account returns are on INVESTED capital (equity − cash; cash excluded)   ·   Day = vs the prior "
+           "close (%s)   ·   benchmark rows below TOTAL" % (prior_day or "—"))
     fig.text(0.5, 0.945, sub, ha="center", fontsize=8, color="#555")
 
-    ax = fig.add_axes([0.03, 0.34, 0.94, 0.55]); ax.axis("off")
-    cols = ["Account", "Equity", "Day\nP&L", "Day\n%", "Day\nQQQ", "Day\nSPY",
-            "Incep\nP&L", "Incep\n%", "Incep\nQQQ", "Incep\nSPY", "Pos", "Ord", "Days"]
-    raw = [15, 11, 9, 7, 7, 7, 10, 8, 7, 7, 5, 5, 6]
+    ax = fig.add_axes([0.05, 0.34, 0.90, 0.55]); ax.axis("off")
+    cols = ["Account", "Equity", "Day\nP&L", "Day\n%", "Incep\nP&L", "Incep\n%", "Incep\nQQQ", "Incep\nSPY",
+            "Pos", "Ord", "Days"]
+    raw = [16, 12, 10, 8, 11, 8, 8, 8, 5, 5, 6]
+    DAYCOL, INCCOL = 3, 5                              # the columns the benchmark rows write into
 
     def _b(v):
         return _pct(v) if v is not None else "—"
@@ -150,22 +198,24 @@ def _render_summary(pdf, data, accts, today, panel, ibench, dbench, prior_day):
     for n in accts:
         d = data[n]
         if d.get("err"):
-            cells.append([n, "—", "—", "—", _b(dq), _b(ds), "ERR", "—", "—", "—", "—", "—", "—"])
+            cells.append([n, "—", "—", "—", "ERR", "—", "—", "—", "—", "—", "—"])
             continue
         ok.append(d)
         ib = ibench.get(n) or {}
         days = _days_trading(panel, d.get("inception"))
+        inv = max(d["eq"] - d["cash"], 0.0)               # invested capital — cash EXCLUDED from the denominator
+        dret = (d["day_pnl"] / inv) if (inv > 0 and d.get("day_pnl") is not None) else None
+        tret = (d["total_pnl"] / inv) if inv > 0 else None
         cells.append([n, _money(d["eq"]),
-                      _money(d["day_pnl"]) if d.get("day_pnl") is not None else "—", _b(d.get("day_ret")),
-                      _b(dq), _b(ds),
-                      _money(d["total_pnl"]), _b(d["tot_ret"]), _b(ib.get("QQQ")), _b(ib.get("SPY")),
-                      str(len(d["pos"])), str(len(d["orders"])),
-                      str(days) if days is not None else "—"])
+                      _money(d["day_pnl"]) if d.get("day_pnl") is not None else "—", _b(dret),
+                      _money(d["total_pnl"]), _b(tret), _b(ib.get("QQQ")), _b(ib.get("SPY")),
+                      str(len(d["pos"])), str(len(d["orders"])), str(days) if days is not None else "—"])
     if ok:
         agg = {k: sum(d[k] for d in ok) for k in ("eq", "total_pnl", "start")}
         day_ok = [d for d in ok if d.get("day_pnl") is not None]
         day_pnl = sum(d["day_pnl"] for d in day_ok)
-        day_last = sum(d["last_eq"] for d in day_ok)
+        inv_day = sum(max(d["eq"] - d["cash"], 0.0) for d in day_ok)   # invested base (cash excluded)
+        inv_all = sum(max(d["eq"] - d["cash"], 0.0) for d in ok)
 
         def _blend(sym):
             num = sum(d["start"] * ibench[d["name"]][sym] for d in ok
@@ -173,53 +223,117 @@ def _render_summary(pdf, data, accts, today, panel, ibench, dbench, prior_day):
             den = sum(d["start"] for d in ok if (ibench.get(d["name"]) or {}).get(sym) is not None)
             return (num / den) if den else None
         cells.append(["TOTAL", _money(agg["eq"]),
-                      (_money(day_pnl) if day_ok else "—"), (_b(day_pnl / day_last) if day_last else "—"),
-                      _b(dq), _b(ds),
-                      _money(agg["total_pnl"]), _b(agg["eq"] / agg["start"] - 1 if agg["start"] else 0.0),
+                      (_money(day_pnl) if day_ok else "—"), (_b(day_pnl / inv_day) if inv_day else "—"),
+                      _money(agg["total_pnl"]), _b(agg["total_pnl"] / inv_all if inv_all else None),
                       _b(_blend("QQQ")), _b(_blend("SPY")),
                       str(sum(len(d["pos"]) for d in ok)), str(sum(len(d["orders"]) for d in ok)), "—"])
+    # benchmark reference rows below TOTAL — daily return in the Day-% column, since-inception in the Incep-% column
+    bench_start = len(cells)
+    for label, dayret, incret in bench_rows:
+        row = [label] + ["—"] * (len(cols) - 1)
+        row[DAYCOL], row[INCCOL] = _b(dayret), _b(incret)
+        cells.append(row)
 
     t = ax.table(cellText=cells, colLabels=cols, colWidths=[w / sum(raw) for w in raw],
                  loc="upper center", cellLoc="center")
     t.auto_set_font_size(False); t.set_fontsize(7.6); t.scale(1, 1.7)
     for j in range(len(cols)):
         t[0, j].set_facecolor(HEAD); t[0, j].set_text_props(color="white", weight="bold"); t[0, j].set_fontsize(7.0)
-    # per-row sign coloring on the 8 P&L / return / benchmark cells (cols 2..9)
+    # per-account sign coloring on the P&L / return / benchmark cells (cols 2,3,4,5,6,7)
     for i, n in enumerate(accts):
         d = data[n]
         if d.get("err"):
-            t[i + 1, 6].set_text_props(color=RED, weight="bold")
-            for j, v in [(4, dq), (5, ds)]:
-                if v is not None:
-                    t[i + 1, j].set_text_props(color=(GREEN if v >= 0 else RED))
+            t[i + 1, 4].set_text_props(color=RED, weight="bold")
             continue
         ib = ibench.get(n) or {}
-        for j, v in [(2, d.get("day_pnl")), (3, d.get("day_ret")), (4, dq), (5, ds),
-                     (6, d["total_pnl"]), (7, d["tot_ret"]), (8, ib.get("QQQ")), (9, ib.get("SPY"))]:
+        inv = max(d["eq"] - d["cash"], 0.0)
+        dret = (d["day_pnl"] / inv) if (inv > 0 and d.get("day_pnl") is not None) else None
+        tret = (d["total_pnl"] / inv) if inv > 0 else None
+        for j, v in [(2, d.get("day_pnl")), (3, dret), (4, d["total_pnl"]), (5, tret),
+                     (6, ib.get("QQQ")), (7, ib.get("SPY"))]:
             if v is not None:
                 t[i + 1, j].set_text_props(color=(GREEN if v >= 0 else RED), weight="bold")
     if ok:                                                    # shade + bold the TOTAL row
         tr = len(accts) + 1
         for j in range(len(cols)):
             t[tr, j].set_facecolor("#dfe6e9"); t[tr, j].set_text_props(weight="bold")
+    for k, (label, dayret, incret) in enumerate(bench_rows):  # tint + sign-color the benchmark rows
+        r = bench_start + 1 + k
+        for j in range(len(cols)):
+            t[r, j].set_facecolor("#eef2f7")
+        t[r, 0].set_text_props(style="italic", color="#333")
+        for j, v in [(DAYCOL, dayret), (INCCOL, incret)]:
+            if v is not None:
+                t[r, j].set_text_props(color=(GREEN if v >= 0 else RED))
 
-    n1 = ("Day P&L = equity − prior-close equity (today's intraday change SO FAR); Day % = that ÷ prior-close "
-          "equity.  Day QQQ / SPY = the benchmark's move over the SAME prior-close→now window (one market-wide "
-          "number; TOTAL Day % = Σ day P&L ÷ Σ prior-close equity).")
-    n2 = ("Incep P&L = equity − starting (broker).  Incep % / QQQ / SPY = total return over EACH account's own "
-          "inception→today window (timelines aligned per account; TOTAL benchmark = starting-weighted blend).  "
-          "Days = trading sessions since inception.  ERR = the account's Alpaca keys are unset/placeholder.")
-    fig.text(0.03, 0.27, n1, fontsize=7.4, color="#555", wrap=True)
-    fig.text(0.03, 0.215, n2, fontsize=7.4, color="#555", wrap=True)
+    n1 = ("Day P&L = equity − prior-close equity (today's intraday change SO FAR); Incep P&L = equity − starting.  "
+          "Day % and Incep % are on INVESTED capital — P&L ÷ (equity − cash) — so idle cash is EXCLUDED from the "
+          "denominator and the figures are comparable to the fully-invested benchmark rows (TOTAL = Σ P&L ÷ Σ invested).  "
+          "Incep QQQ / SPY columns = each account's benchmark over its own inception→today window.")
+    n2 = ("Benchmark rows (below TOTAL): QQQ / SPY = the index move; Universe avg = equal-weight mean of the "
+          "model_v4 universe.  Day column = the prior-close→now move; Incep column = the same metric over the "
+          "fleet's inception window (starting-weighted).  Days = trading sessions since inception.")
+    fig.text(0.05, 0.27, n1, fontsize=7.4, color="#555", wrap=True)
+    fig.text(0.05, 0.215, n2, fontsize=7.4, color="#555", wrap=True)
     pdf.savefig(fig); plt.close(fig)
 
 
-# ── page 2+: orders today ────────────────────────────────────────────────────────
-def _render_orders_today(pdf, data, accts, today, prior_day, snapshots, sig_cache, trail_cache):
-    win_end = datetime.combine(date.fromisoformat(today), time(23, 59, 59), tzinfo=_ET)
-    win_start = (datetime.combine(date.fromisoformat(prior_day), time(16, 0), tzinfo=_ET)
-                 if prior_day else win_end - timedelta(days=1))
-    win_lbl = ("since the prior close (%s 16:00 ET) through now" % prior_day) if prior_day else "today"
+# ── page 2: orders today — totals by account (no per-ticker detail) ──────────────
+def _render_orders_by_account(pdf, data, accts, today, win_start, win_end, win_lbl):
+    fig = plt.figure(figsize=(11, 8.5))
+    fig.suptitle("Orders Today — totals by account   %s" % today, fontsize=14, weight="bold")
+    fig.text(0.5, 0.945, "Per-account roll-up of orders %s (no per-ticker detail — see the following pages)"
+             % win_lbl, ha="center", fontsize=8, color="#555")
+    ax = fig.add_axes([0.08, 0.30, 0.84, 0.58]); ax.axis("off")
+    cols = ["Account", "Orders", "Buys", "Sells", "Filled", "Traded $", "Realized $", "Unreal $"]
+    raw = [18, 7, 6, 6, 7, 11, 11, 11]
+    cells = []
+    tot = dict(orders=0, buys=0, sells=0, filled=0, value=0.0, rlz=0.0, unrlz=0.0)
+    meta = []                                                # (rlz, unrlz) per row for coloring; None for ERR/TOTAL
+    for n in accts:
+        d = data[n]
+        if d.get("err"):
+            cells.append([n, "—", "—", "—", "—", "—", "—", "—"]); meta.append(None); continue
+        td = _today_orders(d["orders"], win_start, win_end)
+        nb = sum(1 for o in td if (o.get("side") or "").lower() == "buy")
+        ns = sum(1 for o in td if (o.get("side") or "").lower() == "sell")
+        nf = sum(1 for o in td if o.get("status") == "filled")
+        val = sum(o["filled_qty"] * o["fill_price"] for o in td if o.get("fill_price") and o.get("filled_qty"))
+        rlz = sum(o["rlz"] for o in td if o.get("rlz") is not None)
+        unrlz = sum(o["unrlz"] for o in td if o.get("unrlz") is not None)
+        cells.append([n, str(len(td)), str(nb), str(ns), str(nf), _money(val), _money(rlz), _money(unrlz)])
+        meta.append((rlz, unrlz))
+        for k, v in (("orders", len(td)), ("buys", nb), ("sells", ns), ("filled", nf),
+                     ("value", val), ("rlz", rlz), ("unrlz", unrlz)):
+            tot[k] += v
+    cells.append(["TOTAL", str(tot["orders"]), str(tot["buys"]), str(tot["sells"]), str(tot["filled"]),
+                  _money(tot["value"]), _money(tot["rlz"]), _money(tot["unrlz"])])
+    t = ax.table(cellText=cells, colLabels=cols, colWidths=[w / sum(raw) for w in raw],
+                 loc="upper center", cellLoc="center")
+    t.auto_set_font_size(False); t.set_fontsize(8.0); t.scale(1, 1.7)
+    for j in range(len(cols)):
+        t[0, j].set_facecolor(HEAD); t[0, j].set_text_props(color="white", weight="bold")
+    for i, m in enumerate(meta):
+        if m is None:
+            continue
+        for j, v in ((6, m[0]), (7, m[1])):
+            if v:
+                t[i + 1, j].set_text_props(color=(GREEN if v >= 0 else RED), weight="bold")
+    tr = len(accts) + 1                                       # TOTAL row
+    for j in range(len(cols)):
+        t[tr, j].set_facecolor("#dfe6e9"); t[tr, j].set_text_props(weight="bold")
+    for j, v in ((6, tot["rlz"]), (7, tot["unrlz"])):
+        if v:
+            t[tr, j].set_text_props(color=(GREEN if v >= 0 else RED), weight="bold")
+    fig.text(0.08, 0.24, "Counts and dollar totals of the orders each account placed in the current session "
+             "window (%s).  Traded $ = Σ filled qty × fill price.  Realized / Unreal = Σ per-order realized "
+             "(sells) / mark-to-market (held buys) P&L — same figures the per-account detail pages total."
+             % win_lbl, fontsize=7.6, color="#555", wrap=True)
+    pdf.savefig(fig); plt.close(fig)
+
+
+# ── page 3+: orders today — per-account ticker detail ────────────────────────────
+def _render_orders_today(pdf, data, accts, today, win_start, win_end, win_lbl, snapshots, sig_cache, trail_cache):
     ow = [w / sum(ORDER_RAW) for w in ORDER_RAW]
 
     any_today = False
@@ -271,14 +385,38 @@ def run(end: Optional[date] = None, output: Optional[Path] = None,
     live_px = _live_bench_px(accts, data)
     prior_day = _prior_trading_day(panel, today)
     dbench = _daily_bench(panel, prior_day, live_px)
+    win_start, win_end, win_lbl = _session_window(today, prior_day)
     snapshots = _load_rank_snapshots()
     sig_cache, trail_cache = {}, {}
+
+    # benchmark rows (QQQ / SPY / equal-weight universe): (label, daily return, since-inception return).
+    # Since-inception is the starting-weighted blend across accounts so it tracks the live fleet's timeline.
+    upanel = _universe_panel(today, min(incs)) if incs else None
+    ok = [data[n] for n in accts if not data[n].get("err")]
+
+    def _blend(fn):
+        num = sum(d["start"] * fn(d) for d in ok if fn(d) is not None)
+        den = sum(d["start"] for d in ok if fn(d) is not None)
+        return (num / den) if den else None
+    _uinc = {}
+
+    def _univ_inc(d):
+        inc = d.get("inception")
+        if inc not in _uinc:
+            _uinc[inc] = _avg_ret(upanel, inc)
+        return _uinc[inc]
+    bench_rows = [
+        ("QQQ", dbench.get("QQQ"), _blend(lambda d: (ibench.get(d["name"]) or {}).get("QQQ"))),
+        ("SPY", dbench.get("SPY"), _blend(lambda d: (ibench.get(d["name"]) or {}).get("SPY"))),
+        ("Universe avg", _avg_ret(upanel, prior_day), _blend(_univ_inc)),
+    ]
 
     out = Path(output) if output else ROOT / "reports" / f"snapshot_{today}.pdf"
     out.parent.mkdir(parents=True, exist_ok=True)
     with PdfPages(out) as pdf:
-        _render_summary(pdf, data, accts, today, panel, ibench, dbench, prior_day)
-        _render_orders_today(pdf, data, accts, today, prior_day, snapshots, sig_cache, trail_cache)
+        _render_summary(pdf, data, accts, today, panel, ibench, dbench, prior_day, bench_rows)
+        _render_orders_by_account(pdf, data, accts, today, win_start, win_end, win_lbl)
+        _render_orders_today(pdf, data, accts, today, win_start, win_end, win_lbl, snapshots, sig_cache, trail_cache)
 
     rows = [{"label": n, "error": data[n].get("err")} for n in accts]
     return out, rows
