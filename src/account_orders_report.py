@@ -4,7 +4,8 @@ For each Alpaca paper account it pulls the LIVE broker state and renders:
   • a P&L summary (equity / cash / starting; total, unrealized, and realized-estimate P&L),
   • the current positions with per-name unrealized P&L,
   • the full order history submitted to Alpaca (time, side, symbol, qty, status, fill price, value),
-paginated as needed. A cover page rolls every account's P&L into one table.
+paginated as needed. A cover page rolls every account's P&L into one table (incl. the current day's
+P&L so far = equity − prior-close equity).
 
 P&L sourcing (broker = truth):
   • unrealized $ per position = (current_price - avg_entry) * qty   (% = Alpaca unrealized_plpc),
@@ -312,6 +313,7 @@ def _collect(name, today, status="all", limit=500):
         cli = AlpacaPaper(account=name)
         a = cli.account()
         eq, cash = float(a.get("equity") or 0.0), float(a.get("cash") or 0.0)
+        last_eq = float(a.get("last_equity") or 0.0)           # equity at the PRIOR trading-day close
         pos = cli.positions() or []
         for p in pos:                                          # derive unrealized $ from the broker fields
             p["unrealized_pl"] = (p["price"] - p["avg_entry"]) * p["qty"]
@@ -331,6 +333,9 @@ def _collect(name, today, status="all", limit=500):
                 "dec_log": _load_decision_log(name),
                 "book_cost": cost, "book_mv": mv, "book_ret": (mv / cost - 1) if cost > 0 else None,
                 "unreal": unreal, "total_pnl": total, "realized_est": realized,
+                "last_eq": last_eq,                                # today's intraday change so far (vs prior close):
+                "day_pnl": (eq - last_eq) if last_eq > 0 else None,
+                "day_ret": (eq / last_eq - 1) if last_eq > 0 else None,
                 "tot_ret": (eq / start - 1 if start else 0.0), "err": None}
     except Exception as exc:
         return {"name": name, "err": str(exc)[:80]}
@@ -441,6 +446,109 @@ def _table(fig, rect, cols, cells, colw, fontsize=7.5):
     return ax, t
 
 
+# ── shared order-table spec + cell builders (used by the full history page AND the snapshot report) ──
+ORDER_COLS = ["Filled (CT)", "Side", "Symbol", "FillQty", "Fill px", "Value", "Rlz $", "Unrlz $", "Ret %",
+              "Score@sub", "Trail 1/5/10/20/60d", "Pattern", "Status", "Reason"]
+ORDER_RAW = [10, 4, 6, 5, 7, 7, 7, 7, 6, 8, 16, 9, 7, 11]
+
+
+def _order_builders(d, snapshots, sig_cache, trail_cache):
+    """Factory → (orow, patterncell) closures that render an order as the order-history table's row, with
+    the book's OWN selection metric (Score@sub), trailing composite scores, and trajectory Pattern. Shared
+    so the snapshot's Orders-Today page shows byte-identical per-order stats to the full history report."""
+    kind = d.get("kind")
+    dec_log = d.get("dec_log") or {}
+
+    def _scorecell(o):                                       # the book's OWN selection metric the batch was submitted under
+        sym, side = o.get("symbol", ""), (o.get("side") or "").lower()
+        dt = _et_date(o.get("submitted_at") or o.get("filled_at"))
+        # 1) exact, from the decision log (going forward): z for zscore books, score otherwise
+        dl = dec_log.get((dt, sym, side))
+        if dl:
+            rk = (" #%d" % int(dl["rank"])) if dl.get("rank") is not None else ""
+            if dl.get("z") is not None and dl["z"] == dl["z"]:
+                return "z%+.2f%s" % (float(dl["z"]), rk)
+            if dl.get("score") is not None and dl["score"] == dl["score"]:
+                return "%.2f%s" % (float(dl["score"]), rk)
+        # 2) recompute the book's own metric as-of the submission date (zscore / score_rebalance)
+        if kind in ("zscore_reversal", "score_rebalance") and dt:
+            v, rk = _asof_signal(d, dt, sig_cache).get(sym, (None, None))
+            if v is not None:
+                return ("z%+.2f #%d" % (v, rk)) if kind == "zscore_reversal" else ("%.2f #%d" % (v, rk))
+            return "—"                                       # don't fall back to composite (wrong metric)
+        # 3) model_v4 / ramp-up / seed books -> composite score #rank from the daily snapshot
+        sc, rk = _entry_score(o, snapshots)
+        if sc is None:
+            return "—"
+        return ("%.2f #%d" % (sc, rk)) if rk else ("%.2f" % sc)
+
+    def _trail(o):                                          # (cur, a5, a10, a20) composite scores at order date
+        dt = _et_date(o.get("submitted_at") or o.get("filled_at"))
+        return _trail_avg(d.get("scenario", "model_v4"), dt, trail_cache).get(o.get("symbol", "")) if dt else None
+
+    def _trailcell(o):                                      # 1/5/10/20-day trailing close composite scores
+        a = _trail(o)
+        if not a or a[0] is None:
+            return "—"
+        return "/".join(("%.2f" % v).lstrip("0") if v is not None else "—" for v in a)   # e.g. .81/.80/.86/.76
+
+    def _patterncell(o):                                    # pattern category from score level + trend + 60d base
+        a = _trail(o)
+        return _score_pattern(a[0], a[1], a[3], a[4]) if a else "—"
+
+    def _orow(o):
+        fp = o.get("fill_price")
+        val = (o["filled_qty"] * fp) if (fp and o["filled_qty"]) else None
+        rlz, unrlz, ret = o.get("rlz"), o.get("unrlz"), o.get("ret")
+        return [_ts(o.get("filled_at") or o.get("submitted_at")), (o.get("side") or "").upper(),
+                o.get("symbol", ""), "%g" % o["filled_qty"], ("$%.2f" % fp) if fp else "—",
+                _money(val) if val is not None else "—",
+                _money(rlz) if rlz is not None else "—",
+                _money(unrlz) if unrlz is not None else "—",
+                _pct(ret) if ret is not None else "—",
+                _scorecell(o), _trailcell(o), _patterncell(o), o.get("status", ""), _order_reason(o, kind, dec_log)]
+
+    return _orow, _patterncell
+
+
+def _order_total_row(orders):
+    """The pinned TOTAL row (gross filled value + Σ realized/unrealized over `orders`) + the two sums used
+    for coloring. Computed over whatever order list is passed (full history, or just today's)."""
+    realized_sum = sum(o["rlz"] for o in orders if o.get("rlz") is not None)
+    unrlz_sum = sum(o["unrlz"] for o in orders if o.get("unrlz") is not None)
+    value_sum = sum(o["filled_qty"] * o["fill_price"] for o in orders
+                    if o.get("fill_price") and o.get("filled_qty"))
+    row = ["TOTAL", "", "", "", "", _money(value_sum), _money(realized_sum), _money(unrlz_sum),
+           "", "", "", "", "", ""]
+    return row, realized_sum, unrlz_sum
+
+
+def _color_orders(tbl, chunk, offset, patterncell, realized_sum, unrlz_sum):
+    """Color a drawn order table: green/red TOTAL row (always table row 1) + each order's
+    side / realized / unrealized / return / pattern. `offset` = the table row of the first order."""
+    for j in range(len(ORDER_COLS)):
+        tbl[1, j].set_facecolor("#dfe6e9"); tbl[1, j].set_text_props(weight="bold")
+    tbl[1, 6].set_text_props(color=(GREEN if realized_sum >= 0 else RED), weight="bold")
+    tbl[1, 7].set_text_props(color=(GREEN if unrlz_sum >= 0 else RED), weight="bold")
+    for i, o in enumerate(chunk):
+        r = i + offset
+        side = (o.get("side") or "").upper()
+        tbl[r, 1].set_text_props(color=(GREEN if side == "BUY" else RED), weight="bold")
+        if o.get("rlz") is not None:                       # realized SELL
+            tbl[r, 6].set_text_props(color=(GREEN if o["rlz"] >= 0 else RED), weight="bold")
+        if o.get("unrlz") is not None:                     # mark-to-market of a held BUY
+            tbl[r, 7].set_text_props(color=(GREEN if o["unrlz"] >= 0 else RED), weight="bold")
+        if o.get("ret") is not None:
+            tbl[r, 8].set_text_props(color=(GREEN if o["ret"] >= 0 else RED), weight="bold")
+        tbl[r, 10].set_text_props(color="#555")            # trailing avgs (muted)
+        pat = patterncell(o)                               # color by trajectory direction (rising/falling)
+        tbl[r, 11].set_text_props(weight="bold", color=(GREEN if pat in ("Surging", "Climbing")
+                                  else RED if pat in ("Dropping", "Fading") else "#555"))
+        if o.get("status") != "filled":
+            tbl[r, 12].set_text_props(color=GREY, style="italic")
+        tbl[r, 13].set_text_props(color="#555", style="italic")
+
+
 def _render_account(pdf, d, bench=None, snapshots=None, sig_cache=None, trail_cache=None):
     bench = bench or {}
     snapshots = snapshots or []
@@ -510,91 +618,10 @@ def _render_account(pdf, d, bench=None, snapshots=None, sig_cache=None, trail_ca
 
     # ── order history — its own page(s), paginated; never shares a page with positions ──
     orders = d["orders"]
-    kind = d.get("kind")
-    dec_log = d.get("dec_log") or {}
-    ocols = ["Filled (CT)", "Side", "Symbol", "FillQty", "Fill px", "Value", "Rlz $", "Unrlz $", "Ret %",
-             "Score@sub", "Trail 1/5/10/20/60d", "Pattern", "Status", "Reason"]
-    oraw = [10, 4, 6, 5, 7, 7, 7, 7, 6, 8, 16, 9, 7, 11]
-    ow = [w / sum(oraw) for w in oraw]
-    realized_sum = sum(o["rlz"] for o in orders if o.get("rlz") is not None)
-    unrlz_sum = sum(o["unrlz"] for o in orders if o.get("unrlz") is not None)
-    value_sum = sum(o["filled_qty"] * o["fill_price"] for o in orders
-                    if o.get("fill_price") and o.get("filled_qty"))
+    ow = [w / sum(ORDER_RAW) for w in ORDER_RAW]
+    _orow, _patterncell = _order_builders(d, snapshots, sig_cache, trail_cache)
     # account-wide TOTAL row (shown atop every page of this history): gross filled value + Σ Rlz/Unrlz
-    total_row = ["TOTAL", "", "", "", "", _money(value_sum), _money(realized_sum), _money(unrlz_sum), "", "", "", "", "", ""]
-
-    def _scorecell(o):                                       # the book's OWN selection metric the batch was submitted under
-        sym, side = o.get("symbol", ""), (o.get("side") or "").lower()
-        dt = _et_date(o.get("submitted_at") or o.get("filled_at"))
-        # 1) exact, from the decision log (going forward): z for zscore books, score otherwise
-        dl = dec_log.get((dt, sym, side))
-        if dl:
-            rk = (" #%d" % int(dl["rank"])) if dl.get("rank") is not None else ""
-            if dl.get("z") is not None and dl["z"] == dl["z"]:
-                return "z%+.2f%s" % (float(dl["z"]), rk)
-            if dl.get("score") is not None and dl["score"] == dl["score"]:
-                return "%.2f%s" % (float(dl["score"]), rk)
-        # 2) recompute the book's own metric as-of the submission date (zscore / score_rebalance)
-        if kind in ("zscore_reversal", "score_rebalance") and dt:
-            v, rk = _asof_signal(d, dt, sig_cache).get(sym, (None, None))
-            if v is not None:
-                return ("z%+.2f #%d" % (v, rk)) if kind == "zscore_reversal" else ("%.2f #%d" % (v, rk))
-            return "—"                                       # don't fall back to composite (wrong metric)
-        # 3) model_v4 / ramp-up / seed books -> composite score #rank from the daily snapshot
-        sc, rk = _entry_score(o, snapshots)
-        if sc is None:
-            return "—"
-        return ("%.2f #%d" % (sc, rk)) if rk else ("%.2f" % sc)
-
-    def _trail(o):                                          # (cur, a5, a10, a20) composite scores at order date
-        dt = _et_date(o.get("submitted_at") or o.get("filled_at"))
-        return _trail_avg(d.get("scenario", "model_v4"), dt, trail_cache).get(o.get("symbol", "")) if dt else None
-
-    def _trailcell(o):                                      # 1/5/10/20-day trailing close composite scores
-        a = _trail(o)
-        if not a or a[0] is None:
-            return "—"
-        return "/".join(("%.2f" % v).lstrip("0") if v is not None else "—" for v in a)   # e.g. .81/.80/.86/.76
-
-    def _patterncell(o):                                    # pattern category from score level + trend + 60d base
-        a = _trail(o)
-        return _score_pattern(a[0], a[1], a[3], a[4]) if a else "—"
-
-    def _orow(o):
-        fp = o.get("fill_price")
-        val = (o["filled_qty"] * fp) if (fp and o["filled_qty"]) else None
-        rlz, unrlz, ret = o.get("rlz"), o.get("unrlz"), o.get("ret")
-        return [_ts(o.get("filled_at") or o.get("submitted_at")), (o.get("side") or "").upper(),
-                o.get("symbol", ""), "%g" % o["filled_qty"], ("$%.2f" % fp) if fp else "—",
-                _money(val) if val is not None else "—",
-                _money(rlz) if rlz is not None else "—",
-                _money(unrlz) if unrlz is not None else "—",
-                _pct(ret) if ret is not None else "—",
-                _scorecell(o), _trailcell(o), _patterncell(o), o.get("status", ""), _order_reason(o, kind, dec_log)]
-
-    def _color_orders(tbl, chunk, offset):                   # `offset` = table row of the first order
-        # style the TOTAL header-data row (always at table row 1) once
-        for j in range(len(ocols)):
-            tbl[1, j].set_facecolor("#dfe6e9"); tbl[1, j].set_text_props(weight="bold")
-        tbl[1, 6].set_text_props(color=(GREEN if realized_sum >= 0 else RED), weight="bold")
-        tbl[1, 7].set_text_props(color=(GREEN if unrlz_sum >= 0 else RED), weight="bold")
-        for i, o in enumerate(chunk):
-            r = i + offset
-            side = (o.get("side") or "").upper()
-            tbl[r, 1].set_text_props(color=(GREEN if side == "BUY" else RED), weight="bold")
-            if o.get("rlz") is not None:                       # realized SELL
-                tbl[r, 6].set_text_props(color=(GREEN if o["rlz"] >= 0 else RED), weight="bold")
-            if o.get("unrlz") is not None:                     # mark-to-market of a held BUY
-                tbl[r, 7].set_text_props(color=(GREEN if o["unrlz"] >= 0 else RED), weight="bold")
-            if o.get("ret") is not None:
-                tbl[r, 8].set_text_props(color=(GREEN if o["ret"] >= 0 else RED), weight="bold")
-            tbl[r, 10].set_text_props(color="#555")            # trailing avgs (muted)
-            pat = _patterncell(o)                              # color by trajectory direction (rising/falling)
-            tbl[r, 11].set_text_props(weight="bold", color=(GREEN if pat in ("Surging", "Climbing")
-                                      else RED if pat in ("Dropping", "Fading") else "#555"))
-            if o.get("status") != "filled":
-                tbl[r, 12].set_text_props(color=GREY, style="italic")
-            tbl[r, 13].set_text_props(color="#555", style="italic")
+    total_row, realized_sum, unrlz_sum = _order_total_row(orders)
 
     rest, page, npages = orders, 1, max(1, (len(orders) + ORDERS_PER_PAGE - 1) // ORDERS_PER_PAGE)
     while rest or page == 1:                                  # always emit at least one (possibly empty) page
@@ -602,9 +629,9 @@ def _render_account(pdf, d, bench=None, snapshots=None, sig_cache=None, trail_ca
         sub = "order history (newest first)" + ("" if npages == 1 else " — page %d/%d" % (page, npages))
         fig = _new_page(pdf, title, sub=sub)
         cells = ([total_row] + [_orow(o) for o in chunk]) if orders else []   # TOTAL row pinned at the top
-        _, ot = _table(fig, [0.02, 0.05, 0.96, 0.84], ocols, cells, ow, fontsize=5.5)
+        _, ot = _table(fig, [0.02, 0.05, 0.96, 0.84], ORDER_COLS, cells, ow, fontsize=5.5)
         if ot is not None:
-            _color_orders(ot, chunk, offset=2)               # order rows start after header(0)+TOTAL(1)
+            _color_orders(ot, chunk, 2, _patterncell, realized_sum, unrlz_sum)   # rows after header(0)+TOTAL(1)
         fig.text(0.02, 0.93, "Score@sub = the book's OWN selection metric #rank as-of the order's date (zscore: z, "
                  "lowest=#1; score-rebalance: 60d-avg score; model_v4: composite).  Trail 1/5/10/20/60d = the 1-day "
                  "(current) close composite score + its trailing 5/10/20/60-day averages (0.xx shown as .xx).",
@@ -626,24 +653,33 @@ def _render_cover(pdf, data, accts, today, bench, mark_note=None):
     if mark_note:
         fig.text(0.5, 0.945, mark_note, ha="center", fontsize=8, color="#0b3d91", style="italic")
     ax = fig.add_axes([0.03, 0.30, 0.94, 0.55]); ax.axis("off")
-    cols = ["Account", "Equity", "Cash", "Starting", "Total P&L", "Total %", "QQQ %", "SPY %",
-            "Unreal $", "Realized", "Pos", "Orders"]
+    cols = ["Account", "Equity", "Cash", "Starting", "Total P&L", "Total %", "Day P&L", "Day %",
+            "QQQ %", "SPY %", "Unreal $", "Realized", "Pos", "Orders"]
 
     def _bp(n, sym):                                          # account-aligned benchmark % (or "—")
         v = (bench.get(n) or {}).get(sym)
         return _pct(v) if v is not None else "—"
+
+    def _dp(d):                                              # (day-P&L $, day %) cells — '—' before a prior close
+        return (_money(d["day_pnl"]) if d.get("day_pnl") is not None else "—",
+                _pct(d["day_ret"]) if d.get("day_ret") is not None else "—")
     cells, ok = [], []
     for n in accts:
         d = data[n]
         if d.get("err"):
-            cells.append([n, "—", "—", "—", "ERR", "—", "—", "—", "—", "—", "—", "—"])
+            cells.append([n, "—", "—", "—", "ERR", "—", "—", "—", "—", "—", "—", "—", "—", "—"])
             continue
         ok.append(d)
+        dpnl, dret = _dp(d)
         cells.append([n, _money(d["eq"]), _money(d["cash"]), _money(d["start"]), _money(d["total_pnl"]),
-                      _pct(d["tot_ret"]), _bp(n, "QQQ"), _bp(n, "SPY"), _money(d["unreal"]),
+                      _pct(d["tot_ret"]), dpnl, dret, _bp(n, "QQQ"), _bp(n, "SPY"), _money(d["unreal"]),
                       _money(d["realized_est"]), str(len(d["pos"])), str(len(d["orders"]))])
     if ok:
         agg = {k: sum(d[k] for d in ok) for k in ("eq", "cash", "start", "total_pnl", "unreal", "realized_est")}
+        # day aggregates over accounts that HAVE a prior close (day % = Σ day P&L ÷ Σ prior-close equity)
+        day_ok = [d for d in ok if d.get("day_pnl") is not None]
+        day_pnl = sum(d["day_pnl"] for d in day_ok)
+        day_last = sum(d["last_eq"] for d in day_ok)
         # blended benchmark = starting-value-weighted mean of each account's inception-aligned return
         def _blend(sym):
             num = sum(d["start"] * bench[d["name"]][sym] for d in ok
@@ -652,9 +688,10 @@ def _render_cover(pdf, data, accts, today, bench, mark_note=None):
             return _pct(num / den) if den else "—"
         cells.append(["TOTAL", _money(agg["eq"]), _money(agg["cash"]), _money(agg["start"]),
                       _money(agg["total_pnl"]), _pct(agg["eq"] / agg["start"] - 1 if agg["start"] else 0.0),
+                      (_money(day_pnl) if day_ok else "—"), (_pct(day_pnl / day_last) if day_last else "—"),
                       _blend("QQQ"), _blend("SPY"), _money(agg["unreal"]), _money(agg["realized_est"]),
                       str(sum(len(d["pos"]) for d in ok)), str(sum(len(d["orders"]) for d in ok))])
-    raw = [15, 10, 9, 9, 10, 7, 7, 7, 9, 11, 5, 7]
+    raw = [15, 10, 9, 9, 10, 7, 9, 7, 7, 7, 9, 11, 5, 7]
     t = ax.table(cellText=cells, colLabels=cols, colWidths=[w / sum(raw) for w in raw],
                  loc="upper center", cellLoc="center")
     t.auto_set_font_size(False); t.set_fontsize(7.5); t.scale(1, 1.5)
@@ -665,9 +702,11 @@ def _render_cover(pdf, data, accts, today, bench, mark_note=None):
         if d.get("err"):
             t[i + 1, 4].set_text_props(color=RED, weight="bold")
             continue
-        for j, v in [(4, d["total_pnl"]), (5, d["tot_ret"]), (8, d["unreal"]), (9, d["realized_est"])]:
-            t[i + 1, j].set_text_props(color=(GREEN if v >= 0 else RED), weight="bold")
-        for j, sym in [(6, "QQQ"), (7, "SPY")]:               # color benchmark cells too
+        for j, v in [(4, d["total_pnl"]), (5, d["tot_ret"]), (6, d.get("day_pnl")), (7, d.get("day_ret")),
+                     (10, d["unreal"]), (11, d["realized_est"])]:
+            if v is not None:
+                t[i + 1, j].set_text_props(color=(GREEN if v >= 0 else RED), weight="bold")
+        for j, sym in [(8, "QQQ"), (9, "SPY")]:               # color benchmark cells too
             bv = (bench.get(n) or {}).get(sym)
             if bv is not None:
                 t[i + 1, j].set_text_props(color=(GREEN if bv >= 0 else RED))
@@ -675,10 +714,11 @@ def _render_cover(pdf, data, accts, today, bench, mark_note=None):
         tr = len(accts) + 1
         for j in range(len(cols)):
             t[tr, j].set_facecolor("#dfe6e9"); t[tr, j].set_text_props(weight="bold")
-    fig.text(0.03, 0.24, "Total P&L = equity - starting (broker).  Unrealized = Σ (price - avg entry) x qty over open "
-             "positions (broker).  Realized = Σ realized P&L on sells (fills, avg-cost) — the SAME figure shown by the "
-             "order-history TOTAL and the Trade Summary (Total may differ from Realized+Unrealized by a small "
-             "broker-vs-fills residual).", fontsize=7.5, color="#555", wrap=True)
+    fig.text(0.03, 0.24, "Total P&L = equity - starting (broker).  Day P&L = equity - prior-close equity (today's "
+             "intraday change SO FAR; Day %% = that ÷ prior-close equity; TOTAL = Σ day P&L ÷ Σ prior-close equity).  "
+             "Unrealized = Σ (price - avg entry) x qty over open positions (broker).  Realized = Σ realized P&L on sells "
+             "(fills, avg-cost) — the SAME figure shown by the order-history TOTAL and the Trade Summary (Total may "
+             "differ from Realized+Unrealized by a small broker-vs-fills residual).", fontsize=7.5, color="#555", wrap=True)
     fig.text(0.03, 0.205, "QQQ %% / SPY %% = benchmark total return measured over EACH account's own inception->today "
              "window (timelines aligned per account; TOTAL = starting-weighted blend).", fontsize=7.5, color="#555")
     fig.text(0.03, 0.17, "ERR rows = the account's Alpaca keys are unset/placeholder; see its page for detail.",

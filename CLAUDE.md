@@ -94,13 +94,19 @@ account uses it. Older/experimental versions (v2, v3, v5, v6) and one-off script
   PDF; `src/eod_summary.py` (`run.py eod-summary`) is the EOD sibling — marks to the official close,
   **sells the overlay hedge at the close**, renders each book's EOD PDF into `reports/eod/`, and writes
   a consolidated one-page **PDF** (`reports/eod_summary_<date>.pdf`, `.md` alongside) with grouped tables
-  (model_v4 reference vs live accounts) incl. a realized **Hedge P&L** column. `src/snapshot.py` (`run.py snapshot [--window 1D|5D|1M|MTD|YTD|…]`) renders a one-page
-  **performance** PDF (`reports/snapshot_<date>.pdf`): **1D Return + 1D P&L** (default; window
-  configurable) + SPY/QQQ context + Mkt Value/Cash + #Pos, in TWO grouped tables — the **simulated
-  model_v4 scenario** (shaded reference row) vs the **live Alpaca accounts** shown as **Top 10 Seed /
-  Existing Model Seed / Ramp Up** (three ways to implement model_v4 on any date), with an explainer +
-  Definitions block. For 1D the account returns come from the live broker (`stats["1D"]`); other windows
-  use `build_report`'s `eq_series`/`spy_series`/`qqq_series` (a book younger than the window shows `—`).
+  (model_v4 reference vs live accounts) incl. a realized **Hedge P&L** column. `src/snapshot.py` (`run.py snapshot
+  [--end …] [--accounts …]`) renders the daily **snapshot** PDF (`reports/snapshot_<date>.pdf`) across ALL broker
+  accounts: **page 1** is a summary table (the order-history cover, re-cut) showing each account's **current-day P&L
+  so far** (equity − prior-close equity) + **Day %** vs the **daily QQQ/SPY benchmark move** (the market's prior-close→now
+  return, one market-wide number), then **Since-Inception P&L + % vs inception-aligned QQQ/SPY** (each account's own
+  start→today window), plus **#positions / #orders / #days-trading**, with a TOTAL row (Day % = Σ day P&L ÷ Σ prior-close
+  equity; inception benchmark = starting-weighted blend). **Page 2+ = "Orders Today"**: one page per account of every
+  order whose submission falls in the CURRENT session window — from the **prior trading day's market close (16:00 ET)
+  through now** (so the post-close EOD-agent fills + the pre-open auction orders are included) — shown with the SAME
+  per-order stats columns as the order-history report (Score@sub / Trail 1/5/10/20/60d / Pattern / Rlz / Unrlz / Ret /
+  Reason). The order-row builders + coloring are **shared** with `account_orders_report.py` (`_order_builders`,
+  `_order_total_row`, `_color_orders`, `ORDER_COLS/ORDER_RAW`) so the two reports never drift. (The old "performance
+  snapshot — 3 ways to implement model_v4" view is replaced by this report.)
   `src/intraday_check.py` (`run.py intraday-check [--accounts …] [--extended-hours] [--summary] [--qqq/--spread/--vol-z
   what-if]`) is the one-shot **intraday trade-determination** check: live overlay signals (rebound + hedge — fire/idle
   + gate values) and the **dry-run order plan** for each account (model reconcile + overlay buy with its funding), read-only.

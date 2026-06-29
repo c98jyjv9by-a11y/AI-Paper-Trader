@@ -58,21 +58,27 @@ def _trend_label(avg):
     return "flat"
 
 
-def _build_enrichment(symbols, scenario="model_v4"):
+def _build_enrichment(symbols, scenario="model_v4", as_of=None):
     """For each symbol: composite score + cross-sectional rank, trailing 1/5/20/60d AVG score, a trend
     label, and trailing 1/5/20/60d price return. Universe scores come from one score panel; returns from
-    one price fetch. Overlay names (TQQQ/SQQQ) aren't in the universe → score/rank/avg show '—'."""
+    one price fetch. Overlay names (TQQQ/SQQQ) aren't in the universe → score/rank/avg show '—'.
+
+    `as_of` (a date) anchors EVERYTHING to that historical session instead of today — the score panel
+    ends there, the trailing avgs/trend read the closes up to it, and the returns end on it. Passing the
+    entry date thus reconstructs exactly what the same analytics looked like WHEN A POSITION WAS OPENED
+    (same scoring/trend logic, just a different endpoint). Default None = live/today."""
     import pandas as pd
     import broker_sync as bs
     from backtest import fetch_backtest_data
     from datetime import date, timedelta
-    panel = bs._score_panel(scenario, 60)                       # rows = sessions, cols = universe tickers
+    end = as_of or date.today()
+    panel = bs._score_panel(scenario, 60, as_of=as_of)          # rows = sessions, cols = universe tickers
     last = panel.iloc[-1]
     ranked = last.sort_values(ascending=False)
     rank_of = {t: i + 1 for i, t in enumerate(ranked.index)}
     n_uni = int(last.notna().sum())
     px = fetch_backtest_data(list(dict.fromkeys(symbols)),
-                             date.today() - timedelta(days=160), date.today())["Close"]
+                             end - timedelta(days=160), end)["Close"]
 
     def _avg(t, w):
         if t not in panel.columns:

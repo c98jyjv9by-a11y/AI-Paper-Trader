@@ -2,9 +2,13 @@
 per-ticker analytics added to `intraday-check`: composite score + cross-sectional rank, trailing
 1/5/20/60d AVG composite score, a trend type, and trailing 1/5/20/60d price return.
 
-For every account it shows: a CURRENT POSITIONS table (qty / entry / last / market value / unrealized
-P&L + the stats) and the QUEUED ORDERS the live reconcile would send right now (dry-run, latest prices)
-with each order's clarified reason + the same stats. Renders reports/positions_report_<date>.pdf.
+For every account it shows: a CURRENT POSITIONS table and the QUEUED ORDERS the live reconcile would
+send right now (dry-run, latest prices) with each order's clarified reason. The open-positions table
+carries the stats TWICE — once **@Entry** (the same trailing scores/returns + trend tag as they stood
+on the session the position was opened, reconstructed via `_build_enrichment(as_of=entry_date)`) and
+once **Now** — so you can see how each name's momentum picture has shifted since you bought it. The
+entry session is reconstructed from each account's fill history (start of the current holding streak).
+Renders reports/positions_report_<date>.pdf.
 
     python run.py positions-report [--accounts a b c] [--end YYYY-MM-DD] [--out FILE]
 """
@@ -15,6 +19,8 @@ from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
+matplotlib.rcParams["text.parse_math"] = False   # '$' is currency here, not a mathtext toggle (two $ on
+                                                  # one line — e.g. the equity/cash subtitle — else vanish)
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
@@ -27,6 +33,7 @@ from intraday_check import _build_enrichment, _WINDOWS, _pct, _sc
 
 ROOT = Path(__file__).resolve().parent.parent
 GREEN, RED, GREY, HEAD = "#1a7f37", "#c0392b", "#888", "#34495e"
+ENTRY_HEAD = "#6b5b95"          # @Entry header band — a muted purple, distinct from the slate "Now" band
 DEFAULT_ACCOUNTS = ["topten", "copymodel", "rampup", "monthly10", "weekly10", "combo20",
                     "zscore10d_biweekly", "zscore5d_weekly", "zscore1d_daily"]
 
@@ -35,6 +42,53 @@ def _money(x):
     if x is None:
         return "—"
     return ("-$%s" % f"{abs(x):,.0f}") if x < 0 else ("$%s" % f"{x:,.0f}")
+
+
+def _entry_dates(cli, held_syms):
+    """{symbol: 'YYYY-MM-DD'} entry session for each currently-held name = the date the CURRENT continuous
+    holding streak OPENED. Walks the account's FILLED orders oldest-first tracking running signed qty; each
+    time a name crosses from flat (≈0) to non-zero it stamps a fresh entry date, and a return to flat clears
+    it — so a name sold out and re-bought reports the LATEST open, not the original. None if no fill covers it
+    (e.g. seeded position with no recorded fill)."""
+    from collections import defaultdict
+    try:
+        fills = [o for o in (cli.orders(status="all", limit=500) or [])
+                 if o.get("status") == "filled" and o.get("filled_at")]
+    except Exception:
+        return {s: None for s in held_syms}
+    fills.sort(key=lambda o: o["filled_at"])
+    run, start = defaultdict(float), {}
+    for o in fills:
+        s = o.get("symbol")
+        q = float(o.get("filled_qty") or 0) * (1 if o.get("side") == "buy" else -1)
+        if abs(run[s]) < 1e-9 and q != 0:                  # flat -> open: a new holding streak begins
+            start[s] = o["filled_at"][:10]
+        run[s] += q
+        if abs(run[s]) < 1e-9:                             # back to flat: streak closed
+            start.pop(s, None)
+    return {s: start.get(s) for s in held_syms}
+
+
+def _pct0(x):
+    """Compact whole-percent (the four-window return quad is too wide at 2 decimals — it overran the
+    neighbouring column in the dense positions table)."""
+    return "—" if x is None else f"{x * 100:+.0f}%"
+
+
+def _avg_quad(e):
+    return "/".join(_sc(e["avg"][w]) for w in _WINDOWS)
+
+
+def _ret_quad(e):
+    return "/".join(_pct0(e["ret"][w]) for w in _WINDOWS)
+
+
+def _entry_stat_cells(e):
+    """The 4 @Entry analytics cells (score, trend, avg 1/5/20/60, ret 1/5/20/60) — no rank (a past
+    cross-sectional rank is less useful than the trajectory it sat in). '—' when unavailable."""
+    if not e:
+        return ["—", "—", "—", "—"]
+    return [_sc(e.get("score")), e.get("trend", "—"), _avg_quad(e), _ret_quad(e)]
 
 
 def _cadence(name):
@@ -72,10 +126,12 @@ def _collect(name):
         acct = cli.account()
         pos = cli.positions() or []
         cadence, due = _cadence(name)
+        entry = _entry_dates(cli, [p["ticker"] for p in pos])    # entry session per held name (from fills)
         res = (bs.submit_session(name, cli=cli, submit=False, extended=True, log=False) if due
                else _forced_preview(name, cli))                  # read-only previews (no audit-log writes)
         return {"name": name, "eq": float(acct.get("equity") or 0.0),
                 "cash": float(acct.get("cash") or 0.0), "pos": pos, "cadence": cadence, "preview": not due,
+                "entry": entry,
                 "orders": res.get("orders", []), "suppressed": res.get("suppressed", []), "err": None}
     except Exception as exc:
         return {"name": name, "err": str(exc)[:90]}
@@ -86,13 +142,13 @@ def _stat_cells(e):
     if not e:
         return ["—", "—", "—", "—", "—"]
     rank = f"#{e['rank']}/{e['n_uni']}" if e.get("rank") else "—"
-    avg = "/".join(_sc(e["avg"][w]) for w in _WINDOWS)
-    ret = "/".join(_pct(e["ret"][w]) for w in _WINDOWS)
-    return [_sc(e.get("score")), rank, e.get("trend", "—"), avg, ret]
+    return [_sc(e.get("score")), rank, e.get("trend", "—"), _avg_quad(e), _ret_quad(e)]
 
 
-def _draw_table(ax, cols, cells, colw, color_rules):
-    """Banded table filling `ax`; color_rules = list of (row_idx0based_in_cells, col_idx, color)."""
+def _draw_table(ax, cols, cells, colw, color_rules, fontsize=7.0, head_tints=None):
+    """Banded table filling `ax`; color_rules = list of (row_idx0based_in_cells, col_idx, color).
+    `head_tints` = optional {col_idx: facecolor} to band a header-column group a custom colour."""
+    head_tints = head_tints or {}
     ax.axis("off")
     if not cells:
         ax.text(0.0, 0.95, "— none —", fontsize=8, color=GREY, va="top")
@@ -100,9 +156,10 @@ def _draw_table(ax, cols, cells, colw, color_rules):
     t = ax.table(cellText=cells, colLabels=cols, colWidths=colw, loc="upper center",
                  cellLoc="center", bbox=[0, 0, 1, 1])
     t.auto_set_font_size(False)
-    t.set_fontsize(7.0)
+    t.set_fontsize(fontsize)
     for j in range(len(cols)):
-        c = t[0, j]; c.set_facecolor(HEAD); c.set_text_props(color="white", weight="bold"); c.set_fontsize(6.8)
+        c = t[0, j]; c.set_facecolor(head_tints.get(j, HEAD))
+        c.set_text_props(color="white", weight="bold"); c.set_fontsize(fontsize - 0.2)
     for i in range(len(cells)):                         # zebra banding
         if i % 2:
             for j in range(len(cols)):
@@ -111,7 +168,7 @@ def _draw_table(ax, cols, cells, colw, color_rules):
         t[i + 1, j].set_text_props(color=color, weight="bold")
 
 
-def _account_page(pdf, d, enrich, today):
+def _account_page(pdf, d, enrich, entry_enrich, today):
     name = d["name"]
     fig = plt.figure(figsize=(11, 8.5))
     if d.get("err"):
@@ -129,25 +186,30 @@ def _account_page(pdf, d, enrich, today):
                 ("" if not d["suppressed"] else " · %d trim(s) suppressed" % len(d["suppressed"]))),
              ha="center", fontsize=9, color="#333")
 
-    # ── current positions ────────────────────────────────────────────────────
-    fig.text(0.04, 0.905, "CURRENT POSITIONS", fontsize=10, weight="bold")
-    pcols = ["Ticker", "Qty", "Entry", "Last", "Mkt Val", "Unreal P&L",
-             "Score", "Rank", "Trend", "Avg 1/5/20/60d", "Ret 1/5/20/60d"]
-    praw = [7, 5, 7, 7, 9, 11, 6, 8, 9, 17, 22]
+    # ── current positions — stats shown @ENTRY (purple band) and NOW (slate band) ─────────────
+    fig.text(0.04, 0.905, "CURRENT POSITIONS   —   trailing scores/returns + trend tag @ entry vs now",
+             fontsize=10, weight="bold")
+    pcols = ["Ticker", "Qty", "Entry$", "Last$", "Mkt Val", "Unreal P&L", "Entry\nDate",
+             "@Ent\nScore", "@Ent\nTrend", "@Ent Avg\n1/5/20/60d", "@Ent Ret\n1/5/20/60d",
+             "Now\nScore", "Now\nRank", "Now\nTrend", "Now Avg\n1/5/20/60d", "Now Ret\n1/5/20/60d"]
+    praw = [6, 3, 6, 6, 7, 10, 5, 5, 7, 14, 16, 5, 6, 7, 14, 16]
     pcolw = [w / sum(praw) for w in praw]
+    ptint = {j: ENTRY_HEAD for j in (6, 7, 8, 9, 10)}  # Entry-Date + the 4 @Entry stat columns
     pcells, prules = [], []
     for i, p in enumerate(sorted(d["pos"], key=lambda x: -x.get("market_value", 0))):
         sym = p["ticker"]
         upl = p["market_value"] - p["qty"] * p["avg_entry"]
         plpc = p.get("unrealized_plpc", 0.0)
+        ed = (d.get("entry") or {}).get(sym)               # entry session 'YYYY-MM-DD' (or None)
+        ee = (entry_enrich.get(ed) or {}).get(sym) if ed else None   # enrichment as-of that session
         pcells.append([sym, f"{p['qty']:.0f}", f"${p['avg_entry']:,.2f}", f"${p['price']:,.2f}",
                        _money(p["market_value"]), "%s (%s)" % (_money(upl), _pct(plpc)),
-                       *_stat_cells(enrich.get(sym))])
+                       (ed[5:] if ed else "—"), *_entry_stat_cells(ee), *_stat_cells(enrich.get(sym))])
         prules.append((i, 5, GREEN if upl >= 0 else RED))
     nrow = max(len(pcells), 1)
-    ph = min(0.56, 0.045 + 0.026 * nrow)               # height grows with row count, capped
-    axp = fig.add_axes([0.04, 0.885 - ph, 0.92, ph])
-    _draw_table(axp, pcols, pcells, pcolw, prules)
+    ph = min(0.58, 0.05 + 0.027 * nrow)                # height grows with row count, capped
+    axp = fig.add_axes([0.02, 0.885 - ph, 0.96, ph])
+    _draw_table(axp, pcols, pcells, pcolw, prules, fontsize=6.0, head_tints=ptint)
 
     # ── queued orders (dry-run reconcile, latest prices) ─────────────────────
     qy = 0.885 - ph - 0.04
@@ -189,9 +251,19 @@ def run(accounts=None, end=None, out=None):
     enrich = {}
     if syms:
         try:
-            enrich = _build_enrichment(syms)
+            enrich = _build_enrichment(syms)                       # current (as-of today)
         except Exception as exc:
             print("warning: per-ticker analytics unavailable (%s) — rendering without stats" % exc)
+
+    # one @Entry enrichment per DISTINCT entry session across the fleet (deduped — a weekly rebalance
+    # opens many names on the same day), so the as-of panel is rebuilt only a handful of times.
+    entry_dates = sorted({ed for d in data.values() for ed in (d.get("entry") or {}).values() if ed})
+    entry_enrich = {}
+    for ed in entry_dates:
+        try:
+            entry_enrich[ed] = _build_enrichment(syms, as_of=date.fromisoformat(ed))
+        except Exception as exc:
+            print("warning: @entry analytics unavailable for %s (%s)" % (ed, exc))
 
     out = Path(out) if out else ROOT / "reports" / f"positions_report_{today}.pdf"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -203,7 +275,8 @@ def run(accounts=None, end=None, out=None):
         ax.text(0, 1.0, "One page per account: current positions and the orders the live reconcile would "
                 "send now (dry-run), each", fontsize=9.5, va="top", color="#333")
         ax.text(0, 0.965, "ticker enriched with composite score + rank, trailing 1/5/20/60d avg score, "
-                "trend type, and trailing 1/5/20/60d return.", fontsize=9.5, va="top", color="#333")
+                "trend type, and trailing 1/5/20/60d return — shown @ENTRY (when opened) and NOW.",
+                fontsize=9.5, va="top", color="#333")
         y = 0.90
         for n in accts:
             d = data[n]
@@ -221,7 +294,7 @@ def run(accounts=None, end=None, out=None):
         pdf.savefig(fig); plt.close(fig)
 
         for n in accts:
-            _account_page(pdf, data[n], enrich, today)
+            _account_page(pdf, data[n], enrich, entry_enrich, today)
 
     return {"pdf": str(out), "data": data}
 
