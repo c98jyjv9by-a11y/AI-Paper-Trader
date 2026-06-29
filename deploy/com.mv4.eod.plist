@@ -4,7 +4,7 @@
        cp deploy/com.mv4.eod.plist ~/Library/LaunchAgents/
        launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mv4.eod.plist
      Verify: launchctl list | grep mv4   ·   logs: /tmp/mv4_eod.log
-     Runs 14:40 local Central (= 15:40 ET, 20 min before the close), Mon-Fri; reruns on wake if asleep. -->
+     Runs 15:05 local Central (= 16:05 ET, 5 min AFTER the close; trades run pre-close via com.mv4.preclose), Mon-Fri; reruns on wake if asleep. -->
 <plist version="1.0">
 <dict>
   <key>Label</key><string>com.mv4.eod</string>
@@ -15,11 +15,11 @@
   </array>
   <key>StartCalendarInterval</key>
   <array>
-    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>40</integer></dict>
-    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>40</integer></dict>
-    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>40</integer></dict>
-    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>40</integer></dict>
-    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>40</integer></dict>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>5</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>5</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>5</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>5</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>5</integer></dict>
   </array>
   <key>StandardOutPath</key><string>/tmp/mv4_eod.log</string>
   <key>StandardErrorPath</key><string>/tmp/mv4_eod.log</string>
