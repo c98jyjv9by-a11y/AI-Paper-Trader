@@ -30,3 +30,11 @@ asof,symbol,side,qty,limit_price,reason,score,rank,z,pnl,retry
 2026-06-29,NVDA,sell,1,194.98,zscore daily entry: most-fallen #8 (1d-avg z),,8,-1.528,,False
 2026-06-29,NXPI,sell,1,269.12,zscore daily entry: most-fallen #3 (1d-avg z),,3,-2.294,,False
 2026-06-29,ON,sell,1,87.85,zscore daily entry: most-fallen #1 (1d-avg z),,1,-2.597,,False
+2026-06-29,AAPL,buy,31,287.64,OPEN — zscore daily entry: most-fallen #3 (1d-avg z),,3,-1.988,,False
+2026-06-29,ARM,sell,2,339.61,TRIM to target weight — zscore daily entry: most-fallen #4 (1d-avg z),,4,-1.975,,False
+2026-06-29,CSCO,buy,75,119.52,OPEN — zscore daily entry: most-fallen #10 (1d-avg z),,10,-1.552,,False
+2026-06-29,MCHP,buy,98,93.81,OPEN — zscore daily entry: most-fallen #7 (1d-avg z),,7,-1.833,,False
+2026-06-29,NVDA,sell,44,188.02,EXIT — zscore daily: rebalance out (z rank 18),,18,-1.148,,False
+2026-06-29,ON,buy,5,91.28,ADD to target weight — zscore daily entry: most-fallen #2 (1d-avg z),,2,-2.399,,False
+2026-06-29,ORCL,sell,59,141.86,EXIT — zscore daily: rebalance out (z rank 15),,15,-1.337,,False
+2026-06-29,QCOM,sell,47,183.21,EXIT — zscore daily: rebalance out (z rank 13),,13,-1.495,,False

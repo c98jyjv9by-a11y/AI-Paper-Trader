@@ -4,12 +4,12 @@
   "status": "living",
   "inception": "2026-06-24",
   "frozen_through": "2026-06-24",
-  "live_through": "2026-06-28",
+  "live_through": "2026-06-29",
   "starting_value": 100000.0,
   "ending_value": 100000.0,
   "total_return": 0.0,
   "n_trades": 0,
-  "n_positions": 20,
+  "n_positions": 15,
   "broker": "alpaca_paper",
   "broker_keys": {
     "key_env": "APCA_API_KEY_ID_COMBO20",
@@ -19,8 +19,8 @@
     "trades.csv": "5fdd1f8fd3860e41e180c02e04f49bb8e19c07e0fde4957fb47a295b72a0ac28",
     "equity.csv": "109040297f774a51e7f502733c2f178108e67507d775d64227c7ca85d94970cd",
     "positions.csv": "820e6980a10998ec494f00ac7025170ea84592801dd2ebe6ffcef7c9dcd863de",
-    "continuation/equity.csv": "afb1727b68d06c006ca3e8ca4a053020695054c64896a7fd410366cf86cfbf38",
-    "continuation/positions.csv": "5c7826f58f4ec7c12cd6e8ba80e914974ad6f22a37a21ce35012abebc589065f"
+    "continuation/equity.csv": "716bdc2af5f1e20424807a0dacd37bb99b85330651d368ba002834c01199c03b",
+    "continuation/positions.csv": "35d0d2e0f0acd6267d1c3c9a97a064fdb0f6526b5b152239b3cad74db8a2ce8b"
   },
   "target_mode": {
     "kind": "score_rebalance",
@@ -35,5 +35,5 @@
     "min_score": 0.7,
     "exclude_dropping": true
   },
-  "live_value": 99954.0
+  "live_value": 102016.8
 }

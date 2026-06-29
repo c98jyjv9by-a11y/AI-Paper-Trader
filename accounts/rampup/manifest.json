@@ -4,7 +4,7 @@
   "status": "living",
   "inception": "2026-06-22",
   "frozen_through": "2026-06-22",
-  "live_through": "2026-06-28",
+  "live_through": "2026-06-29",
   "starting_value": 100000.0,
   "ending_value": 100000.0,
   "total_return": 0.0,
@@ -19,8 +19,8 @@
     "trades.csv": "5fdd1f8fd3860e41e180c02e04f49bb8e19c07e0fde4957fb47a295b72a0ac28",
     "equity.csv": "359ddb0200a9990c176a9436087f4088f46bff244bea02a4e3b9b7242ba0128f",
     "positions.csv": "820e6980a10998ec494f00ac7025170ea84592801dd2ebe6ffcef7c9dcd863de",
-    "continuation/equity.csv": "fdaf45d7a344b4e56bac7740b10b06e2c307b8cadc1ae832e1b2dd698b1953e4",
-    "continuation/positions.csv": "c0ddf103c6d1892f027a394af9da256088abac2ff290f2103104e9f7dcb47f80"
+    "continuation/equity.csv": "ec31b81c299812c967a483b1b4c7c19a6cb941e77d8aba6f260b92eccc547f5e",
+    "continuation/positions.csv": "24d503d2e3afcb83d89d2a00f87017ab674a93dad14457031f52833fe10f9158"
   },
   "target_mode": {
     "kind": "score_gate_rampup",
@@ -28,5 +28,5 @@
     "size_pct": 0.085,
     "graduate_at": 0.75
   },
-  "live_value": 98102.49
+  "live_value": 100860.78
 }
