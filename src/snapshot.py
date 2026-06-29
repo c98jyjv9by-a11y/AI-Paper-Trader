@@ -491,8 +491,8 @@ def run(end: Optional[date] = None, output: Optional[Path] = None,
         _render_summary(pdf, data, accts, today, panel, ibench, dbench, prior_day, bench_rows)
         _render_buys(pdf, data, accts, win_start, win_end, "Buys Today — by account & ticker",
                      "All buys %s, marked to current prices, sorted by unrealized P&L" % win_lbl)
-        _render_crossings(pdf, data, accts, win_start, win_end, "Crossing Orders Today — reversion check",
-                          "Opposite-side trades across accounts %s — flags sells into a reversion BUY" % win_lbl)
+        _render_crossings(pdf, data, accts, win_start, win_end, "Trades You Shouldn't Have Made",
+                          "Non-reversion SELLS into the 5-day z-reversion's BUYS — %s" % win_lbl)
         _render_buys(pdf, data, accts, winB_start, winB_end, "Prior-Day Buys — current P&L",
                      "Buys placed in %s, marked to NOW, sorted by current unrealized P&L" % winB_lbl)
         _render_orders_by_account(pdf, data, accts, today, win_start, win_end, win_lbl)
@@ -502,86 +502,85 @@ def run(end: Optional[date] = None, output: Optional[Path] = None,
     return out, rows
 
 
-# ── crossing-orders table — opposite-side trades across accounts, judged vs the reversion books ──
+# ── "trades you shouldn't have made" — sells that crossed the 5-day z-reversion's buys ──
 def _render_crossings(pdf, data, accts, win_start, win_end, title, sub):
-    """A ticker traded in OPPOSITE directions across accounts in the same session is a CROSS. The
-    z-score (reversion) books are the anchor: a reversion BUY means the name is most-fallen and
-    positioned to revert UP, so SELLING it in another book is the trade that DOESN'T make sense; a
-    reversion SELL paired with a BUY elsewhere is GOOD (the name is reverting up, momentum confirms).
-    Per leg: side, qty, and PnL = realized + unrealized on today's orders."""
-    from collections import defaultdict as _dd
+    """Judge = the 5-DAY z-reversion book ONLY. When it BUYS a name (most-fallen, expected to revert
+    UP) and a NON-reversion book SELLS the same name this session, that sell is a trade you shouldn't
+    have made. Opportunity cost = (price now - your sell price) x qty sold = the gain given up by
+    selling. Also totals the GOOD crosses (a non-reversion BUY of a name the 5D book is selling)."""
     from account import load_manifest as _lm
-    revset = set()
+    judge, nonrev = None, []
     for n in accts:
-        try:
-            if (_lm(n) or {}).get("target_mode", {}).get("kind") == "zscore_reversal":
-                revset.add(n)
-        except Exception:
-            pass
-    book = _dd(dict)                                          # ticker -> account -> {side, qty, pnl}
-    for n in accts:
+        tm = (_lm(n) or {}).get("target_mode", {}) or {}
+        if tm.get("kind") == "zscore_reversal":
+            if int(tm.get("avg_window", 0) or 0) == 5:
+                judge = n
+        else:
+            nonrev.append(n)
+    # the 5D judge's today book + a current-price map from its buy marks (fill x (1+ret))
+    jbuy, jsell, cur = set(), set(), {}
+    if judge and not data[judge].get("err"):
+        for o in _today_orders(data[judge]["orders"], win_start, win_end):
+            if not (o.get("fill_price") and o.get("filled_qty")):
+                continue
+            sym = o.get("symbol", ""); side = (o.get("side") or "").lower()
+            (jbuy if side == "buy" else jsell).add(sym)
+            if side == "buy" and o.get("ret") is not None:
+                cur[sym] = o["fill_price"] * (1 + o["ret"])
+    bad, good_total, good_n = [], 0.0, 0
+    for n in nonrev:
         d = data[n]
         if d.get("err"):
             continue
-        agg = _dd(lambda: {"buy": 0.0, "sell": 0.0, "pnl": 0.0})
+        agg = {}
         for o in _today_orders(d["orders"], win_start, win_end):
             if not (o.get("fill_price") and o.get("filled_qty")):
                 continue
-            a = agg[o.get("symbol", "")]
-            a[(o.get("side") or "").lower()] = a.get((o.get("side") or "").lower(), 0.0) + o["filled_qty"]
-            a["pnl"] += (o.get("rlz") or 0.0) + (o.get("unrlz") or 0.0)
-        for sym, a in agg.items():
-            side = "BUY" if a["buy"] >= a["sell"] else "SELL"
-            book[sym][n] = {"side": side, "qty": a["buy"] if side == "BUY" else a["sell"], "pnl": a["pnl"]}
-    cross = {t: ac for t, ac in book.items() if len(ac) >= 2
-             and any(v["side"] == "BUY" for v in ac.values())
-             and any(v["side"] == "SELL" for v in ac.values())}
-    rows = []
-    for t in sorted(cross):
-        ac = cross[t]
-        rev_buy = any(n in revset and v["side"] == "BUY" for n, v in ac.items())
-        rev_sell = any(n in revset and v["side"] == "SELL" for n, v in ac.items())
-        for n in accts:
-            if n not in ac:
-                continue
-            v = ac[n]
-            if n in revset:
-                verdict, tag = "reversion (anchor)", "rev"
-            elif v["side"] == "SELL" and rev_buy:
-                verdict, tag = "SKIP — selling into reversion buy", "bad"
-            elif v["side"] == "BUY" and rev_sell:
-                verdict, tag = "GOOD — buying as reversion exits", "good"
+            sym = o.get("symbol", ""); side = (o.get("side") or "").lower()
+            a = agg.setdefault(sym, {"bq": 0.0, "sq": 0.0, "sv": 0.0, "unrlz": 0.0})
+            if side == "buy":
+                a["bq"] += o["filled_qty"]
             else:
-                verdict, tag = "—", "na"
-            rows.append({"t": t, "acct": disp(n), "side": v["side"], "qty": v["qty"],
-                         "pnl": v["pnl"], "verdict": verdict, "tag": tag})
-    cols = ["Ticker", "Account", "Side", "Qty", "PnL $ (rlz+unrl)", "Verdict"]
-    raw = [7, 16, 6, 6, 15, 34]
+                a["sq"] += o["filled_qty"]; a["sv"] += o["filled_qty"] * o["fill_price"]
+            a["unrlz"] += o.get("unrlz") or 0.0
+        for sym, a in agg.items():
+            net_sell = a["sq"] - a["bq"]
+            if sym in jbuy and net_sell > 0 and sym in cur:          # BAD: sold into the 5D buy
+                sold = a["sv"] / a["sq"] if a["sq"] else 0.0
+                bad.append({"sym": sym, "acct": disp(n), "qty": net_sell, "sold": sold,
+                            "now": cur[sym], "opp": (cur[sym] - sold) * net_sell})
+            elif sym in jsell and a["bq"] > a["sq"]:                 # GOOD: bought what the 5D sold
+                good_total += a["unrlz"]; good_n += 1
+    bad.sort(key=lambda r: -r["opp"]); bad_total = sum(r["opp"] for r in bad)
+    cols = ["Ticker", "Account", "Qty sold", "Sold @", "Now @", "Opp. cost $"]
+    raw = [8, 17, 8, 9, 9, 12]
     fig = plt.figure(figsize=(11, 8.5))
     fig.suptitle(title, fontsize=14, weight="bold")
-    fig.text(0.5, 0.945, sub, ha="center", fontsize=8, color="#555")
-    ax = fig.add_axes([0.05, 0.07, 0.90, 0.84]); ax.axis("off")
-    cells = ([["— no crossing orders today —"] + [""] * (len(cols) - 1)] if not rows else
-             [[r["t"], r["acct"], r["side"], "%g" % r["qty"], _money(r["pnl"]), r["verdict"]] for r in rows])
+    fig.text(0.5, 0.95, sub, ha="center", fontsize=8.5, color="#555")
+    ax = fig.add_axes([0.06, 0.13, 0.88, 0.77]); ax.axis("off")
+    cells = ([["— none —"] + [""] * (len(cols) - 1)] if not bad else
+             [[r["sym"], r["acct"], "%g" % r["qty"], "$%.2f" % r["sold"], "$%.2f" % r["now"], _money(r["opp"])]
+              for r in bad])
+    if bad:
+        cells.append(["TOTAL", "", "", "", "", _money(bad_total)])
     tb = ax.table(cellText=cells, colLabels=cols, colWidths=[w / sum(raw) for w in raw],
-                  loc="upper center", cellLoc="center", bbox=[0, 0, 1, min(1.0, 0.04 * (len(cells) + 2) + 0.04)])
-    tb.auto_set_font_size(False); tb.set_fontsize(7.5)
+                  loc="upper center", cellLoc="center", bbox=[0, 0, 1, min(1.0, 0.05 * (len(cells) + 1))])
+    tb.auto_set_font_size(False); tb.set_fontsize(8)
     for j in range(len(cols)):
         tb[0, j].set_facecolor(HEAD); tb[0, j].set_text_props(color="white", weight="bold")
-    for i, r in enumerate(rows):
-        tb[i + 1, 4].set_text_props(color=(GREEN if r["pnl"] >= 0 else RED))
-        if r["tag"] == "bad":
-            for j in range(len(cols)):
-                tb[i + 1, j].set_facecolor("#fdecea")
-            tb[i + 1, 5].set_text_props(color=RED, weight="bold")
-        elif r["tag"] == "good":
-            tb[i + 1, 5].set_text_props(color=GREEN, weight="bold")
-        elif r["tag"] == "rev":
-            tb[i + 1, 5].set_text_props(color="#555", style="italic")
-    fig.text(0.05, 0.03, "Crossing = a ticker traded in OPPOSITE directions across accounts this session. Rule: a "
-             "reversion (z-score) BUY = most-fallen, positioned to revert UP, so SELLING it elsewhere (red) doesn't "
-             "make sense; a reversion SELL with a BUY elsewhere (green) is good. PnL = realized + unrealized on "
-             "today's orders.", fontsize=7.2, color="#555", wrap=True)
+    for i, r in enumerate(bad):
+        tb[i + 1, 5].set_text_props(color=(RED if r["opp"] >= 0 else GREEN), weight="bold")
+    if bad:
+        tr = len(bad) + 1
+        for j in range(len(cols)):
+            tb[tr, j].set_facecolor("#dfe6e9"); tb[tr, j].set_text_props(weight="bold")
+        tb[tr, 5].set_text_props(color=(RED if bad_total >= 0 else GREEN), weight="bold")
+    fig.text(0.06, 0.075, "What this is: SELLS in non-reversion books on names the 5-day z-reversion book was BUYING "
+             "that same session — dumping a name flagged oversold / reverting up. Opportunity cost = (price now - your "
+             "sell price) x qty = the gain given up by selling.", fontsize=8, color="#333", wrap=True)
+    fig.text(0.06, 0.03, "Total opportunity cost of these %d bad sells: %s.      Good crosses (bought what the 5D book "
+             "sold): %d trades, total PnL %s." % (len(bad), _money(bad_total), good_n, _money(good_total)),
+             fontsize=9, color="#333", weight="bold", wrap=True)
     pdf.savefig(fig); plt.close(fig)
 
 
