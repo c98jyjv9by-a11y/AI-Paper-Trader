@@ -1,0 +1,7 @@
+asof,symbol,current,target,delta,reason,retry
+2026-06-29,MU,8,7,-1,HOLD: -1-share trim suppressed (deadband 1) — score_rebalance weekly: top #3 of 10 (60d-avg score),False
+2026-06-29,INTC,68,69,1,HOLD: +1-share trim suppressed (deadband 1) — score_rebalance weekly: top #4 of 10 (60d-avg score),False
+2026-06-29,KLAC,37,36,-1,HOLD: -1-share trim suppressed (deadband 1) — score_rebalance weekly: top #11 of 10 (60d-avg score),False
+2026-06-29,MU,8,7,-1,HOLD: -1-share trim suppressed (deadband 1) — score_rebalance weekly: top #3 of 10 (60d-avg score),False
+2026-06-29,INTC,68,69,1,HOLD: +1-share trim suppressed (deadband 1) — score_rebalance weekly: top #4 of 10 (60d-avg score),False
+2026-06-29,KLAC,37,36,-1,HOLD: -1-share trim suppressed (deadband 1) — score_rebalance weekly: top #11 of 10 (60d-avg score),False

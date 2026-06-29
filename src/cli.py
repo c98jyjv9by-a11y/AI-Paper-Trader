@@ -367,6 +367,13 @@ def build_parser() -> argparse.ArgumentParser:
     ea.add_argument("--out", help="output PDF path (default reports/eod_accounts_<date>.pdf)")
     ea.set_defaults(func=_cmd_eod_accounts)
 
+    pr = sub.add_parser("positions-report",
+                        help="PDF: each account's current positions + queued orders, enriched with score/rank/avg-score/trend/return")
+    pr.add_argument("--accounts", nargs="+", help="override the account list (default: all 9 broker accounts)")
+    pr.add_argument("--end", metavar="YYYY-MM-DD", help="as-of date for labels/filename (default: today)")
+    pr.add_argument("--out", help="output PDF path (default reports/positions_report_<date>.pdf)")
+    pr.set_defaults(func=_cmd_positions_report)
+
     oh = sub.add_parser("order-history",
                         help="Combined PDF: each account's full Alpaca order history + positions + P&L (realized/unrealized)")
     oh.add_argument("--accounts", nargs="+", help="override the account list (default: all broker accounts)")
@@ -508,6 +515,12 @@ def _cmd_intraday_check(args: argparse.Namespace) -> None:
 def _cmd_eod_accounts(args: argparse.Namespace) -> None:
     import eod_accounts
     r = eod_accounts.run(accounts=getattr(args, "accounts", None), end=args.end, out=args.out)
+    print("wrote", r["pdf"])
+
+
+def _cmd_positions_report(args: argparse.Namespace) -> None:
+    import positions_report
+    r = positions_report.run(accounts=getattr(args, "accounts", None), end=args.end, out=args.out)
     print("wrote", r["pdf"])
 
 

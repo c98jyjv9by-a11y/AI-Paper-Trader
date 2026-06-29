@@ -104,12 +104,29 @@ account uses it. Older/experimental versions (v2, v3, v5, v6) and one-off script
   `src/intraday_check.py` (`run.py intraday-check [--accounts …] [--extended-hours] [--summary] [--qqq/--spread/--vol-z
   what-if]`) is the one-shot **intraday trade-determination** check: live overlay signals (rebound + hedge — fire/idle
   + gate values) and the **dry-run order plan** for each account (model reconcile + overlay buy with its funding), read-only.
+  Each planned order is ENRICHED beneath its line with the ticker's composite **score + cross-sectional rank**,
+  trailing **1/5/20/60d AVG score**, a **trend type** (uptrend/downtrend/rising/falling/flat from the score stack),
+  trailing **1/5/20/60d price return**, and the **logged reason** (`_build_enrichment`: one `_score_panel` +
+  one price fetch per run, only when something trades); churn-suppressed trims show as `HOLD …` lines.
   `src/eod_accounts.py` (`run.py eod-accounts [--accounts …] [--end …] [--out …]`) renders a consolidated
   **EOD PDF across ALL broker accounts** (`reports/eod_accounts_<date>.pdf`): a summary table (equity, day P&L $/%,
   total %, #positions, #trades) + a brief **per-strategy description** + a page of **today's fills** per account,
   pulled from each account's LIVE broker state. The EOD summary table also carries a **TOTAL** row and
   **QQQ/SPY** benchmark rows, **Cash** + **Days-since-inception** columns, and a **Day % on invested**
-  (P&L ÷ equity−cash). `src/account_orders_report.py` renders an **order-history + P&L PDF across all
+  (P&L ÷ equity−cash). `src/positions_report.py` (`run.py positions-report [--accounts …] [--end …] [--out …]`)
+  renders a **positions + queued-orders PDF across all broker accounts** (`reports/positions_report_<date>.pdf`):
+  one page per account with a **current-positions** table (qty / entry / last / market value / unrealized P&L)
+  and the **queued orders** the live reconcile would send now (dry-run, latest prices, with each order's
+  clarified TRIM/EXIT/OPEN/ADD reason + churn-suppressed trims) — **every ticker enriched** with the same
+  per-ticker analytics as `intraday-check` (composite score + cross-sectional rank, trailing 1/5/20/60d avg
+  score, trend type, trailing 1/5/20/60d return; one shared `_build_enrichment` panel + price fetch). For a
+  book NOT on its rebalance day (weekly/biweekly/monthly off-cadence) it shows **"WHAT'S LIKELY NEXT"** — the
+  plan it would send at its next rebalance, computed off the latest data by forcing the calendar gate
+  (`BROKER_REBALANCE_FORCE_TODAY`) — so the report always answers "what trades are coming". All these previews
+  call `submit_session(..., log=False)`, a **READ-ONLY** mode that skips the plan-json / decisions.csv /
+  suppressed.csv writes so reports + `intraday-check` never pollute the durable per-trade audit log (a real
+  submit always logs).
+  `src/account_orders_report.py` renders an **order-history + P&L PDF across all
   broker accounts**: every order labeled with its **governing rule** (model entry/exit, ramp-up buy,
   rebalance add/drop, z-reversal entry/to-cash, overlay sleeve by symbol — Alpaca stores no per-order
   reason, but each book is a fixed rule set), plus each book's open-position return vs **inception-aligned**
@@ -119,7 +136,15 @@ account uses it. Older/experimental versions (v2, v3, v5, v6) and one-off script
   `confirm=True` AND env `BROKER_ADAPTER_ALLOW_SUBMIT=yes`),
   `src/broker_sync.py` (reconcile-to-target **limit** orders with **data-driven per-instrument
   collars** from the 2y overnight-gap distribution → `backtests/collars.csv`; realized-slippage
-  log; broker→ledger sync; `create_broker_account`. **Quote-sanity fallback** (`_sanitize_quotes`): a
+  log; broker→ledger sync; `create_broker_account`. **Churn deadband** (`MIN_RESIZE_SHARES`, default
+  **1**, per-account manifest override `min_resize_shares`): in `submit_session`, a resize of a name being
+  KEPT (both sides held) of ≤ the threshold is snapped away (no order) so the daily 1-share rebalance churn
+  is skipped — **full exits (target 0) and fresh opens (current 0) are NEVER suppressed**; each skip is
+  recorded to `accounts/<name>/broker/suppressed.csv` + the plan json + surfaced as a `HOLD …` line in
+  `intraday-check`. **Action-clarified reasons**: each order's decision reason is led with what it ACTUALLY
+  does (`_action_label` → TRIM / EXIT / OPEN / ADD) ahead of the strategy rationale, so a SELL of a name
+  still in the basket reads "TRIM to target weight — …" not "entry"; flows to `decisions.csv` (logged) +
+  `intraday-check` (shown). **Quote-sanity fallback** (`_sanitize_quotes`): a
   ONE-SIDED (missing bid/ask — the after-hours trap) or STALE (>25% off the last close) broker quote has
   its mid replaced by the yfinance last close — applied to BOTH order PRICING (limits) and dollars→shares
   SIZING, so neither a limit nor a share-count is built off an un-fillable/mis-priced quote. **Phantom-bar
@@ -157,7 +182,14 @@ account uses it. Older/experimental versions (v2, v3, v5, v6) and one-off script
   execution, vs INTRADAY, captured — sizing why a close-only book bleeds ~80% of its paper edge live),
   `make_zscore_corr_horizon.py` (trailing-avg-z → fwd-return Pearson heatmap), `make_zscore_buckets_horizon.py`
   (fwd return by absolute z-bucket) and `make_zscore_rankgroups_horizon.py` (by cross-sectional z-rank
-  group — the bottom-10 the book buys is the best group, cleanest at the 10d window). The 10d-avg-z /
+  group — the bottom-10 the book buys is the best group, cleanest at the 10d window).
+  `research/make_zscore_open_vs_close.py` (OPEN- vs CLOSE-execution, signal/picks held fixed, only the fill
+  point varies → `backtests/zscore_open_vs_close_<date>.md`): vs the IDEALIZED decision-close fill, open
+  (next-session-open) execution is ~neutral on return (weekly −0.9%/yr, biweekly +1.7%/yr) but **worse on
+  tails** — worst period weekly −16.5%→−19.5%, biweekly −13.8%→−20.2% (weekend-gap exposure) — and slightly
+  lower Sharpe. CAVEAT: the idealized close fill isn't achievable live (the latency thesis — `make_latency_edge`),
+  so vs REALISTIC live close fills open execution may still win; the backtest bounds the downside, it doesn't
+  prove open is better. The 10d-avg-z /
   biweekly / QQQ>200dMA config is best (gross Sharpe ~1.3, net ~+34%/yr @ 10bp, 2022 −46%→−24%). Used by
   matched-cadence accounts **`zscore10d_biweekly`** (the validated
   10d/biweekly config), **`zscore5d_weekly`** (5d/weekly), **`zscore1d_daily`** (1d/daily) — all regime-filtered,
@@ -170,15 +202,25 @@ account uses it. Older/experimental versions (v2, v3, v5, v6) and one-off script
   [--graduate-at … | --lookback-days/--top-n/--bottom-n/--rebalance …] …`. **To set up a NEW paper
   account, follow the step-by-step runbook `deploy/new_account_runbook.md`** (keys → create → verify
   → run-the-live-path-for-real → dry-run → submit → reconcile, with the gotchas). Also:
-  **Scheduling — ACTIVE = launchd (close-to-close), NOT the per-phase cron.** Trading is ONE event/day:
-  `com.mv4.eod` runs `deploy/eod_finalize.sh` at **16:05 ET** (5 min after the close) — compute each of
-  the 9 books off the CLOSE and execute immediately via `--submit-plan … --extended-hours` (fills now in
-  the paper sim, so execution is glued to the score), then reconcile each → per-account EOD PDF → refresh
-  model_v4 → consolidated `eod-accounts` PDF → git commit. `com.mv4.midday` (12:30 ET) runs
-  `deploy/midday_summary.sh` (read-only). The agents raise the fd `ulimit` (launchd's ~256 default broke
-  the model_v4 decision) and rerun a missed job on wake; install via `cp deploy/com.mv4.*.plist
-  ~/Library/LaunchAgents/ + launchctl bootstrap gui/$(id -u) …`. The **open (9:35) + retry (10:05) agents
-  were REMOVED** — no open-session trading. **Legacy/superseded (moved to `archive/`):** `archive/broker_cron.py`
+  **Scheduling — ACTIVE = launchd. TWO trading events/day, split by cadence.** **(1) PRE-OPEN** —
+  `com.mv4.preopen` runs `deploy/preopen_rebalance.sh` ~1 hr before the open — rebalances
+  the **CALENDAR books** (`weekly10`, `combo20`, `zscore5d_weekly`, `zscore10d_biweekly`, `monthly10`) **AT
+  THE OPEN**: scored off the last completed close and submitted as **limit-on-open** (`opg`, via
+  `--submit-plan … --auction` + `BROKER_REBALANCE_PREOPEN=1`) so every leg fills in the **9:30 ET opening
+  auction**. **TZ-robust schedule:** launchd fires at 07:30/08:00/08:30 **local** (brackets the ET pre-open
+  whether the host is on ET/CT/MT), and the script gates the actual trade on the **broker clock** (market
+  closed, next open today, ≤100 min away) + a once-per-ET-day lock — so exactly one in-window run trades and
+  a host-TZ change can't fire it at the wrong moment. `BROKER_REBALANCE_PREOPEN=1` makes `_recent_trading_days()` append the UPCOMING session, so the
+  rebalance gate + combo month-anchor evaluate the session about to open (scoring still uses the last
+  completed close via `_valid_before`) — each book **self-gates** to its own first-of-period day and no-ops
+  otherwise, and `submit_session` forces every leg's tif to `opg`. **(2) CLOSE** — `com.mv4.eod` runs
+  `deploy/eod_finalize.sh` at **16:05 ET** — trades only the **close books** (the model_v4 accounts +
+  `zscore1d_daily`) off the CLOSE via `--submit-plan … --extended-hours` (fills now), then **reconciles +
+  reports ALL 9** (the calendar books' open fills are captured here) → refresh model_v4 → `eod-accounts` PDF
+  → git commit. `com.mv4.midday` (12:30 ET) runs `deploy/midday_summary.sh` (read-only). The agents raise the
+  fd `ulimit` (launchd's ~256 default broke the model_v4 decision) and rerun a missed job on wake; install
+  via `cp deploy/com.mv4.*.plist ~/Library/LaunchAgents/ + launchctl bootstrap gui/$(id -u) …`. The **open
+  (9:35) + retry (10:05) intraday-topup agents were REMOVED** — no mid-session trading. **Legacy/superseded (moved to `archive/`):** `archive/broker_cron.py`
   (open/retry/close/midday/auto wrapper, dry-run unless `--live`) + `archive/mv4_crontab.txt` remain for
   reference only. (`--submit-plan … --extended-hours` = the EOD agent's FILL-NOW pass: marketable
   `extended_hours` day orders for the current session, crossing the spread at the wider retry collar.)
