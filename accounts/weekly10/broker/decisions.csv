@@ -1,0 +1,21 @@
+asof,symbol,side,qty,limit_price,reason,score,rank,z,pnl,retry
+2026-06-29,AMAT,buy,14,656.05,OPEN — score_rebalance weekly: top #10 of 10 (60d-avg score),0.6456,10,,,False
+2026-06-29,ARM,sell,25,313.96,EXIT — score_rebalance weekly: dropped (rank 5 of 83),0.7093,5,,,False
+2026-06-29,CRWD,buy,12,720.06,OPEN — score_rebalance weekly: top #14 of 10 (60d-avg score),0.6172,14,,,False
+2026-06-29,DDOG,buy,37,250.63,OPEN — score_rebalance weekly: top #16 of 10 (60d-avg score),0.6015,16,,,False
+2026-06-29,DELL,sell,20,374.54,EXIT — score_rebalance weekly: dropped (rank 7 of 83),0.6809,7,,,False
+2026-06-29,FTNT,buy,59,154.98,OPEN — score_rebalance weekly: top #12 of 10 (60d-avg score),0.6307,12,,,False
+2026-06-29,LRCX,sell,2,361.59,TRIM to target weight — score_rebalance weekly: top #8 of 10 (60d-avg score),0.6532,8,,,False
+2026-06-29,MRVL,sell,33,247.4,EXIT — score_rebalance weekly: dropped (rank 1 of 83),0.7772,1,,,False
+2026-06-29,ON,sell,79,87.85,EXIT — score_rebalance weekly: dropped (rank 6 of 83),0.6979,6,,,False
+2026-06-29,PANW,sell,2,295.83,TRIM to target weight — score_rebalance weekly: top #9 of 10 (60d-avg score),0.6507,9,,,False
+2026-06-29,AMAT,buy,14,656.05,OPEN — score_rebalance weekly: top #10 of 10 (60d-avg score),0.6456,10,,,False
+2026-06-29,ARM,sell,25,313.96,EXIT — score_rebalance weekly: dropped (rank 5 of 83),0.7093,5,,,False
+2026-06-29,CRWD,buy,12,720.06,OPEN — score_rebalance weekly: top #14 of 10 (60d-avg score),0.6172,14,,,False
+2026-06-29,DDOG,buy,37,250.63,OPEN — score_rebalance weekly: top #16 of 10 (60d-avg score),0.6015,16,,,False
+2026-06-29,DELL,sell,20,374.54,EXIT — score_rebalance weekly: dropped (rank 7 of 83),0.6809,7,,,False
+2026-06-29,FTNT,buy,59,154.98,OPEN — score_rebalance weekly: top #12 of 10 (60d-avg score),0.6307,12,,,False
+2026-06-29,LRCX,sell,2,361.59,TRIM to target weight — score_rebalance weekly: top #8 of 10 (60d-avg score),0.6532,8,,,False
+2026-06-29,MRVL,sell,33,247.4,EXIT — score_rebalance weekly: dropped (rank 1 of 83),0.7772,1,,,False
+2026-06-29,ON,sell,79,87.85,EXIT — score_rebalance weekly: dropped (rank 6 of 83),0.6979,6,,,False
+2026-06-29,PANW,sell,2,295.83,TRIM to target weight — score_rebalance weekly: top #9 of 10 (60d-avg score),0.6507,9,,,False

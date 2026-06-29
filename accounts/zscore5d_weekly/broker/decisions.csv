@@ -1,0 +1,23 @@
+asof,symbol,side,qty,limit_price,reason,score,rank,z,pnl,retry
+2026-06-29,ARM,buy,27,352.33,OPEN — zscore weekly entry: most-fallen #1 (5d-avg z),,1,-1.712,,False
+2026-06-29,DDOG,sell,41,231.86,EXIT — zscore weekly: rebalance out (z rank 21),,21,-0.635,,False
+2026-06-29,MRVL,buy,35,279.48,OPEN — zscore weekly entry: most-fallen #3 (5d-avg z),,3,-1.38,,False
+2026-06-29,MSFT,sell,25,365.14,EXIT — zscore weekly: rebalance out (z rank 25),,25,-0.614,,False
+2026-06-29,ON,buy,101,95.7,OPEN — zscore weekly entry: most-fallen #6 (5d-avg z),,6,-1.135,,False
+2026-06-29,ORCL,buy,3,155.64,ADD to target weight — zscore weekly entry: most-fallen #2 (5d-avg z),,2,-1.47,,False
+2026-06-29,PLTR,buy,82,118.37,OPEN — zscore weekly entry: most-fallen #10 (5d-avg z),,10,-1.034,,False
+2026-06-29,PLUG,buy,122,2.68,ADD to target weight — zscore weekly entry: most-fallen #7 (5d-avg z),,7,-1.085,,False
+2026-06-29,SAP,sell,59,150.02,EXIT — zscore weekly: rebalance out (z rank 15),,15,-0.904,,False
+2026-06-29,SNAP,buy,63,4.51,ADD to target weight — zscore weekly entry: most-fallen #4 (5d-avg z),,4,-1.311,,False
+2026-06-29,TWLO,sell,49,183.7,EXIT — zscore weekly: rebalance out (z rank 26),,26,-0.591,,False
+2026-06-29,ARM,buy,27,352.33,OPEN — zscore weekly entry: most-fallen #1 (5d-avg z),,1,-1.712,,False
+2026-06-29,DDOG,sell,41,231.86,EXIT — zscore weekly: rebalance out (z rank 21),,21,-0.635,,False
+2026-06-29,MRVL,buy,35,279.48,OPEN — zscore weekly entry: most-fallen #3 (5d-avg z),,3,-1.38,,False
+2026-06-29,MSFT,sell,25,365.14,EXIT — zscore weekly: rebalance out (z rank 25),,25,-0.614,,False
+2026-06-29,ON,buy,101,95.7,OPEN — zscore weekly entry: most-fallen #6 (5d-avg z),,6,-1.135,,False
+2026-06-29,ORCL,buy,3,155.64,ADD to target weight — zscore weekly entry: most-fallen #2 (5d-avg z),,2,-1.47,,False
+2026-06-29,PLTR,buy,82,118.37,OPEN — zscore weekly entry: most-fallen #10 (5d-avg z),,10,-1.034,,False
+2026-06-29,PLUG,buy,122,2.68,ADD to target weight — zscore weekly entry: most-fallen #7 (5d-avg z),,7,-1.085,,False
+2026-06-29,SAP,sell,59,150.02,EXIT — zscore weekly: rebalance out (z rank 15),,15,-0.904,,False
+2026-06-29,SNAP,buy,63,4.51,ADD to target weight — zscore weekly entry: most-fallen #4 (5d-avg z),,4,-1.311,,False
+2026-06-29,TWLO,sell,49,183.7,EXIT — zscore weekly: rebalance out (z rank 26),,26,-0.591,,False

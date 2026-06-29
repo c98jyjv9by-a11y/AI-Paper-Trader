@@ -326,3 +326,119 @@ def test_sanitize_quotes_no_close_leaves_quote():
     prices = {"Y": {"bid": 10.0, "ask": 0.0, "mid": 10.0}}
     out = bs._sanitize_quotes(prices, {})                            # no reference close -> don't touch
     assert out["Y"]["mid"] == 10.0 and not out["Y"].get("_quote_fallback")
+
+
+# ── churn deadband + reason clarification (submit_session) ───────────────────
+class _DbCli:
+    """Minimal fake broker for submit_session deadband tests (offline)."""
+    def __init__(self, positions):
+        self._pos = positions
+    def clock(self):
+        return {"timestamp": "2026-06-29T20:00:00Z"}
+    def positions(self):
+        return [{"ticker": t, "qty": q} for t, q in self._pos.items()]
+    def latest_prices(self, syms):
+        return {s: {"mid": 100.0} for s in syms}
+    def account(self):
+        return {"equity": 100_000.0, "cash": 0.0}
+    def submit(self, o, confirm=False):
+        return {"dry_run": True}
+
+
+def _setup_submit(monkeypatch, tmp_path, targets, decisions, manifest):
+    monkeypatch.setattr(bs, "load_manifest", lambda n: manifest)
+    monkeypatch.setattr(bs, "compute_targets",
+                        lambda name, cli, cur: (dict(targets), {}, dict(decisions)))
+    monkeypatch.setattr(bs, "compute_collars", lambda syms, cache_day=None: {})
+    monkeypatch.setattr(bs, "submit_window",
+                        lambda clk, prequeue=False: {"ok": True, "reason": "test"})
+    monkeypatch.setattr(bs, "_broker_dir", lambda n: tmp_path)
+    monkeypatch.setattr(bs, "_dedupe_order_ids", lambda cli, asof, orders: orders)
+
+
+def test_deadband_suppresses_one_share_trim(monkeypatch, tmp_path):
+    cli = _DbCli({"NVDA": 44})
+    _setup_submit(monkeypatch, tmp_path, targets={"NVDA": 43},
+                  decisions={"NVDA": bs._dec("zscore daily entry: most-fallen #8", z=-1.5)},
+                  manifest={"min_resize_shares": 1})
+    res = bs.submit_session("zscore1d_daily", cli=cli, submit=False)
+    assert res["n_orders"] == 0                                  # the 1-share trim is skipped
+    assert [s["symbol"] for s in res["suppressed"]] == ["NVDA"]
+    assert res["suppressed"][0]["delta"] == -1
+    assert "suppressed" in res["suppressed"][0]["reason"]
+
+
+def test_deadband_keeps_larger_trim_and_labels_it_trim(monkeypatch, tmp_path):
+    cli = _DbCli({"NVDA": 44})
+    _setup_submit(monkeypatch, tmp_path, targets={"NVDA": 42},
+                  decisions={"NVDA": bs._dec("zscore daily entry: most-fallen #8")},
+                  manifest={"min_resize_shares": 1})
+    res = bs.submit_session("zscore1d_daily", cli=cli, submit=False)
+    assert res["n_orders"] == 1 and res["suppressed"] == []
+    o = res["orders"][0]
+    assert o["side"] == "sell" and o["qty"] == "2"
+    assert o["_decision"]["reason"].startswith("TRIM to target weight")   # SELL of a kept name -> TRIM
+
+
+def test_deadband_never_suppresses_full_exit(monkeypatch, tmp_path):
+    cli = _DbCli({"OLD": 1})
+    _setup_submit(monkeypatch, tmp_path, targets={},
+                  decisions={"OLD": bs._dec("zscore daily: rebalance out")},
+                  manifest={"min_resize_shares": 1})
+    res = bs.submit_session("zscore1d_daily", cli=cli, submit=False)
+    assert res["n_orders"] == 1 and res["suppressed"] == []
+    o = res["orders"][0]
+    assert o["side"] == "sell" and o["qty"] == "1"
+    assert o["_decision"]["reason"].startswith("EXIT")           # full exit -> always trades, labeled EXIT
+
+
+def test_deadband_never_suppresses_fresh_open(monkeypatch, tmp_path):
+    cli = _DbCli({})
+    _setup_submit(monkeypatch, tmp_path, targets={"NEW": 1},
+                  decisions={"NEW": bs._dec("zscore daily entry: most-fallen #1")},
+                  manifest={"min_resize_shares": 1})
+    res = bs.submit_session("zscore1d_daily", cli=cli, submit=False)
+    assert res["n_orders"] == 1 and res["suppressed"] == []
+    o = res["orders"][0]
+    assert o["side"] == "buy" and o["qty"] == "1"
+    assert o["_decision"]["reason"].startswith("OPEN")           # fresh 1-share open -> always trades
+
+
+def test_preview_log_false_writes_no_audit(monkeypatch, tmp_path):
+    cli = _DbCli({"NVDA": 44})
+    _setup_submit(monkeypatch, tmp_path, targets={"NVDA": 40},
+                  decisions={"NVDA": bs._dec("zscore daily entry: most-fallen #8")},
+                  manifest={"min_resize_shares": 1})
+    bs.submit_session("zscore1d_daily", cli=cli, submit=False, log=False)
+    assert list(tmp_path.glob("*")) == []                       # read-only preview: nothing persisted
+
+
+def test_default_logs_plan_and_decisions(monkeypatch, tmp_path):
+    cli = _DbCli({"NVDA": 44})
+    _setup_submit(monkeypatch, tmp_path, targets={"NVDA": 40},
+                  decisions={"NVDA": bs._dec("zscore daily entry: most-fallen #8")},
+                  manifest={"min_resize_shares": 1})
+    bs.submit_session("zscore1d_daily", cli=cli, submit=False)  # default log=True
+    names = {p.name for p in tmp_path.glob("*")}
+    assert any(n.startswith("plan_") for n in names) and "decisions.csv" in names
+
+
+def test_preopen_forces_all_legs_on_open(monkeypatch, tmp_path):
+    monkeypatch.setenv("BROKER_REBALANCE_PREOPEN", "1")
+    cli = _DbCli({"OLD": 10})                                    # OLD fully exits (sell), NEW opens (buy)
+    _setup_submit(monkeypatch, tmp_path, targets={"NEW": 5},
+                  decisions={"NEW": bs._dec("entry"), "OLD": bs._dec("dropped")},
+                  manifest={"min_resize_shares": 1})
+    res = bs.submit_session("weekly10", cli=cli, submit=False, extended=False, log=False)
+    tifs = {o["symbol"]: o["time_in_force"] for o in res["orders"]}
+    assert tifs.get("NEW") == "opg" and tifs.get("OLD") == "opg"     # both fill in the 9:30 open auction
+
+
+def test_close_mode_keeps_default_tifs(monkeypatch, tmp_path):
+    cli = _DbCli({"OLD": 10})                                    # no preopen env -> default opg buy / cls sell
+    _setup_submit(monkeypatch, tmp_path, targets={"NEW": 5},
+                  decisions={"NEW": bs._dec("entry"), "OLD": bs._dec("dropped")},
+                  manifest={"min_resize_shares": 1})
+    res = bs.submit_session("weekly10", cli=cli, submit=False, extended=False, log=False)
+    tifs = {o["symbol"]: o["time_in_force"] for o in res["orders"]}
+    assert tifs.get("NEW") == "opg" and tifs.get("OLD") == "cls"

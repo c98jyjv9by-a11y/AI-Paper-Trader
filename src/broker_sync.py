@@ -38,6 +38,9 @@ HEDGE_SYM = "SQQQ"         # the default hedge instrument (-3x inverse QQQ; long
 REBOUND_SYM = "TQQQ"       # the 1-day rebound overlay instrument (+3x QQQ); managed by rebound_overlay,
                            # excluded from the model decision and added to the target only when it fires
 COLLAR_CACHE = ROOT / "backtests" / "collars.csv"
+MIN_RESIZE_SHARES = 1      # no-trade deadband: skip resizes this small (shares) on names we're KEEPING
+                           # (both sides held) to cut churn; full exits/opens are never suppressed.
+                           # Per-account override via manifest `min_resize_shares`.
 
 # Ledger schemas. Option books ADD contract columns to the equity schema (additive / backward
 # compatible — equity books keep the original headers byte-for-byte; readers select by name).
@@ -428,14 +431,29 @@ def _rebound_target(name: str, cli: ba.AlpacaPaper, targets: Dict[str, int],
     return targets, refs, dec
 
 
+def _preopen_mode() -> bool:
+    """PRE-OPEN rebalance run (the 1-hour-before-open job): gate/anchor on the UPCOMING session, fill at
+    the open. Set by BROKER_REBALANCE_PREOPEN; off everywhere else (the close-to-close EOD path)."""
+    import os
+    return os.environ.get("BROKER_REBALANCE_PREOPEN", "").lower() in ("1", "yes", "true")
+
+
 def _recent_trading_days(n: int = 12):
     """The most recent ~n trading days (DatetimeIndex), cheaply (one small QQQ fetch) — for the
-    rebalance-day gate without recomputing scores."""
+    rebalance-day gate without recomputing scores. In PRE-OPEN mode the UPCOMING session (today) is
+    appended as the latest 'day', so the gate + combo month-anchor evaluate the session about to OPEN
+    (e.g. a Monday rebalance fires at the Monday pre-open); SCORING still uses the last completed close
+    via `_valid_before`, so no non-existent bar is ever read."""
     import datetime as _dt
     from backtest import fetch_backtest_data
     end = _dt.date.today()
     px = fetch_backtest_data(["QQQ"], end - _dt.timedelta(days=n * 3 + 12), end)["Close"]
-    return px.index
+    idx = px.index
+    if _preopen_mode():
+        today = pd.Timestamp(end)
+        if len(idx) == 0 or idx[-1].normalize() < today.normalize():
+            idx = idx.append(pd.DatetimeIndex([today]))
+    return idx
 
 
 def _is_rebalance_day(freq: str, cal) -> bool:
@@ -524,6 +542,15 @@ def _dec(reason: str, score=None, rank=None, z=None, pnl=None) -> Dict[str, Any]
     if pnl is not None and pd.notna(pnl):
         e["pnl"] = round(float(pnl), 2)
     return e
+
+
+def _action_label(side: str, tgt, cur) -> str:
+    """What the reconcile order ACTUALLY does, from target vs current — so the logged/shown reason is
+    unambiguous (a SELL of a name still in the book is a TRIM, not an exit; a BUY of a held name is an ADD)."""
+    tgt, cur = int(round(tgt or 0)), int(round(cur or 0))
+    if side == "sell":
+        return "EXIT" if tgt <= 0 else "TRIM to target weight"
+    return "OPEN" if cur <= 0 else "ADD to target weight"
 
 
 def _ranks_snapshot(scenario: str = "model_v4") -> Dict[str, "tuple"]:
@@ -1112,13 +1139,30 @@ def _log_decisions(name: str, asof: str, orders: List[Dict[str, Any]],
         logging.getLogger(__name__).warning("decision logging skipped for %s: %s", name, exc)
 
 
+def _log_suppressed(name: str, asof: str, suppressed: List[Dict[str, Any]], retry: bool) -> None:
+    """Append one row per CHURN-SUPPRESSED resize to accounts/<name>/broker/suppressed.csv — the durable
+    record of trims the deadband skipped (symbol, held qty, would-be target, delta, reason). Best-effort."""
+    try:
+        rows = [{"asof": asof, "symbol": s["symbol"], "current": s["current"], "target": s["target"],
+                 "delta": s["delta"], "reason": s["reason"], "retry": bool(retry)} for s in suppressed]
+        if rows:
+            _append_csv(_broker_dir(name) / "suppressed.csv", pd.DataFrame(rows))
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("suppression logging skipped for %s: %s", name, exc)
+
+
 def submit_session(name: str, cli: ba.AlpacaPaper = None, submit: bool = False,
-                   prequeue: bool = False, retry: bool = False, extended: bool = False) -> Dict[str, Any]:
+                   prequeue: bool = False, retry: bool = False, extended: bool = False,
+                   log: bool = True) -> Dict[str, Any]:
     """Build the day's RECONCILE-TO-TARGET plan (limit orders with data-driven per-symbol collars),
     persist the decision references + collars (for slippage & the retry pass), and optionally submit
     — guarded by a clock/calendar window. `retry=True` rebuilds unfilled deltas at the wider collar.
     `extended=True` sends FILL-NOW marketable-limit `extended_hours` day orders for the current
-    pre/post-market session (bypasses the auction window guard)."""
+    pre/post-market session (bypasses the auction window guard). `log=False` is a READ-ONLY preview:
+    skip the plan-json / decisions.csv / suppressed.csv writes (for reports + intraday-check, which must
+    not pollute the durable per-trade audit log) — always forced True on a real submit."""
+    log = log or submit                                          # a real submission ALWAYS logs
     cli = cli or ba.AlpacaPaper(account=name)
     clk = cli.clock()
     asof = clk.get("timestamp", _utcnow())[:10]
@@ -1126,6 +1170,20 @@ def submit_session(name: str, cli: ba.AlpacaPaper = None, submit: bool = False,
     is_opt = _is_options_account(man)
     current = {p["ticker"]: p["qty"] for p in cli.positions()}
     targets, _refpx, decisions = compute_targets(name, cli, current)
+    # No-trade deadband: snap away tiny resizes (<= min_resize_shares) of names we're KEEPING (both sides
+    # held) so they generate no order — cuts the daily 1-share rebalance churn. Full exits (target 0) and
+    # fresh opens (current 0) are NEVER suppressed. Each skip is recorded (shown in the plan + reports).
+    min_resize = int((load_manifest(name) or {}).get("min_resize_shares", MIN_RESIZE_SHARES))
+    suppressed: List[Dict[str, Any]] = []
+    if min_resize > 0:
+        for s in list(targets):
+            tgt, cur = int(round(targets.get(s, 0))), int(round(current.get(s, 0)))
+            if tgt > 0 and cur > 0 and 0 < abs(tgt - cur) <= min_resize:
+                targets[s] = cur                              # snap to current -> no order
+                base = (decisions.get(s) or {}).get("reason", "")
+                suppressed.append({"symbol": s, "current": cur, "target": tgt, "delta": tgt - cur,
+                                   "reason": "HOLD: %+d-share trim suppressed (deadband %d) — %s"
+                                             % (tgt - cur, min_resize, base)})
     delta_syms = sorted({s for s in set(targets) | set(current)
                          if int(round(targets.get(s, 0))) != int(round(current.get(s, 0)))})
     if is_opt:
@@ -1151,28 +1209,44 @@ def submit_session(name: str, cli: ba.AlpacaPaper = None, submit: bool = False,
             if o["symbol"] == REBOUND_SYM and o["side"] == "sell":   # CLOSE — force market/limit-on-close even
                 o["time_in_force"] = "cls"; o.pop("extended_hours", None)   # in retry / extended-hours mode
                 o["_plan"]["tif"] = "cls"
+        if _preopen_mode():                             # OPEN rebalance: fill EVERY leg (buys AND sells) in the
+            for o in orders:                            # 9:30 opening auction -> limit-on-open, not the close
+                o["time_in_force"] = "opg"; o.pop("extended_hours", None)
+                o["_plan"]["tif"] = "opg"
     orders = _dedupe_order_ids(cli, asof, orders)   # idempotent: skip live dupes, make ids unique
+    for o in orders:                                 # lead each decision's reason with what the order ACTUALLY
+        d = dict(decisions.get(o["symbol"], {}))     # does (TRIM/EXIT/OPEN/ADD) so the log/report is unambiguous
+        pl = o["_plan"]
+        d["action"] = _action_label(o["side"], pl.get("target"), pl.get("current"))
+        base = d.get("reason", "")
+        d["reason"] = ("%s — %s" % (d["action"], base)) if base else d["action"]
+        decisions[o["symbol"]] = d                   # plan json + decisions.csv pick up the clarified reason
+        o["_decision"] = d                           # ('_' prefix → carried back to caller, never sent to broker)
     refs = {o["client_order_id"]: o["_plan"]["ref_mid"] for o in orders}
-    (_broker_dir(name) / f"plan_{asof}.json").write_text(json.dumps(
-        {"asof": asof, "retry": retry, "refs": refs,
-         "collars": {s: collars.get(s, {}) for s in delta_syms},
-         # the REAL reason + supporting data (score/rank/z/pnl) behind each traded symbol's decision
-         "decisions": {o["symbol"]: decisions.get(o["symbol"], {}) for o in orders},
-         "orders": [{k: v for k, v in o.items() if not k.startswith("_")} for o in orders],
-         "detail": [dict(symbol=o["symbol"], side=o["side"], qty=o["qty"], limit_price=o["limit_price"],
-                         **decisions.get(o["symbol"], {}), **o["_plan"]) for o in orders]}, indent=2))
-    _log_decisions(name, asof, orders, decisions, retry)          # append the per-trade audit row(s)
+    if log:                                                       # skipped for read-only previews
+        (_broker_dir(name) / f"plan_{asof}.json").write_text(json.dumps(
+            {"asof": asof, "retry": retry, "refs": refs,
+             "collars": {s: collars.get(s, {}) for s in delta_syms},
+             # the REAL reason + supporting data (score/rank/z/pnl) behind each traded symbol's decision
+             "decisions": {o["symbol"]: decisions.get(o["symbol"], {}) for o in orders},
+             "orders": [{k: v for k, v in o.items() if not k.startswith("_")} for o in orders],
+             "suppressed": suppressed,              # sub-threshold trims skipped to cut churn (with reason)
+             "detail": [dict(symbol=o["symbol"], side=o["side"], qty=o["qty"], limit_price=o["limit_price"],
+                             **decisions.get(o["symbol"], {}), **o["_plan"]) for o in orders]}, indent=2))
+        _log_decisions(name, asof, orders, decisions, retry)      # append the per-trade audit row(s)
+        if suppressed:
+            _log_suppressed(name, asof, suppressed, retry)        # durable churn-suppression audit
     # retry orders are intraday DAY limits (submitted while the market is open), so they bypass the
     # pre-open/on-open window guard that governs the first (opg/cls) attempt.
     win = submit_window(clk, prequeue=prequeue or retry or extended or is_opt)
     if submit and not win["ok"]:
         return {"asof": asof, "n_orders": len(orders), "submitted": 0, "dry_run": True,
-                "blocked": True, "reason": win["reason"], "orders": orders}
+                "blocked": True, "reason": win["reason"], "orders": orders, "suppressed": suppressed}
     results = [cli.submit({k: v for k, v in o.items() if not k.startswith("_")}, confirm=submit)
                for o in orders]
     sent = sum(1 for r in results if not r.get("dry_run"))
     return {"asof": asof, "n_orders": len(orders), "submitted": sent,
-            "dry_run": sent == 0, "window": win["reason"], "orders": orders}
+            "dry_run": sent == 0, "window": win["reason"], "orders": orders, "suppressed": suppressed}
 
 
 def retry_unfilled(name: str, cli: ba.AlpacaPaper = None) -> Dict[str, Any]:

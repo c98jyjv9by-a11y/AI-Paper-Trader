@@ -31,7 +31,71 @@ def _pct(x):
     return "—" if x is None else f"{x * 100:+.2f}%"
 
 
+def _sc(x):
+    return "—" if x is None else f"{x:.2f}"
+
+
 ROOT = Path(__file__).parent.parent
+
+_WINDOWS = (1, 5, 20, 60)
+
+
+def _trend_label(avg):
+    """Classify a name's composite-score TRAJECTORY from its trailing avg scores (1/5/20/60d).
+    Short avg above the medium baseline = momentum building; a monotonic stack = a clean trend."""
+    s1, s5, s20 = avg.get(1), avg.get(5), avg.get(20)
+    if s5 is None or s20 is None:
+        return "—"
+    spread = s5 - s20
+    if s1 is not None and s1 >= s5 >= s20 and spread > 0.03:
+        return "uptrend"
+    if s1 is not None and s1 <= s5 <= s20 and spread < -0.03:
+        return "downtrend"
+    if spread > 0.05:
+        return "rising"
+    if spread < -0.05:
+        return "falling"
+    return "flat"
+
+
+def _build_enrichment(symbols, scenario="model_v4"):
+    """For each symbol: composite score + cross-sectional rank, trailing 1/5/20/60d AVG score, a trend
+    label, and trailing 1/5/20/60d price return. Universe scores come from one score panel; returns from
+    one price fetch. Overlay names (TQQQ/SQQQ) aren't in the universe → score/rank/avg show '—'."""
+    import pandas as pd
+    import broker_sync as bs
+    from backtest import fetch_backtest_data
+    from datetime import date, timedelta
+    panel = bs._score_panel(scenario, 60)                       # rows = sessions, cols = universe tickers
+    last = panel.iloc[-1]
+    ranked = last.sort_values(ascending=False)
+    rank_of = {t: i + 1 for i, t in enumerate(ranked.index)}
+    n_uni = int(last.notna().sum())
+    px = fetch_backtest_data(list(dict.fromkeys(symbols)),
+                             date.today() - timedelta(days=160), date.today())["Close"]
+
+    def _avg(t, w):
+        if t not in panel.columns:
+            return None
+        s = panel[t].dropna()
+        return float(s.tail(w).mean()) if len(s) else None
+
+    def _ret(t, w):
+        if t not in getattr(px, "columns", []):
+            return None
+        s = px[t].dropna()
+        if len(s) < w + 1:
+            return None
+        return float(s.iloc[-1] / s.iloc[-(w + 1)] - 1)
+
+    out = {}
+    for t in dict.fromkeys(symbols):
+        score = float(last[t]) if (t in last.index and pd.notna(last[t])) else None
+        avg = {w: _avg(t, w) for w in _WINDOWS}
+        out[t] = {"score": score, "rank": rank_of.get(t), "n_uni": n_uni,
+                  "avg": avg, "trend": _trend_label(avg),
+                  "ret": {w: _ret(t, w) for w in _WINDOWS}}
+    return out
 
 
 def _persistence_live(scenario="model_v4"):
@@ -96,17 +160,52 @@ def run(accounts=None, qqq=None, spread=None, vol_z=None, extended=False, summar
     # ── 2. dry-run order plans (what you'd submit now) ───────────────────────
     print("ACCOUNT PLANS — DRY-RUN, nothing sent  (fill-ASAP marketable; overlay TQQQ exit stays at close)")
     import broker_sync as bs
+    plans, all_syms, errs = [], [], {}
     for acct in accounts:
         try:
-            res = bs.submit_session(acct, submit=False, extended=True)   # preview the fill-ASAP default
-            print(f"  {acct}: {res['n_orders']} order(s)")
-            for o in res.get("orders", []):
-                pl = o["_plan"]
-                print("    %-4s %-6s %-5s  %-7s $%-9.2f  collar %.1f%%  ~$%s"
-                      % (o["side"].upper(), o["symbol"], o["qty"], pl.get("tif", o["time_in_force"]),
-                         o["limit_price"], pl["collar"] * 100, f'{pl["est_value"]:,.0f}'))
+            res = bs.submit_session(acct, submit=False, extended=True, log=False)   # read-only preview
+            plans.append((acct, res))
+            all_syms += [o["symbol"] for o in res.get("orders", [])]
         except Exception as exc:
-            print(f"  {acct}: ERROR — {exc}")
+            errs[acct] = exc
+
+    enrich = {}
+    if all_syms:                                                        # only pay for the panel/price fetch
+        try:                                                           # when something actually trades
+            enrich = _build_enrichment(all_syms)
+        except Exception as exc:
+            print(f"  (per-ticker analytics unavailable — {exc}; showing reason only)")
+
+    for acct in accounts:
+        if acct in errs:
+            print(f"  {acct}: ERROR — {errs[acct]}")
+            continue
+        res = next(r for a, r in plans if a == acct)
+        print(f"  {acct}: {res['n_orders']} order(s)")
+        for o in res.get("orders", []):
+            pl, sym = o["_plan"], o["symbol"]
+            print("    %-4s %-6s %-5s  %-7s $%-9.2f  collar %.1f%%  ~$%s"
+                  % (o["side"].upper(), sym, o["qty"], pl.get("tif", o["time_in_force"]),
+                     o["limit_price"], pl["collar"] * 100, f'{pl["est_value"]:,.0f}'))
+            e = enrich.get(sym)
+            if e:
+                rank = f"#{e['rank']}/{e['n_uni']}" if e.get("rank") else "—"
+                avg = "/".join(_sc(e["avg"][w]) for w in _WINDOWS)
+                ret = "/".join(_pct(e["ret"][w]) for w in _WINDOWS)
+                print("         score %s  rank %s  trend %-9s  avg-score 1/5/20/60d %s  ret 1/5/20/60d %s"
+                      % (_sc(e["score"]), rank, e["trend"], avg, ret))
+            dec = o.get("_decision") or {}
+            reason = dec.get("reason")
+            if reason:
+                extra = []
+                if dec.get("z") is not None:
+                    extra.append(f"z {dec['z']:+.2f}")
+                if dec.get("pnl") is not None:
+                    extra.append(f"realized P&L ${dec['pnl']:,.2f}")
+                print("         reason: %s%s" % (reason, ("  [" + ", ".join(extra) + "]") if extra else ""))
+        for sup in res.get("suppressed", []):
+            print("    HOLD %-6s %d→%d  (%+d-share trim suppressed — churn deadband)"
+                  % (sup["symbol"], sup["current"], sup["target"], sup["delta"]))
     print()
 
     # ── 3. optional cross-book midday summary ────────────────────────────────

@@ -1,0 +1,22 @@
+asof,symbol,side,qty,limit_price,reason,score,rank,z,pnl,retry
+2026-06-29,ADBE,sell,22,197.97,EXIT — combo: dropped (out of top10/bottom10),,,,,False
+2026-06-29,AMAT,buy,7,656.05,"OPEN — combo TOP sleeve #6 (60d-avg score, monthly refresh)",0.6456,6.0,,,False
+2026-06-29,ARM,sell,12,313.96,EXIT — combo: dropped (out of top10/bottom10),,,,,False
+2026-06-29,COIN,buy,30,155.58,"OPEN — combo BOTTOM sleeve #9 (5d-avg score, weekly refresh)",0.2659,9.0,,,False
+2026-06-29,CRWD,buy,6,720.06,"OPEN — combo TOP sleeve #9 (60d-avg score, monthly refresh)",0.6172,9.0,,,False
+2026-06-29,DDOG,buy,18,250.63,"OPEN — combo TOP sleeve #10 (60d-avg score, monthly refresh)",0.6015,10.0,,,False
+2026-06-29,DELL,sell,10,374.54,EXIT — combo: dropped (out of top10/bottom10),,,,,False
+2026-06-29,FTNT,buy,29,154.98,"OPEN — combo TOP sleeve #8 (60d-avg score, monthly refresh)",0.6307,8.0,,,False
+2026-06-29,MRVL,sell,16,247.4,EXIT — combo: dropped (out of top10/bottom10),,,,,False
+2026-06-29,NFLX,buy,61,75.15,"OPEN — combo BOTTOM sleeve #10 (5d-avg score, weekly refresh)",0.2801,10.0,,,False
+2026-06-29,NOW,sell,47,95.02,EXIT — combo: dropped (out of top10/bottom10),,,,,False
+2026-06-29,ON,sell,40,87.85,EXIT — combo: dropped (out of top10/bottom10),,,,,False
+2026-06-29,ORCL,buy,30,155.64,"OPEN — combo BOTTOM sleeve #3 (5d-avg score, weekly refresh)",0.2157,3.0,,,False
+2026-06-29,PLTR,buy,39,118.37,"OPEN — combo BOTTOM sleeve #4 (5d-avg score, weekly refresh)",0.2365,4.0,,,False
+2026-06-29,PLUG,buy,98,2.68,"ADD to target weight — combo BOTTOM sleeve #6 (5d-avg score, weekly refresh)",0.2425,6.0,,,False
+2026-06-29,SAP,buy,2,160.16,"ADD to target weight — combo BOTTOM sleeve #8 (5d-avg score, weekly refresh)",0.2638,8.0,,,False
+2026-06-29,SEDG,sell,3,48.56,"TRIM to target weight — combo BOTTOM sleeve #1 (5d-avg score, weekly refresh)",0.1693,1.0,,,False
+2026-06-29,SNAP,buy,47,4.51,"ADD to target weight — combo BOTTOM sleeve #2 (5d-avg score, weekly refresh)",0.1917,2.0,,,False
+2026-06-29,TTD,sell,4,17.74,"TRIM to target weight — combo BOTTOM sleeve #5 (5d-avg score, weekly refresh)",0.2406,5.0,,,False
+2026-06-29,WDAY,sell,36,118.88,EXIT — combo: dropped (out of top10/bottom10),,,,,False
+2026-06-29,ZS,sell,35,128.27,EXIT — combo: dropped (out of top10/bottom10),,,,,False
