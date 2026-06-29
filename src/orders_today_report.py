@@ -185,8 +185,8 @@ def _summary_page(pdf, data, accts, enrich, today, side):
     cols = ["Account", "Ticker", "Value $", "Score", "Rank", "Trend", "Avg 1/5/20/60d", "1D Ret", pnl_lbl, "Reason"]
     raw = [16, 7, 9, 6, 7, 9, 16, 8, 11, 30]
     colw = [w / sum(raw) for w in raw]
-    cells, rules, tv, tp = [], [], 0.0, 0.0
-    for i, r in enumerate(rows):
+    body, tv, tp = [], 0.0, 0.0
+    for r in rows:
         e = r["e"]; pnl = r["pnl"]
         score = _sc(e.get("score")) if e else "—"
         rank = f"#{e['rank']}/{e['n_uni']}" if (e and e.get("rank")) else "—"
@@ -194,14 +194,16 @@ def _summary_page(pdf, data, accts, enrich, today, side):
         oneD = _pct(r["oneD"]) if r["oneD"] is not None else "—"
         tv += r["val"]; tp += (pnl or 0.0)
         reason = r["reason"]; reason = (reason[:46] + "…") if len(reason) > 47 else reason
-        cells.append([r["acct"], r["sym"], _money(r["val"]), score, rank, _trend(e), avgq, oneD,
-                      _money(pnl) if pnl is not None else "—", reason])
-        if pnl is not None:
-            rules.append((i, 8, GREEN if pnl >= 0 else RED))
-    if rows:
+        body.append(([r["acct"], r["sym"], _money(r["val"]), score, rank, _trend(e), avgq, oneD,
+                      _money(pnl) if pnl is not None else "—", reason], pnl))
+    cells, rules = [], []
+    if rows:                                              # TOTAL as the TOP row
         cells.append(["TOTAL", "", _money(tv), "", "", "", "", "", _money(tp), ""])
-        tr = len(rows)
-        rules += [(tr, 0, HEAD), (tr, 2, HEAD), (tr, 8, GREEN if tp >= 0 else RED)]
+        rules += [(0, 0, HEAD), (0, 2, HEAD), (0, 8, GREEN if tp >= 0 else RED)]
+    for k, (cell, pnl) in enumerate(body):
+        cells.append(cell)
+        if pnl is not None:
+            rules.append((k + 1, 8, GREEN if pnl >= 0 else RED))
     h = min(0.84, 0.06 + 0.029 * max(len(cells), 1))
     ax = fig.add_axes([0.03, max(0.05, 0.90 - h), 0.94, h])
     _draw_table(ax, cols, cells, colw, rules, fontsize=6.6)
