@@ -1,10 +1,12 @@
-"""snapshot.py — one-page PDF PERFORMANCE SNAPSHOT across the model_v4 scenario and the broker
-accounts (topten/copymodel/rampup).
+"""snapshot.py — one-page PDF PERFORMANCE SNAPSHOT across the model_v4 scenario and ALL NINE broker
+accounts (the 3 model-driven seeds + the 6 research strategy books).
 
 Unlike the intraday `midday-summary` (Day / Held-DW / Signal columns), this is a performance view:
 return over a configurable trailing `--window` (default **1D** = since the prior close; also 5D / 1M /
 MTD / YTD / …) and how it stacks up vs SPY / QQQ over that same window, plus current equity/cash and
-1D P&L. Broker accounts are marked to their LIVE Alpaca book (real equity + holdings).
+1D P&L. Broker accounts are marked to their LIVE Alpaca book (real equity + holdings). The live books
+are shown in two groups — the model-driven seeds (Top 10 / Existing Model / Ramp Up) and the research
+strategy books (the momentum-rebalance and z-reversal books).
 
 CLI:
     python src/snapshot.py [--end YYYY-MM-DD] [--accounts a b c] [--out FILE]
@@ -24,18 +26,17 @@ sys.path.insert(0, str(ROOT / "src"))
 
 DEFAULT_SCENARIO = "model_v4"
 DEFAULT_WINDOW = "1D"
-# friendly display names + one-line definitions for the snapshot (keyed by account name)
-DISPLAY = {"topten": "Top 10 Seed", "copymodel": "Existing Model Seed", "rampup": "Ramp Up"}
-DEFINITIONS = {
-    "model_v4": "model_v4 · scenario — the model_v4 momentum strategy backtest (83-name semis/AI/tech "
-                "universe, Barroso vol-targeting) from its backtest start. Simulated, not a broker account.",
-    "topten": "Top 10 Seed — Alpaca paper account holding the 10 highest CURRENT composite-score names, "
-              "~8.5% each, rebalanced toward that set.",
-    "copymodel": "Existing Model Seed — Alpaca paper account that EQUAL-WEIGHTS the names the live model_v4 "
-                 "book (primary) currently holds.",
-    "rampup": "Ramp Up — Alpaca paper account holding every name whose current composite score ≥ 0.9 at "
-              "current ranks, 8.5% each (a score-gate ramp-up).",
-}
+# the live broker fleet, in two groups (same split as the rest of the toolchain)
+MODEL_DRIVEN = ["topten", "copymodel", "rampup"]                 # follow model_v4's own buy/sell rules
+RESEARCH = ["monthly10", "weekly10", "combo20",                  # pure signal-rule strategy books
+            "zscore10d_biweekly", "zscore5d_weekly", "zscore1d_daily"]
+DEFAULT_ACCOUNTS = MODEL_DRIVEN + RESEARCH                       # all 9
+# friendly display names for the snapshot (keyed by account name); per-book descriptions are rendered
+# as the group explainers in build_pdf rather than a separate definitions block.
+DISPLAY = {"topten": "Top 10 Seed", "copymodel": "Existing Model Seed", "rampup": "Ramp Up",
+           "monthly10": "Monthly Top-10", "weekly10": "Weekly Top-10", "combo20": "Combo 20 (10+10)",
+           "zscore10d_biweekly": "Z-Reversal 10d/biweekly", "zscore5d_weekly": "Z-Reversal 5d/weekly",
+           "zscore1d_daily": "Z-Reversal 1d/daily"}
 # friendly window names → trailing TRADING-day counts (MTD/YTD are handled as calendar anchors)
 _WMAP = {"1D": 1, "5D": 5, "10D": 10, "1M": 21, "3M": 63, "6M": 126, "1Y": 252}
 
@@ -71,7 +72,7 @@ def build_rows(end: Optional[date] = None, accounts: Optional[List[str]] = None,
     `window` (same anchor date for every book) + SPY/QQQ over that window + α (book − benchmark) +
     today's move + #positions. A book younger than the window shows '—' for its portfolio leg."""
     import midday_summary as MS
-    accounts = MS.DEFAULT_ACCOUNTS if accounts is None else accounts
+    accounts = DEFAULT_ACCOUNTS if accounts is None else accounts
     specs = [(scenario, None)] + [(scenario, a) for a in accounts]
     w = str(window).upper()
 
@@ -189,30 +190,39 @@ def build_pdf(rows: List[Dict[str, Any]], out_path: Path, end: date, window: str
                 return P._ret_color(P._parse_pct(v))
             return "#1f2a3a"
 
+        def _explain(yv, text):                          # italic group explainer, wrapped
+            for ln in textwrap.wrap(text, 132):
+                ax.text(0.06, yv, ln, color=P.MIDGREY, fontsize=7.4, va="top", style="italic")
+                yv -= 0.0145
+            return yv - 0.003
+
         # Group 1 — the SIMULATED model_v4 scenario (backtest reference), set apart from the live books.
         scen_rows = [r for r in rows if r.get("key") == "model_v4"]
-        acct_rows = [r for r in rows if r.get("key") != "model_v4"]
         y = P._section(ax, y - 0.01, "Simulated reference — model_v4 scenario (backtest)")
         if scen_rows:
             y = P._table(ax, y, cols, [_trow(r) for r in scen_rows], widths, align=align,
-                         text_color=cb, row_h=0.032, fontsize=8.2, header_fontsize=7.3, emph_rows={0})
-        # Group 2 — the live Alpaca paper accounts: 3 ways to IMPLEMENT model_v4 on any given date.
-        y = P._section(ax, y - 0.016, "Live Alpaca paper accounts — three ways to implement model_v4")
-        explainer = ("Each account is a different way to put model_v4 to work at any given date: buy the "
-                     "top-10 CURRENT ranks equally (Top 10 Seed), buy the model's CURRENT holdings "
-                     "(Existing Model Seed), or ramp up by only buying names scoring > 0.9 each day (Ramp Up).")
-        for ln in textwrap.wrap(explainer, 128):
-            ax.text(0.06, y, ln, color=P.MIDGREY, fontsize=7.6, va="top", style="italic")
-            y -= 0.016
-        y -= 0.004
-        y = P._table(ax, y, cols, [_trow(r) for r in acct_rows], widths, align=align,
-                     text_color=cb, row_h=0.032, fontsize=8.2, header_fontsize=7.3)
+                         text_color=cb, row_h=0.030, fontsize=8.2, header_fontsize=7.3, emph_rows={0})
+        # Group 2 — model-driven live accounts: 3 ways to IMPLEMENT model_v4 on any given date.
+        md_rows = [r for r in rows if r.get("key") in MODEL_DRIVEN]
+        if md_rows:
+            y = P._section(ax, y - 0.014, "Live accounts · model-driven — three ways to implement model_v4")
+            y = _explain(y, "Each follows model_v4's own buy/sell rules from a different seed: buy the "
+                            "top-10 CURRENT ranks equally (Top 10 Seed), the model's CURRENT holdings "
+                            "(Existing Model Seed), or ramp up by only buying names scoring > 0.9 (Ramp Up).")
+            y = P._table(ax, y, cols, [_trow(r) for r in md_rows], widths, align=align,
+                         text_color=cb, row_h=0.030, fontsize=8.2, header_fontsize=7.3)
+        # Group 3 — research strategy books: pure signal rules, NO model_v4 entry/exit or overlay.
+        rs_rows = [r for r in rows if r.get("key") in RESEARCH]
+        if rs_rows:
+            y = P._section(ax, y - 0.014, "Live accounts · research strategy books — pure signal rules")
+            y = _explain(y, "Independent strategies (no model_v4 entry/exit, no hedge/rebound overlay): "
+                            "top-10 momentum books rebalanced weekly/monthly (Weekly / Monthly Top-10, "
+                            "Combo 20) and regime-filtered mean-reversion books buying the most-fallen names "
+                            "(Z-Reversal, three cadences).")
+            y = P._table(ax, y, cols, [_trow(r) for r in rs_rows], widths, align=align,
+                         text_color=cb, row_h=0.030, fontsize=8.2, header_fontsize=7.3)
 
-        # Definitions of each book, in table order
-        y = P._section(ax, y - 0.018, "Definitions")
-        defs = [DEFINITIONS[r["key"]] for r in rows if r.get("key") in DEFINITIONS]
-        y = P._bullets(ax, y, defs, width=128, lh=0.020, gap=0.006, fontsize=8.0)
-
+        # (Per-book descriptions live in the group explainers above; here just the methodology note.)
         note = (f"{wlabel} Return / SPY / QQQ are measured over the {wlabel} window"
                 + (f" (since {anchor})" if anchor else "") + " — for 1D, since the prior trading close. "
                 f"{wlabel} P&L = the dollar change over that window (equity − equity at the window start). "
