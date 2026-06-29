@@ -491,8 +491,8 @@ def run(end: Optional[date] = None, output: Optional[Path] = None,
         _render_summary(pdf, data, accts, today, panel, ibench, dbench, prior_day, bench_rows)
         _render_buys(pdf, data, accts, win_start, win_end, "Buys Today — by account & ticker",
                      "All buys %s, marked to current prices, sorted by unrealized P&L" % win_lbl)
-        _render_crossings(pdf, data, accts, win_start, win_end, "Trades You Shouldn't Have Made",
-                          "Non-reversion SELLS into the 5-day z-reversion's BUYS — %s" % win_lbl)
+        _render_crossings(pdf, data, accts, win_start, win_end, "Trades your own model told you not to make",
+                          "You SOLD names the 5-day z-reversion model was BUYING (oversold / reverting up) — %s" % win_lbl)
         _render_buys(pdf, data, accts, winB_start, winB_end, "Prior-Day Buys — current P&L",
                      "Buys placed in %s, marked to NOW, sorted by current unrealized P&L" % winB_lbl)
         _render_orders_by_account(pdf, data, accts, today, win_start, win_end, win_lbl)
@@ -502,12 +502,13 @@ def run(end: Optional[date] = None, output: Optional[Path] = None,
     return out, rows
 
 
-# ── "trades you shouldn't have made" — sells that crossed the 5-day z-reversion's buys ──
+# ── "trades your own model told you not to make" — sold into the 5-day reversion's buys ──
 def _render_crossings(pdf, data, accts, win_start, win_end, title, sub):
     """Judge = the 5-DAY z-reversion book ONLY. When it BUYS a name (most-fallen, expected to revert
-    UP) and a NON-reversion book SELLS the same name this session, that sell is a trade you shouldn't
-    have made. Opportunity cost = (price now - your sell price) x qty sold = the gain given up by
-    selling. Also totals the GOOD crosses (a non-reversion BUY of a name the 5D book is selling)."""
+    UP) and a NON-reversion book SELLS that same name this session, the sell is one your own model
+    told you not to make. Top table pairs the model BUY with your SELL legs; the second table is the
+    per-sell opportunity cost = (price now - sell price) x qty, summed. Good crosses (you bought what
+    the 5D book sold) are totalled in the footer."""
     from account import load_manifest as _lm
     judge, nonrev = None, []
     for n in accts:
@@ -517,17 +518,20 @@ def _render_crossings(pdf, data, accts, win_start, win_end, title, sub):
                 judge = n
         else:
             nonrev.append(n)
-    # the 5D judge's today book + a current-price map from its buy marks (fill x (1+ret))
-    jbuy, jsell, cur = set(), set(), {}
+    jinfo = {}                                               # sym -> {bq, bv, sq, now}
     if judge and not data[judge].get("err"):
         for o in _today_orders(data[judge]["orders"], win_start, win_end):
             if not (o.get("fill_price") and o.get("filled_qty")):
                 continue
             sym = o.get("symbol", ""); side = (o.get("side") or "").lower()
-            (jbuy if side == "buy" else jsell).add(sym)
-            if side == "buy" and o.get("ret") is not None:
-                cur[sym] = o["fill_price"] * (1 + o["ret"])
-    bad, good_total, good_n = [], 0.0, 0
+            e = jinfo.setdefault(sym, {"bq": 0.0, "bv": 0.0, "sq": 0.0, "now": None})
+            if side == "buy":
+                e["bq"] += o["filled_qty"]; e["bv"] += o["filled_qty"] * o["fill_price"]
+                if o.get("ret") is not None:
+                    e["now"] = o["fill_price"] * (1 + o["ret"])
+            else:
+                e["sq"] += o["filled_qty"]
+    bad, good_total, good_n = {}, 0.0, 0                     # bad: sym -> {mqty,mavg,now,sellers[]}
     for n in nonrev:
         d = data[n]
         if d.get("err"):
@@ -544,42 +548,75 @@ def _render_crossings(pdf, data, accts, win_start, win_end, title, sub):
                 a["sq"] += o["filled_qty"]; a["sv"] += o["filled_qty"] * o["fill_price"]
             a["unrlz"] += o.get("unrlz") or 0.0
         for sym, a in agg.items():
-            net_sell = a["sq"] - a["bq"]
-            if sym in jbuy and net_sell > 0 and sym in cur:          # BAD: sold into the 5D buy
-                sold = a["sv"] / a["sq"] if a["sq"] else 0.0
-                bad.append({"sym": sym, "acct": disp(n), "qty": net_sell, "sold": sold,
-                            "now": cur[sym], "opp": (cur[sym] - sold) * net_sell})
-            elif sym in jsell and a["bq"] > a["sq"]:                 # GOOD: bought what the 5D sold
+            net_sell = a["sq"] - a["bq"]; j = jinfo.get(sym)
+            if j and j["bq"] > j["sq"] and net_sell > 0 and j["now"]:     # BAD: sold into the model buy
+                sold = a["sv"] / a["sq"]
+                e = bad.setdefault(sym, {"mqty": j["bq"], "mavg": j["bv"] / j["bq"], "now": j["now"], "sellers": []})
+                e["sellers"].append((disp(n), net_sell, sold, (j["now"] - sold) * net_sell))
+            elif j and j["sq"] > j["bq"] and a["bq"] > a["sq"]:           # GOOD: bought what model sold
                 good_total += a["unrlz"]; good_n += 1
-    bad.sort(key=lambda r: -r["opp"]); bad_total = sum(r["opp"] for r in bad)
-    cols = ["Ticker", "Account", "Qty sold", "Sold @", "Now @", "Opp. cost $"]
-    raw = [8, 17, 8, 9, 9, 12]
+    order = sorted(bad, key=lambda t: -sum(s[3] for s in bad[t]["sellers"]))
+    bad_total = sum(s[3] for t in bad for s in bad[t]["sellers"])
+    jname = disp(judge) if judge else "5D model"
+
+    # ---- build rows ----
+    rows1, side1 = [], []                                    # (cells, side) for the buy/sell legs
+    for t in order:
+        e = bad[t]
+        rows1.append([t, jname + " (model)", "BUY", "%g" % e["mqty"], "$%.2f" % e["mavg"]]); side1.append("buy")
+        for acct, qty, sold, opp in e["sellers"]:
+            rows1.append(["", acct, "SELL", "%g" % qty, "$%.2f" % sold]); side1.append("sell")
+    rows2 = []
+    for t in order:
+        e = bad[t]
+        for acct, qty, sold, opp in e["sellers"]:
+            rows2.append([t, acct, "%g" % qty, "$%.2f" % sold, "$%.2f" % e["now"], _money(opp), opp])
+    if not rows1:
+        rows1 = [["— none —", "", "", "", ""]]; side1 = [""]
+    cells2 = [r[:6] for r in rows2] or [["— none —", "", "", "", "", ""]]
+    if rows2:
+        cells2.append(["TOTAL", "", "", "", "", _money(bad_total)])
+
+    # ---- layout (top-down, sized to row counts so no overflow / blank gap) ----
+    n1, n2 = len(rows1) + 1, len(cells2) + 1
+    rowh = min(0.036, 0.70 / max(n1 + n2, 1))
     fig = plt.figure(figsize=(11, 8.5))
-    fig.suptitle(title, fontsize=14, weight="bold")
-    fig.text(0.5, 0.95, sub, ha="center", fontsize=8.5, color="#555")
-    ax = fig.add_axes([0.06, 0.13, 0.88, 0.77]); ax.axis("off")
-    cells = ([["— none —"] + [""] * (len(cols) - 1)] if not bad else
-             [[r["sym"], r["acct"], "%g" % r["qty"], "$%.2f" % r["sold"], "$%.2f" % r["now"], _money(r["opp"])]
-              for r in bad])
-    if bad:
-        cells.append(["TOTAL", "", "", "", "", _money(bad_total)])
-    tb = ax.table(cellText=cells, colLabels=cols, colWidths=[w / sum(raw) for w in raw],
-                  loc="upper center", cellLoc="center", bbox=[0, 0, 1, min(1.0, 0.05 * (len(cells) + 1))])
-    tb.auto_set_font_size(False); tb.set_fontsize(8)
-    for j in range(len(cols)):
-        tb[0, j].set_facecolor(HEAD); tb[0, j].set_text_props(color="white", weight="bold")
-    for i, r in enumerate(bad):
-        tb[i + 1, 5].set_text_props(color=(RED if r["opp"] >= 0 else GREEN), weight="bold")
-    if bad:
-        tr = len(bad) + 1
+    fig.suptitle(title, fontsize=15, weight="bold")
+    fig.text(0.5, 0.945, sub, ha="center", fontsize=8.5, color="#555")
+
+    def _tbl(rect, cells, cols, widths):
+        ax = fig.add_axes(rect); ax.axis("off")
+        tb = ax.table(cellText=cells, colLabels=cols, colWidths=[w / sum(widths) for w in widths],
+                      loc="center", cellLoc="center", bbox=[0, 0, 1, 1])
+        tb.auto_set_font_size(False); tb.set_fontsize(8)
         for j in range(len(cols)):
-            tb[tr, j].set_facecolor("#dfe6e9"); tb[tr, j].set_text_props(weight="bold")
-        tb[tr, 5].set_text_props(color=(RED if bad_total >= 0 else GREEN), weight="bold")
-    fig.text(0.06, 0.075, "What this is: SELLS in non-reversion books on names the 5-day z-reversion book was BUYING "
-             "that same session — dumping a name flagged oversold / reverting up. Opportunity cost = (price now - your "
-             "sell price) x qty = the gain given up by selling.", fontsize=8, color="#333", wrap=True)
-    fig.text(0.06, 0.03, "Total opportunity cost of these %d bad sells: %s.      Good crosses (bought what the 5D book "
-             "sold): %d trades, total PnL %s." % (len(bad), _money(bad_total), good_n, _money(good_total)),
+            tb[0, j].set_facecolor(HEAD); tb[0, j].set_text_props(color="white", weight="bold")
+        return tb
+
+    y = 0.90
+    fig.text(0.06, y, "What your model BOUGHT vs what you SOLD:", fontsize=9.5, weight="bold"); y -= 0.016
+    h1 = n1 * rowh
+    tb1 = _tbl([0.06, y - h1, 0.88, h1], rows1, ["Ticker", "Account", "Side", "Qty", "Fill $"], [8, 22, 6, 7, 9])
+    for i, sd in enumerate(side1):
+        if sd:
+            tb1[i + 1, 2].set_text_props(color=(GREEN if sd == "buy" else RED), weight="bold")
+    y = y - h1 - 0.045
+    fig.text(0.06, y, "Opportunity cost of each sell  (now − sold) × qty:", fontsize=9.5, weight="bold"); y -= 0.016
+    h2 = n2 * rowh
+    tb2 = _tbl([0.06, y - h2, 0.88, h2], cells2, ["Ticker", "Seller", "Qty", "Sold @", "Now @", "Opp. cost $"], [8, 18, 6, 9, 9, 12])
+    for i, r in enumerate(rows2):
+        tb2[i + 1, 5].set_text_props(color=(RED if r[6] >= 0 else GREEN), weight="bold")
+    if rows2:
+        tr = len(rows2) + 1
+        for j in range(6):
+            tb2[tr, j].set_facecolor("#dfe6e9"); tb2[tr, j].set_text_props(weight="bold")
+        tb2[tr, 5].set_text_props(color=(RED if bad_total >= 0 else GREEN), weight="bold")
+
+    fig.text(0.06, 0.075, "What this is: SELLS in non-reversion books on names the 5-day z-reversion model was BUYING "
+             "the same session — i.e. dumping a name your own model flagged as oversold / reverting up. Opportunity "
+             "cost = the gain given up by selling (price now vs your sell price).", fontsize=8, color="#333", wrap=True)
+    fig.text(0.06, 0.035, "Total opportunity cost of these %d sells: %s.      Good crosses (you BOUGHT what the model "
+             "sold): %d trades, total PnL %s." % (len(rows2), _money(bad_total), good_n, _money(good_total)),
              fontsize=9, color="#333", weight="bold", wrap=True)
     pdf.savefig(fig); plt.close(fig)
 
