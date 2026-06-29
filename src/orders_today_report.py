@@ -16,6 +16,7 @@ import sys
 import warnings
 from datetime import date
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import matplotlib
 matplotlib.use("Agg")
@@ -126,6 +127,30 @@ def _entry_stat_cells(e):
     if not e:
         return ["—", "—", "—", "—"]
     return [_sc(e.get("score")), _trend(e), _avg_quad(e), _ret_quad(e)]
+
+
+_ET_TZ = ZoneInfo("America/New_York")
+
+
+def _session(o):
+    """Session phase of a fill by its ET clock time: extended (pre-market <9:30 / after-hours >=16:00),
+    opening (9:30-9:45, incl. the open auction), intraday (9:45-15:30), closing (15:30-16:00)."""
+    import datetime as _d
+    ts = o.get("filled_at") or o.get("submitted_at")
+    if not ts:
+        return "—"
+    try:
+        t = _d.datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(_ET_TZ)
+    except Exception:
+        return "—"
+    m = t.hour * 60 + t.minute
+    if m < 570 or m >= 960:
+        return "extended"
+    if m < 585:
+        return "opening"
+    if m < 930:
+        return "intraday"
+    return "closing"
 
 
 def _collect(name, today):
@@ -244,7 +269,7 @@ def _summary_page(pdf, data, accts, enrich, today, side):
             sym = ordr["symbol"]; e = enrich.get(sym)
             val = ordr["filled_qty"] * ordr["fill_price"]
             inv = val if is_buy else (val - (ordr.get("rlz") or 0.0))   # $ invested (cost basis)
-            rows.append({"acct": disp(n), "sym": sym, "val": val, "inv": inv,
+            rows.append({"acct": disp(n), "sym": sym, "sess": _session(ordr), "val": val, "inv": inv,
                          "pnl": (ordr.get("unrlz") if is_buy else ordr.get("rlz")), "e": e,
                          "oneD": (e["ret"].get(1) if (e and e.get("ret")) else None),
                          "is_rev": (d.get("kind") == "zscore_reversal"),
@@ -254,8 +279,8 @@ def _summary_page(pdf, data, accts, enrich, today, side):
     fig = plt.figure(figsize=(11, 8.5))
     fig.suptitle(title + "   (%s)" % today, fontsize=14, weight="bold")
     fig.text(0.5, 0.95, sub, ha="center", fontsize=8.5, color="#555")
-    cols = ["Account", "Ticker", "Invested $", "Score", "Rank", "Trend", "Avg 1/5/20/60d", "1D Ret", pnl_lbl, "Reason"]
-    raw = [16, 7, 9, 6, 7, 9, 16, 8, 11, 30]
+    cols = ["Account", "Ticker", "Session", "Invested $", "Score", "Rank", "Trend", "Avg 1/5/20/60d", "1D Ret", pnl_lbl, "Reason"]
+    raw = [16, 7, 9, 9, 6, 7, 9, 16, 8, 11, 30]
     colw = [w / sum(raw) for w in raw]
     body, tv, tp = [], 0.0, 0.0
     for r in rows:
@@ -266,17 +291,17 @@ def _summary_page(pdf, data, accts, enrich, today, side):
         oneD = _pct(r["oneD"]) if r["oneD"] is not None else "—"
         tv += r["inv"]; tp += (pnl or 0.0)
         reason = r["reason"]; reason = (reason[:46] + "…") if len(reason) > 47 else reason
-        body.append(([r["acct"], r["sym"], _money(r["inv"]), score, rank, _trend(e), avgq, oneD,
+        body.append(([r["acct"], r["sym"], r["sess"], _money(r["inv"]), score, rank, _trend(e), avgq, oneD,
                       _money(pnl) if pnl is not None else "—", reason], pnl, e, r["is_rev"]))
     cells, rules = [], []
     if rows:                                              # TOTAL as the TOP row
-        cells.append(["TOTAL", "", _money(tv), "", "", "", "", "", _money(tp), ""])
-        rules += [(0, 0, HEAD), (0, 2, HEAD), (0, 8, GREEN if tp >= 0 else RED)]
+        cells.append(["TOTAL", "", "", _money(tv), "", "", "", "", "", _money(tp), ""])
+        rules += [(0, 0, HEAD), (0, 3, HEAD), (0, 9, GREEN if tp >= 0 else RED)]
     for k, (cell, pnl, e, is_rev) in enumerate(body):
         cells.append(cell)
         if pnl is not None:
-            rules.append((k + 1, 8, GREEN if pnl >= 0 else RED))
-        _stat_rules(k + 1, e, is_rev, 3, 5, rules)               # Score col 3, Trend col 5
+            rules.append((k + 1, 9, GREEN if pnl >= 0 else RED))
+        _stat_rules(k + 1, e, is_rev, 4, 6, rules)               # Score col 4, Trend col 6
     h = min(0.84, 0.06 + 0.029 * max(len(cells), 1))
     ax = fig.add_axes([0.03, max(0.05, 0.90 - h), 0.94, h])
     _draw_table(ax, cols, cells, colw, rules, fontsize=6.6)
