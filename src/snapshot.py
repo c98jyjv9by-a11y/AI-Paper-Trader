@@ -1,267 +1,290 @@
-"""snapshot.py — one-page PDF PERFORMANCE SNAPSHOT across the model_v4 scenario and ALL NINE broker
-accounts (the 3 model-driven seeds + the 6 research strategy books).
+"""snapshot.py — daily SNAPSHOT report across every broker account.
 
-Unlike the intraday `midday-summary` (Day / Held-DW / Signal columns), this is a performance view:
-return over a configurable trailing `--window` (default **1D** = since the prior close; also 5D / 1M /
-MTD / YTD / …) and how it stacks up vs SPY / QQQ over that same window, plus current equity/cash and
-1D P&L. Broker accounts are marked to their LIVE Alpaca book (real equity + holdings). The live books
-are shown in two groups — the model-driven seeds (Top 10 / Existing Model / Ramp Up) and the research
-strategy books (the momentum-rebalance and z-reversal books).
+Two parts (replaces the old performance-snapshot):
 
-CLI:
-    python src/snapshot.py [--end YYYY-MM-DD] [--accounts a b c] [--out FILE]
-    python run.py snapshot  [--end …]
+  • PAGE 1 — a summary table (the order-history report's cover, re-cut): per account, the CURRENT DAY's
+    P&L so far vs the daily QQQ/SPY benchmark move, then SINCE-INCEPTION P&L vs the QQQ/SPY benchmark over
+    that same inception→today window, plus #positions, #orders, and #days trading. A TOTAL row aggregates.
+
+  • PAGE 2+ — "Orders Today": every order whose submission falls in the CURRENT session window — from the
+    PRIOR trading day's market close (16:00 ET) through now (so the post-close EOD-agent fills and the
+    pre-open auction orders that set up today's book are included). One page per account that traded,
+    with the SAME per-order stats columns as the account order-history report (Score@sub / Trail / Pattern
+    / Rlz / Unrlz / Ret / Reason — reused verbatim from account_orders_report so the two always agree).
+
+    python run.py snapshot [--end YYYY-MM-DD] [--accounts a b c] [--out FILE]
 """
 from __future__ import annotations
 
 import sys
-import argparse
-import textwrap
-from datetime import date
+import warnings
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
-ROOT = Path(__file__).parent.parent
+ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
+warnings.filterwarnings("ignore")
 
-DEFAULT_SCENARIO = "model_v4"
-DEFAULT_WINDOW = "1D"
-# the live broker fleet, in two groups (same split as the rest of the toolchain)
-MODEL_DRIVEN = ["topten", "copymodel", "rampup"]                 # follow model_v4's own buy/sell rules
-RESEARCH = ["monthly10", "weekly10", "combo20",                  # pure signal-rule strategy books
-            "zscore10d_biweekly", "zscore5d_weekly", "zscore1d_daily"]
-DEFAULT_ACCOUNTS = MODEL_DRIVEN + RESEARCH                       # all 9
-# friendly display names for the snapshot (keyed by account name); per-book descriptions are rendered
-# as the group explainers in build_pdf rather than a separate definitions block.
-DISPLAY = {"topten": "Top 10 Seed", "copymodel": "Existing Model Seed", "rampup": "Ramp Up",
-           "monthly10": "Monthly Top-10", "weekly10": "Weekly Top-10", "combo20": "Combo 20 (10+10)",
-           "zscore10d_biweekly": "Z-Reversal 10d/biweekly", "zscore5d_weekly": "Z-Reversal 5d/weekly",
-           "zscore1d_daily": "Z-Reversal 1d/daily"}
-# friendly window names → trailing TRADING-day counts (MTD/YTD are handled as calendar anchors)
-_WMAP = {"1D": 1, "5D": 5, "10D": 10, "1M": 21, "3M": 63, "6M": 126, "1Y": 252}
+import matplotlib
+matplotlib.use("Agg")
+matplotlib.rcParams["text.parse_math"] = False     # '$' is currency here, not a mathtext toggle
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 
+import account_orders_report as AO
+from account_orders_report import (
+    _collect, _bench_panel, _bench, _load_rank_snapshots,
+    _order_builders, _order_total_row, _color_orders, _table, _new_page,
+    ORDER_COLS, ORDER_RAW, _money, _pct, DEFAULT_ACCOUNTS, GREEN, RED, GREY,
+)
+from broker_adapter import AlpacaPaper
 
-def _anchor_date(cal, window: str):
-    """The start of the common trailing window on the price calendar `cal` (a DatetimeIndex ending
-    at the mark). MTD/YTD = calendar anchors; otherwise N trailing trading days (named or a raw int)."""
-    import pandas as pd
-    last = cal[-1]
-    w = str(window).upper()
-    if w == "MTD":
-        return pd.Timestamp(last.year, last.month, 1)
-    if w == "YTD":
-        return pd.Timestamp(last.year, 1, 1)
-    n = _WMAP.get(w) or int(w)
-    return cal[-(n + 1)] if len(cal) > n else cal[0]
+_ET = ZoneInfo("America/New_York")
+_UTC = ZoneInfo("UTC")
+HEAD = "#34495e"
+ORDERS_PER_PAGE = 30
 
 
-def _ret_from(series, anchor, end_val=None) -> Optional[float]:
-    """Return of `series` from the last point at/before `anchor` to `end_val` (default: series end).
-    None when the series has no point at/before the anchor (e.g. a book younger than the window)."""
-    s = series[series.index <= anchor]
-    if s.empty:
-        return None
-    a = float(s.iloc[-1])
-    e = float(series.iloc[-1]) if end_val is None else float(end_val)
-    return (e / a - 1) if a else None
-
-
-def build_rows(end: Optional[date] = None, accounts: Optional[List[str]] = None,
-               scenario: str = DEFAULT_SCENARIO, window: str = DEFAULT_WINDOW) -> List[Dict[str, Any]]:
-    """One row per book (scenario first, then each account): equity + return over a COMMON trailing
-    `window` (same anchor date for every book) + SPY/QQQ over that window + α (book − benchmark) +
-    today's move + #positions. A book younger than the window shows '—' for its portfolio leg."""
-    import midday_summary as MS
-    accounts = DEFAULT_ACCOUNTS if accounts is None else accounts
-    specs = [(scenario, None)] + [(scenario, a) for a in accounts]
-    w = str(window).upper()
-
-    # Pass 1 — build each book's view (preserve order). Capture ONE reference benchmark series so the
-    # market benchmarks (SPY/QQQ) are computed on the SAME final prices for every book (each book's
-    # own yfinance pull jitters by a few bps; the benchmark is market-wide, so it must not differ).
-    built: List[tuple] = []
-    ref_spy = ref_qqq = None
-    for scen, acct in specs:
-        try:
-            d, _label, _ = MS._book_view(scen, end, account=acct, want_pdf=False)
-            label = DISPLAY.get(acct, _label) if acct else f"{scen} · scenario"
-            built.append((acct, scen, label, d, None))
-            if ref_spy is None and d.get("spy_series") is not None:
-                ref_spy, ref_qqq = d.get("spy_series"), d.get("qqq_series")
-        except Exception as e:                       # one bad book shouldn't sink the snapshot
-            built.append((acct, scen, DISPLAY.get(acct, acct or scen), None, f"{type(e).__name__}: {e}"))
-
-    # Unified benchmark return for the window — computed ONCE from the reference series.
-    banchor = s_bench = q_bench = None
-    if ref_spy is not None:
-        banchor = (ref_spy.index[-2] if (w == "1D" and len(ref_spy.index) >= 2)
-                   else _anchor_date(ref_spy.index, window))
-        s_bench, q_bench = _ret_from(ref_spy, banchor), _ret_from(ref_qqq, banchor)
-    anchor_str = str(banchor.date()) if banchor is not None else "—"
-
-    # Pass 2 — assemble rows: book-specific return/P&L, SAME benchmark for all.
-    rows: List[Dict[str, Any]] = []
-    for acct, scen, label, d, err in built:
-        if err is not None or d is None:
-            rows.append({"label": label, "key": (acct or scen), "error": err or "no data"})
+# ── benchmark + calendar helpers ─────────────────────────────────────────────────
+def _live_bench_px(accts, data) -> Dict[str, float]:
+    """Current QQQ/SPY mid from the first working broker client (market-wide — one quote serves all)."""
+    for n in accts:
+        if data[n].get("err"):
             continue
-        stats = d.get("stats") or {}
-        eqs = d.get("eq_series")
-        pv, cash = d.get("pv"), d.get("cash")
-        if w == "1D":
-            # 1D = since the prior trading close. Use stats["1D"]["port"] so the BROKER day return
-            # (live equity vs last_equity) is used for accounts, not the sparse ledger series.
-            p = (stats.get("1D") or {}).get("port")
-        else:
-            p = _ret_from(eqs, banchor, end_val=pv) if banchor is not None else None
-        pos = d.get("positions")
-        mkt = (pv - cash) if (pv is not None and cash is not None) else pv   # held-positions value
-        pnl = (pv * p / (1 + p)) if (pv is not None and p is not None and (1 + p) != 0) else None
-        rows.append({
-            "label": label, "key": (acct or scen), "anchor": anchor_str,
-            "equity": pv, "cash": cash, "mkt_value": mkt, "ret": p, "pnl": pnl,
-            "spy": s_bench, "qqq": q_bench,            # SAME benchmark for every book
-            "vs_spy": (p - s_bench) if (p is not None and s_bench is not None) else None,
-            "vs_qqq": (p - q_bench) if (p is not None and q_bench is not None) else None,
-            "n_pos": (len(pos) if (pos is not None and not pos.empty) else 0),
-        })
-    return rows
+        try:
+            q = AlpacaPaper(account=n).latest_prices(["QQQ", "SPY"]) or {}
+            out = {s: float(q[s]["mid"]) for s in ("QQQ", "SPY") if q.get(s) and q[s].get("mid")}
+            if out:
+                return out
+        except Exception:
+            continue
+    return {}
 
 
-def build_pdf(rows: List[Dict[str, Any]], out_path: Path, end: date, window: str = DEFAULT_WINDOW) -> Path:
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    from matplotlib.backends.backend_pdf import PdfPages
-    import pdf_report as P
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    anchor = next((r.get("anchor") for r in rows if r.get("anchor")), None)
-    wlabel = str(window).upper()
-    with PdfPages(out_path) as pdf:
-        fig, ax = P._new_page(pdf)
-        # banner
-        ax.add_patch(plt.Rectangle((0, 0.93), 1, 0.07, transform=ax.transAxes,
-                                   facecolor=P.NAVY, edgecolor="none", zorder=0))
-        ax.text(0.06, 0.965, "Performance Snapshot — model_v4 + Alpaca accounts",
-                color="white", fontsize=15, fontweight="bold", va="center")
-        ax.text(0.06, 0.943, f"{wlabel} return & {wlabel} P&L"
-                + (f" (vs {anchor})" if anchor else "") + " · SPY / QQQ context · current marks",
-                color="#b9c6d8", fontsize=8.5, va="center")
-        ax.text(0.94, 0.958, end.isoformat(), color="white", fontsize=11,
-                fontweight="bold", va="center", ha="right")
-
-        def _pnl_str(x):
-            if x is None:
-                return "—"
-            return ("+$" if x >= 0 else "−$") + format(abs(round(x)), ",")
-
-        ok = [r for r in rows if not r.get("error")]
-        accts = [r for r in ok if r.get("key") != "model_v4"]
-        scen = next((r for r in ok if r.get("key") == "model_v4"), None)
-        # headline cards: scenario window return + its P&L + aggregate account equity + accounts' P&L
-        cards = []
-        if scen:
-            cards.append((f"model_v4 {wlabel} return", P._pct(scen.get("ret")), P._ret_color(scen.get("ret"))))
-            cards.append((f"model_v4 {wlabel} P&L", _pnl_str(scen.get("pnl")), P._ret_color(scen.get("pnl"))))
-        if accts:
-            cards.append(("accounts equity (Σ)", P._money(sum(r.get("equity") or 0 for r in accts)), P.NAVY))
-            apnl = sum((r.get("pnl") or 0) for r in accts)
-            cards.append((f"accounts {wlabel} P&L (Σ)", _pnl_str(apnl), P._ret_color(apnl)))
-        y = P._cards(ax, 0.885, cards) if cards else 0.86
-
-        cols = ["Book", "Mkt Value", "Cash", f"{wlabel} Return", f"{wlabel} P&L", "SPY", "QQQ", "#Pos"]
-        widths = [0.225, 0.115, 0.105, 0.10, 0.125, 0.085, 0.085, 0.055]
-        align = ["left", "right", "right", "right", "right", "right", "right", "center"]
-
-        def _trow(r):
-            if r.get("error"):
-                return [r["label"], "—", "—", "ERR", "—", "—", "—", "—"]
-            return [r["label"], P._money(r.get("mkt_value")), P._money(r.get("cash")),
-                    P._pct(r.get("ret")), _pnl_str(r.get("pnl")), P._pct(r.get("spy")),
-                    P._pct(r.get("qqq")), str(r.get("n_pos", 0))]
-
-        def cb(ri, ci, v):
-            if ci == 0:
-                return P.NAVY
-            if ci == 4:                                  # the P&L ($) column — colour by sign
-                return P.GREEN if v.startswith("+") else (P.RED if v.startswith("−") else "#1f2a3a")
-            if ci in (3, 5, 6):                          # % columns: Return / SPY / QQQ
-                return P._ret_color(P._parse_pct(v))
-            return "#1f2a3a"
-
-        def _explain(yv, text):                          # italic group explainer, wrapped
-            for ln in textwrap.wrap(text, 132):
-                ax.text(0.06, yv, ln, color=P.MIDGREY, fontsize=7.4, va="top", style="italic")
-                yv -= 0.0145
-            return yv - 0.003
-
-        # Group 1 — the SIMULATED model_v4 scenario (backtest reference), set apart from the live books.
-        scen_rows = [r for r in rows if r.get("key") == "model_v4"]
-        y = P._section(ax, y - 0.01, "Simulated reference — model_v4 scenario (backtest)")
-        if scen_rows:
-            y = P._table(ax, y, cols, [_trow(r) for r in scen_rows], widths, align=align,
-                         text_color=cb, row_h=0.030, fontsize=8.2, header_fontsize=7.3, emph_rows={0})
-        # Group 2 — model-driven live accounts: 3 ways to IMPLEMENT model_v4 on any given date.
-        md_rows = [r for r in rows if r.get("key") in MODEL_DRIVEN]
-        if md_rows:
-            y = P._section(ax, y - 0.014, "Live accounts · model-driven — three ways to implement model_v4")
-            y = _explain(y, "Each follows model_v4's own buy/sell rules from a different seed: buy the "
-                            "top-10 CURRENT ranks equally (Top 10 Seed), the model's CURRENT holdings "
-                            "(Existing Model Seed), or ramp up by only buying names scoring > 0.9 (Ramp Up).")
-            y = P._table(ax, y, cols, [_trow(r) for r in md_rows], widths, align=align,
-                         text_color=cb, row_h=0.030, fontsize=8.2, header_fontsize=7.3)
-        # Group 3 — research strategy books: pure signal rules, NO model_v4 entry/exit or overlay.
-        rs_rows = [r for r in rows if r.get("key") in RESEARCH]
-        if rs_rows:
-            y = P._section(ax, y - 0.014, "Live accounts · research strategy books — pure signal rules")
-            y = _explain(y, "Independent strategies (no model_v4 entry/exit, no hedge/rebound overlay): "
-                            "top-10 momentum books rebalanced weekly/monthly (Weekly / Monthly Top-10, "
-                            "Combo 20) and regime-filtered mean-reversion books buying the most-fallen names "
-                            "(Z-Reversal, three cadences).")
-            y = P._table(ax, y, cols, [_trow(r) for r in rs_rows], widths, align=align,
-                         text_color=cb, row_h=0.030, fontsize=8.2, header_fontsize=7.3)
-
-        # (Per-book descriptions live in the group explainers above; here just the methodology note.)
-        note = (f"{wlabel} Return / SPY / QQQ are measured over the {wlabel} window"
-                + (f" (since {anchor})" if anchor else "") + " — for 1D, since the prior trading close. "
-                f"{wlabel} P&L = the dollar change over that window (equity − equity at the window start). "
-                "Broker accounts use live Alpaca equity vs the prior close; the model_v4 scenario uses its "
-                "simulated equity. Mkt Value = market value of current holdings; Cash = cash balance "
-                "(total equity = Mkt Value + Cash). Paper-trading research only — not advice.")
-        ax.text(0.06, y - 0.02, textwrap.fill(note, 132), color=P.MIDGREY, fontsize=7.4, va="top")
-        ax.text(0.94, 0.022, f"snapshot · {end.isoformat()}", color=P.MIDGREY, fontsize=6.5,
-                va="center", ha="right")
-        pdf.savefig(fig)
-        plt.close(fig)
-    return out_path
+def _prior_trading_day(panel, today: str) -> Optional[str]:
+    """The most recent trading-session date STRICTLY before `today` (YYYY-MM-DD), off the QQQ/SPY price
+    calendar — the close that the current day's P&L and the Orders-Today window are measured from."""
+    if panel is None:
+        return None
+    try:
+        dts = [d.strftime("%Y-%m-%d") for d in panel.index]
+        prior = [x for x in dts if x < today]
+        return prior[-1] if prior else None
+    except Exception:
+        return None
 
 
-def run(end: Optional[date] = None, output: Optional[Path] = None, accounts: Optional[List[str]] = None,
-        scenario: str = DEFAULT_SCENARIO, window: str = DEFAULT_WINDOW) -> "tuple[Path, List[Dict[str, Any]]]":
-    end = end or date.today()
-    rows = build_rows(end=end, accounts=accounts, scenario=scenario, window=window)
-    out = Path(output) if output else ROOT / "reports" / f"snapshot_{end.isoformat()}.pdf"
-    build_pdf(rows, out, end, window=window)
+def _daily_bench(panel, prior_day, live_px) -> Dict[str, float]:
+    """{QQQ,SPY} return from the PRIOR trading-day close to NOW — the same daily window as each account's
+    intraday day-P&L. Endpoint is the live broker quote when available, else the panel's latest close."""
+    out: Dict[str, float] = {}
+    if panel is None or not prior_day:
+        return out
+    try:
+        base = panel.loc[:prior_day]
+        if base.empty:
+            return out
+        b0 = base.iloc[-1]
+        for s in ("QQQ", "SPY"):
+            if s not in panel.columns or float(b0[s]) <= 0:
+                continue
+            end_px = live_px.get(s) or float(panel.iloc[-1][s])
+            out[s] = float(end_px) / float(b0[s]) - 1
+    except Exception:
+        pass
+    return out
+
+
+def _days_trading(panel, inception) -> Optional[int]:
+    """# trading sessions from inception (inclusive) through today, off the price calendar."""
+    if panel is None or not inception:
+        return None
+    try:
+        return int(len(panel.loc[inception:]))
+    except Exception:
+        return None
+
+
+def _et_dt(ts):
+    """ISO timestamp → tz-aware Eastern datetime, or None."""
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        return (dt.replace(tzinfo=_UTC) if dt.tzinfo is None else dt).astimezone(_ET)
+    except Exception:
+        return None
+
+
+def _today_orders(orders, win_start, win_end):
+    """Orders submitted within (prior-close, today] — newest first (the order list already is)."""
+    out = []
+    for o in orders:
+        dt = _et_dt(o.get("submitted_at") or o.get("filled_at"))
+        if dt is not None and win_start < dt <= win_end:
+            out.append(o)
+    return out
+
+
+# ── page 1: summary table ────────────────────────────────────────────────────────
+def _render_summary(pdf, data, accts, today, panel, ibench, dbench, prior_day):
+    fig = plt.figure(figsize=(11, 8.5))
+    fig.suptitle("Snapshot — daily & since-inception P&L vs benchmarks   %s" % today,
+                 fontsize=14, weight="bold")
+    dq, ds = dbench.get("QQQ"), dbench.get("SPY")
+    sub = ("Day = today's change so far vs the prior close (%s)   ·   Since inception = each account's "
+           "own start→today window" % (prior_day or "—"))
+    fig.text(0.5, 0.945, sub, ha="center", fontsize=8, color="#555")
+
+    ax = fig.add_axes([0.03, 0.34, 0.94, 0.55]); ax.axis("off")
+    cols = ["Account", "Equity", "Day\nP&L", "Day\n%", "Day\nQQQ", "Day\nSPY",
+            "Incep\nP&L", "Incep\n%", "Incep\nQQQ", "Incep\nSPY", "Pos", "Ord", "Days"]
+    raw = [15, 11, 9, 7, 7, 7, 10, 8, 7, 7, 5, 5, 6]
+
+    def _b(v):
+        return _pct(v) if v is not None else "—"
+
+    cells, ok = [], []
+    for n in accts:
+        d = data[n]
+        if d.get("err"):
+            cells.append([n, "—", "—", "—", _b(dq), _b(ds), "ERR", "—", "—", "—", "—", "—", "—"])
+            continue
+        ok.append(d)
+        ib = ibench.get(n) or {}
+        days = _days_trading(panel, d.get("inception"))
+        cells.append([n, _money(d["eq"]),
+                      _money(d["day_pnl"]) if d.get("day_pnl") is not None else "—", _b(d.get("day_ret")),
+                      _b(dq), _b(ds),
+                      _money(d["total_pnl"]), _b(d["tot_ret"]), _b(ib.get("QQQ")), _b(ib.get("SPY")),
+                      str(len(d["pos"])), str(len(d["orders"])),
+                      str(days) if days is not None else "—"])
+    if ok:
+        agg = {k: sum(d[k] for d in ok) for k in ("eq", "total_pnl", "start")}
+        day_ok = [d for d in ok if d.get("day_pnl") is not None]
+        day_pnl = sum(d["day_pnl"] for d in day_ok)
+        day_last = sum(d["last_eq"] for d in day_ok)
+
+        def _blend(sym):
+            num = sum(d["start"] * ibench[d["name"]][sym] for d in ok
+                      if (ibench.get(d["name"]) or {}).get(sym) is not None)
+            den = sum(d["start"] for d in ok if (ibench.get(d["name"]) or {}).get(sym) is not None)
+            return (num / den) if den else None
+        cells.append(["TOTAL", _money(agg["eq"]),
+                      (_money(day_pnl) if day_ok else "—"), (_b(day_pnl / day_last) if day_last else "—"),
+                      _b(dq), _b(ds),
+                      _money(agg["total_pnl"]), _b(agg["eq"] / agg["start"] - 1 if agg["start"] else 0.0),
+                      _b(_blend("QQQ")), _b(_blend("SPY")),
+                      str(sum(len(d["pos"]) for d in ok)), str(sum(len(d["orders"]) for d in ok)), "—"])
+
+    t = ax.table(cellText=cells, colLabels=cols, colWidths=[w / sum(raw) for w in raw],
+                 loc="upper center", cellLoc="center")
+    t.auto_set_font_size(False); t.set_fontsize(7.6); t.scale(1, 1.7)
+    for j in range(len(cols)):
+        t[0, j].set_facecolor(HEAD); t[0, j].set_text_props(color="white", weight="bold"); t[0, j].set_fontsize(7.0)
+    # per-row sign coloring on the 8 P&L / return / benchmark cells (cols 2..9)
+    for i, n in enumerate(accts):
+        d = data[n]
+        if d.get("err"):
+            t[i + 1, 6].set_text_props(color=RED, weight="bold")
+            for j, v in [(4, dq), (5, ds)]:
+                if v is not None:
+                    t[i + 1, j].set_text_props(color=(GREEN if v >= 0 else RED))
+            continue
+        ib = ibench.get(n) or {}
+        for j, v in [(2, d.get("day_pnl")), (3, d.get("day_ret")), (4, dq), (5, ds),
+                     (6, d["total_pnl"]), (7, d["tot_ret"]), (8, ib.get("QQQ")), (9, ib.get("SPY"))]:
+            if v is not None:
+                t[i + 1, j].set_text_props(color=(GREEN if v >= 0 else RED), weight="bold")
+    if ok:                                                    # shade + bold the TOTAL row
+        tr = len(accts) + 1
+        for j in range(len(cols)):
+            t[tr, j].set_facecolor("#dfe6e9"); t[tr, j].set_text_props(weight="bold")
+
+    n1 = ("Day P&L = equity − prior-close equity (today's intraday change SO FAR); Day % = that ÷ prior-close "
+          "equity.  Day QQQ / SPY = the benchmark's move over the SAME prior-close→now window (one market-wide "
+          "number; TOTAL Day % = Σ day P&L ÷ Σ prior-close equity).")
+    n2 = ("Incep P&L = equity − starting (broker).  Incep % / QQQ / SPY = total return over EACH account's own "
+          "inception→today window (timelines aligned per account; TOTAL benchmark = starting-weighted blend).  "
+          "Days = trading sessions since inception.  ERR = the account's Alpaca keys are unset/placeholder.")
+    fig.text(0.03, 0.27, n1, fontsize=7.4, color="#555", wrap=True)
+    fig.text(0.03, 0.215, n2, fontsize=7.4, color="#555", wrap=True)
+    pdf.savefig(fig); plt.close(fig)
+
+
+# ── page 2+: orders today ────────────────────────────────────────────────────────
+def _render_orders_today(pdf, data, accts, today, prior_day, snapshots, sig_cache, trail_cache):
+    win_end = datetime.combine(date.fromisoformat(today), time(23, 59, 59), tzinfo=_ET)
+    win_start = (datetime.combine(date.fromisoformat(prior_day), time(16, 0), tzinfo=_ET)
+                 if prior_day else win_end - timedelta(days=1))
+    win_lbl = ("since the prior close (%s 16:00 ET) through now" % prior_day) if prior_day else "today"
+    ow = [w / sum(ORDER_RAW) for w in ORDER_RAW]
+
+    any_today = False
+    for n in accts:
+        d = data[n]
+        if d.get("err"):
+            continue
+        todays = _today_orders(d["orders"], win_start, win_end)
+        if not todays:
+            continue
+        any_today = True
+        _orow, _patterncell = _order_builders(d, snapshots, sig_cache, trail_cache)
+        total_row, realized_sum, unrlz_sum = _order_total_row(todays)
+        rest, page = todays, 1
+        npages = max(1, (len(todays) + ORDERS_PER_PAGE - 1) // ORDERS_PER_PAGE)
+        while rest:
+            chunk, rest = rest[:ORDERS_PER_PAGE], rest[ORDERS_PER_PAGE:]
+            sub = "Orders Today — %s%s" % (win_lbl, "" if npages == 1 else "  (page %d/%d)" % (page, npages))
+            fig = _new_page(pdf, "Orders Today — %s  (%d)" % (n, len(todays)), sub=sub)
+            cells = [total_row] + [_orow(o) for o in chunk]
+            _, ot = _table(fig, [0.02, 0.05, 0.96, 0.84], ORDER_COLS, cells, ow, fontsize=5.5)
+            if ot is not None:
+                _color_orders(ot, chunk, 2, _patterncell, realized_sum, unrlz_sum)
+            fig.text(0.02, 0.93, "Same per-order stats as the order-history report.  Score@sub = the book's OWN "
+                     "selection metric #rank as-of the order date.  Trail 1/5/10/20/60d = current close composite "
+                     "score + its trailing averages.  Pattern = score TRAJECTORY (Surging/Climbing/Stable/Fading/"
+                     "Dropping).  Times in CT.", fontsize=6.3, color="#555")
+            pdf.savefig(fig); plt.close(fig)
+            page += 1
+
+    if not any_today:
+        fig = _new_page(pdf, "Orders Today", sub="Orders Today — %s" % win_lbl)
+        ax = fig.add_axes([0.06, 0.1, 0.88, 0.78]); ax.axis("off")
+        ax.text(0.0, 1.0, "No orders in the current session window across any account.", fontsize=11,
+                weight="bold", color="#333", va="top")
+        ax.text(0.0, 0.93, "Window: %s." % win_lbl, fontsize=9, color=GREY, va="top")
+        pdf.savefig(fig); plt.close(fig)
+
+
+def run(end: Optional[date] = None, output: Optional[Path] = None,
+        accounts: Optional[List[str]] = None, window=None) -> "tuple[Path, List[Dict[str, Any]]]":
+    today = (end.isoformat() if hasattr(end, "isoformat") else end) or date.today().isoformat()
+    accts = accounts or DEFAULT_ACCOUNTS
+    data = {n: _collect(n, today, status="all") for n in accts}
+
+    incs = [data[n]["inception"] for n in accts if not data[n].get("err") and data[n].get("inception")]
+    panel = _bench_panel(today, min(incs)) if incs else None
+    ibench = {n: _bench(panel, data[n].get("inception")) for n in accts if not data[n].get("err")}
+    live_px = _live_bench_px(accts, data)
+    prior_day = _prior_trading_day(panel, today)
+    dbench = _daily_bench(panel, prior_day, live_px)
+    snapshots = _load_rank_snapshots()
+    sig_cache, trail_cache = {}, {}
+
+    out = Path(output) if output else ROOT / "reports" / f"snapshot_{today}.pdf"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with PdfPages(out) as pdf:
+        _render_summary(pdf, data, accts, today, panel, ibench, dbench, prior_day)
+        _render_orders_today(pdf, data, accts, today, prior_day, snapshots, sig_cache, trail_cache)
+
+    rows = [{"label": n, "error": data[n].get("err")} for n in accts]
     return out, rows
 
 
-def main(argv=None):
-    ap = argparse.ArgumentParser(description="One-page performance snapshot: model_v4 + Alpaca accounts")
-    ap.add_argument("--end", metavar="YYYY-MM-DD")
-    ap.add_argument("--window", default=DEFAULT_WINDOW,
-                    help="common trailing window for all books: 1D/5D/10D/1M/3M/6M/1Y, MTD, YTD, or an integer of trading days")
-    ap.add_argument("--accounts", nargs="*", help="override the default account list (topten/copymodel/rampup)")
-    ap.add_argument("--out")
-    a = ap.parse_args(argv)
-    out, rows = run(end=date.fromisoformat(a.end) if a.end else None,
-                    output=Path(a.out) if a.out else None, accounts=a.accounts or None, window=a.window)
-    ok = sum(1 for r in rows if not r.get("error"))
-    print(f"Wrote {out}  ({ok}/{len(rows)} books)")
-    for r in rows:
-        if r.get("error"):
-            print(f"  ! {r['label']}: {r['error']}")
-
-
 if __name__ == "__main__":
-    main()
+    out, rows = run()
+    ok = sum(1 for r in rows if not r.get("error"))
+    print("Wrote %s  (%d/%d accounts)" % (out, ok, len(rows)))

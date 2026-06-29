@@ -342,11 +342,9 @@ def build_parser() -> argparse.ArgumentParser:
     es.set_defaults(func=_cmd_eod_summary)
 
     sn = sub.add_parser("snapshot",
-                        help="One-page PDF performance snapshot (total return + vs-benchmark) across model_v4 + the Alpaca accounts")
+                        help="Daily snapshot PDF: per-account day & since-inception P&L vs benchmarks (page 1) + Orders Today (page 2+)")
     sn.add_argument("--end", metavar="YYYY-MM-DD", help="as-of date (default: today)")
-    sn.add_argument("--window", default="1D",
-                    help="window for the return + P&L columns: 1D (default), 5D/10D/1M/3M/6M/1Y, MTD, YTD, or an int of trading days")
-    sn.add_argument("--accounts", nargs="*", help="override the default account list (topten/copymodel/rampup)")
+    sn.add_argument("--accounts", nargs="*", help="override the default account list (default: all 9 broker accounts)")
     sn.add_argument("--out")
     sn.set_defaults(func=_cmd_snapshot)
 
@@ -572,9 +570,9 @@ def _cmd_snapshot(args: argparse.Namespace) -> None:
     out, rows = snapshot.run(
         end=date.fromisoformat(args.end) if args.end else None,
         output=Path(args.out) if args.out else None,
-        accounts=args.accounts or None, window=args.window)
+        accounts=args.accounts or None)
     ok = sum(1 for r in rows if not r.get("error"))
-    print(f"Wrote {out}  ({ok}/{len(rows)} books)")
+    print(f"Wrote {out}  ({ok}/{len(rows)} accounts)")
     for r in rows:
         if r.get("error"):
             print(f"  ! {r['label']}: {r['error']}")
