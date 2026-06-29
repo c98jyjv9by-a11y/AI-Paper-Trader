@@ -135,6 +135,21 @@ def _avg_ret(panel, base_date):
         return None
 
 
+def _ticker_ret(panel, prior_day, sym) -> Optional[float]:
+    """Single ticker's PRIOR-close → latest-close return (today's ROR), off the universe close panel —
+    the same window as the 'Universe avg' benchmark row. None when the name/date isn't covered."""
+    if panel is None or not prior_day or sym not in getattr(panel, "columns", []):
+        return None
+    try:
+        base = panel.loc[:prior_day]
+        if base.empty:
+            return None
+        b0, b1 = float(base.iloc[-1][sym]), float(panel.iloc[-1][sym])
+        return (b1 / b0 - 1) if b0 > 0 and b0 == b0 and b1 == b1 else None
+    except Exception:
+        return None
+
+
 def _session_window(today, prior_day):
     """(win_start, win_end, label) for the CURRENT session: the prior trading-day close (16:00 ET) → now.
     Orders submitted in this window are 'today's' (incl. post-close EOD fills + pre-open auction orders)."""
@@ -492,7 +507,8 @@ def run(end: Optional[date] = None, output: Optional[Path] = None,
         _render_buys(pdf, data, accts, win_start, win_end, "Buys Today — by account & ticker",
                      "All buys %s, marked to current prices, sorted by unrealized P&L" % win_lbl)
         _render_crossings(pdf, data, accts, win_start, win_end, "Trades your own model told you not to make",
-                          "You SOLD names the 5-day z-reversion model was BUYING (oversold / reverting up) — %s" % win_lbl)
+                          "You SOLD names the 5-day z-reversion model was BUYING (oversold / reverting up) — %s" % win_lbl,
+                          upanel, prior_day)
         _render_buys(pdf, data, accts, winB_start, winB_end, "Prior-Day Buys — current P&L",
                      "Buys placed in %s, marked to NOW, sorted by current unrealized P&L" % winB_lbl)
         _render_orders_by_account(pdf, data, accts, today, win_start, win_end, win_lbl)
@@ -503,10 +519,11 @@ def run(end: Optional[date] = None, output: Optional[Path] = None,
 
 
 # ── "trades your own model told you not to make" — sold into the 5-day reversion's buys ──
-def _render_crossings(pdf, data, accts, win_start, win_end, title, sub):
+def _render_crossings(pdf, data, accts, win_start, win_end, title, sub, upanel=None, prior_day=None):
     """Judge = the 5-DAY z-reversion book ONLY. When it BUYS a name (most-fallen, expected to revert
     UP) and a NON-reversion book SELLS that same name this session, the sell is one your own model
-    told you not to make. Top table pairs the model BUY with your SELL legs; the second table is the
+    told you not to make. Top table pairs the model BUY with your SELL legs, each with that leg's
+    today PnL (realized + unrealized) and the ticker's today ROR (prior-close → now); the second table is the
     per-sell opportunity cost = (price now - sell price) x qty, summed. Good crosses (you bought what
     the 5D book sold) are totalled in the footer."""
     from account import load_manifest as _lm
@@ -524,9 +541,10 @@ def _render_crossings(pdf, data, accts, win_start, win_end, title, sub):
             if not (o.get("fill_price") and o.get("filled_qty")):
                 continue
             sym = o.get("symbol", ""); side = (o.get("side") or "").lower()
-            e = jinfo.setdefault(sym, {"bq": 0.0, "bv": 0.0, "sq": 0.0, "now": None})
+            e = jinfo.setdefault(sym, {"bq": 0.0, "bv": 0.0, "sq": 0.0, "now": None, "pnl": 0.0})
             if side == "buy":
                 e["bq"] += o["filled_qty"]; e["bv"] += o["filled_qty"] * o["fill_price"]
+                e["pnl"] += (o.get("rlz") or 0.0) + (o.get("unrlz") or 0.0)
                 if o.get("ret") is not None:
                     e["now"] = o["fill_price"] * (1 + o["ret"])
             else:
@@ -541,18 +559,20 @@ def _render_crossings(pdf, data, accts, win_start, win_end, title, sub):
             if not (o.get("fill_price") and o.get("filled_qty")):
                 continue
             sym = o.get("symbol", ""); side = (o.get("side") or "").lower()
-            a = agg.setdefault(sym, {"bq": 0.0, "sq": 0.0, "sv": 0.0, "unrlz": 0.0})
+            a = agg.setdefault(sym, {"bq": 0.0, "sq": 0.0, "sv": 0.0, "unrlz": 0.0, "pnl": 0.0})
             if side == "buy":
                 a["bq"] += o["filled_qty"]
             else:
                 a["sq"] += o["filled_qty"]; a["sv"] += o["filled_qty"] * o["fill_price"]
             a["unrlz"] += o.get("unrlz") or 0.0
+            a["pnl"] += (o.get("rlz") or 0.0) + (o.get("unrlz") or 0.0)
         for sym, a in agg.items():
             net_sell = a["sq"] - a["bq"]; j = jinfo.get(sym)
             if j and j["bq"] > j["sq"] and net_sell > 0 and j["now"]:     # BAD: sold into the model buy
                 sold = a["sv"] / a["sq"]
-                e = bad.setdefault(sym, {"mqty": j["bq"], "mavg": j["bv"] / j["bq"], "now": j["now"], "sellers": []})
-                e["sellers"].append((disp(n), net_sell, sold, (j["now"] - sold) * net_sell))
+                e = bad.setdefault(sym, {"mqty": j["bq"], "mavg": j["bv"] / j["bq"], "now": j["now"],
+                                         "mpnl": j.get("pnl", 0.0), "sellers": []})
+                e["sellers"].append((disp(n), net_sell, sold, (j["now"] - sold) * net_sell, a["pnl"]))
             elif j and j["sq"] > j["bq"] and a["bq"] > a["sq"]:           # GOOD: bought what model sold
                 good_total += a["unrlz"]; good_n += 1
     order = sorted(bad, key=lambda t: -sum(s[3] for s in bad[t]["sellers"]))
@@ -560,19 +580,23 @@ def _render_crossings(pdf, data, accts, win_start, win_end, title, sub):
     jname = disp(judge) if judge else "5D model"
 
     # ---- build rows ----
-    rows1, side1 = [], []                                    # (cells, side) for the buy/sell legs
+    rows1, side1 = [], []                                    # (cells, side, pnl, ror) for the buy/sell legs
     for t in order:
         e = bad[t]
-        rows1.append([t, jname + " (model)", "BUY", "%g" % e["mqty"], "$%.2f" % e["mavg"]]); side1.append("buy")
-        for acct, qty, sold, opp in e["sellers"]:
-            rows1.append(["", acct, "SELL", "%g" % qty, "$%.2f" % sold]); side1.append("sell")
+        ror = _ticker_ret(upanel, prior_day, t)
+        rows1.append([t, jname + " (model)", "BUY", "%g" % e["mqty"], "$%.2f" % e["mavg"],
+                      _money(e["mpnl"]), _pct(ror) if ror is not None else "—"])
+        side1.append(("buy", e["mpnl"], ror))
+        for acct, qty, sold, opp, pnl in e["sellers"]:
+            rows1.append(["", acct, "SELL", "%g" % qty, "$%.2f" % sold, _money(pnl), ""])
+            side1.append(("sell", pnl, None))
     rows2 = []
     for t in order:
         e = bad[t]
-        for acct, qty, sold, opp in e["sellers"]:
+        for acct, qty, sold, opp, pnl in e["sellers"]:
             rows2.append([t, acct, "%g" % qty, "$%.2f" % sold, "$%.2f" % e["now"], _money(opp), opp])
     if not rows1:
-        rows1 = [["— none —", "", "", "", ""]]; side1 = [""]
+        rows1 = [["— none —", "", "", "", "", "", ""]]; side1 = [None]
     cells2 = [r[:6] for r in rows2] or [["— none —", "", "", "", "", ""]]
     if rows2:
         cells2.append(["TOTAL", "", "", "", "", _money(bad_total)])
@@ -596,10 +620,15 @@ def _render_crossings(pdf, data, accts, win_start, win_end, title, sub):
     y = 0.90
     fig.text(0.06, y, "What your model BOUGHT vs what you SOLD:", fontsize=9.5, weight="bold"); y -= 0.016
     h1 = n1 * rowh
-    tb1 = _tbl([0.06, y - h1, 0.88, h1], rows1, ["Ticker", "Account", "Side", "Qty", "Fill $"], [8, 22, 6, 7, 9])
+    tb1 = _tbl([0.06, y - h1, 0.88, h1], rows1,
+               ["Ticker", "Account", "Side", "Qty", "Fill $", "PnL $ (rlz+unrlz)", "Ticker ROR today"],
+               [8, 18, 6, 6, 8, 12, 11])
     for i, sd in enumerate(side1):
         if sd:
-            tb1[i + 1, 2].set_text_props(color=(GREEN if sd == "buy" else RED), weight="bold")
+            tb1[i + 1, 2].set_text_props(color=(GREEN if sd[0] == "buy" else RED), weight="bold")
+            tb1[i + 1, 5].set_text_props(color=(GREEN if sd[1] >= 0 else RED), weight="bold")
+            if sd[2] is not None:
+                tb1[i + 1, 6].set_text_props(color=(GREEN if sd[2] >= 0 else RED), weight="bold")
     y = y - h1 - 0.045
     fig.text(0.06, y, "Opportunity cost of each sell  (now − sold) × qty:", fontsize=9.5, weight="bold"); y -= 0.016
     h2 = n2 * rowh
