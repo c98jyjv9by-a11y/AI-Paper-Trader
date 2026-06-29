@@ -21,6 +21,8 @@ from typing import Any, Dict, List, Optional
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
+from eod_accounts import disp                         # friendly account display names (shared)
+
 DEFAULT_SCENARIO = "model_v4"
 DEFAULT_ACCOUNTS = ["topten", "copymodel", "rampup"]
 
@@ -74,7 +76,7 @@ def _book_view(scenario: str, end: Optional[date], account: Optional[str] = None
     pdf: Optional[Path] = None
     if want_pdf:
         pdf = midday_pdf.build_pdf(d, cfg, midday_pdf.report_path(scenario, account, d["mark"]))
-    label = _account_label(account, man) if account else f"{scenario} · scenario"
+    label = disp(account) if account else f"{scenario} · scenario"
     return d, label, pdf
 
 
@@ -101,7 +103,7 @@ def build_summary(end: Optional[date] = None, accounts: Optional[List[str]] = No
                 "pdf": str(pdf) if pdf else None,
             })
         except Exception as e:                       # one bad book shouldn't sink the summary
-            rows.append({"label": (acct or scen), "account": acct,
+            rows.append({"label": (disp(acct) if acct else scen), "account": acct,
                          "error": f"{type(e).__name__}: {e}"})
     return rows
 

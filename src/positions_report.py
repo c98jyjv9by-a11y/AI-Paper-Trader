@@ -30,6 +30,7 @@ warnings.filterwarnings("ignore")
 from broker_adapter import AlpacaPaper
 import broker_sync as bs
 from intraday_check import _build_enrichment, _WINDOWS, _pct, _sc
+from eod_accounts import disp
 
 ROOT = Path(__file__).resolve().parent.parent
 GREEN, RED, GREY, HEAD = "#1a7f37", "#c0392b", "#888", "#34495e"
@@ -172,12 +173,12 @@ def _account_page(pdf, d, enrich, entry_enrich, today):
     name = d["name"]
     fig = plt.figure(figsize=(11, 8.5))
     if d.get("err"):
-        fig.suptitle("%s — broker error" % name, fontsize=13, weight="bold")
+        fig.suptitle("%s — broker error" % disp(name), fontsize=13, weight="bold")
         fig.text(0.5, 0.5, d["err"], ha="center", color=RED, fontsize=10)
         pdf.savefig(fig); plt.close(fig); return
 
     fig.suptitle("%s   —   positions & %s   (%s)"
-                 % (name, "likely-next orders" if d.get("preview") else "queued orders", today),
+                 % (disp(name), "likely-next orders" if d.get("preview") else "queued orders", today),
                  fontsize=13, weight="bold")
     fig.text(0.5, 0.945, "equity %s · cash %s · %d position(s) · cadence: %s%s · %d order(s)%s"
              % (_money(d["eq"]), _money(d["cash"]), len(d["pos"]), d.get("cadence", "—"),
@@ -286,7 +287,7 @@ def run(accounts=None, end=None, out=None):
                        "likely-next" if d.get("preview") else "queued",
                        ("%s (not due today)" % d.get("cadence") if d.get("preview")
                         else "%s — due today" % d.get("cadence"))))
-            ax.text(0.0, y, n, fontsize=9.5, weight="bold", va="top")
+            ax.text(0.0, y, disp(n), fontsize=9.5, weight="bold", va="top")
             ax.text(0.28, y, line, fontsize=9, va="top", color=(RED if d.get("err") else "#333"))
             y -= 0.038
         ax.text(0, y - 0.02, "Stats use the model_v4 score panel; overlay names (TQQQ/SQQQ) sit outside the "
