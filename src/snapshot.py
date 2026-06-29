@@ -278,7 +278,71 @@ def _render_summary(pdf, data, accts, today, panel, ibench, dbench, prior_day, b
     pdf.savefig(fig); plt.close(fig)
 
 
-# ── page 2: orders today — totals by account (no per-ticker detail) ──────────────
+# ── buys tables — every BUY in a window, by account & ticker, sorted by current unrealized P&L ───
+def _render_buys(pdf, data, accts, win_start, win_end, title, sub):
+    rows = []
+    for n in accts:
+        d = data[n]
+        if d.get("err"):
+            continue
+        for o in d["orders"]:
+            if (o.get("side") or "").lower() != "buy" or not (o.get("fill_price") and o.get("filled_qty")):
+                continue
+            dt = _et_dt(o.get("submitted_at") or o.get("filled_at"))
+            if dt is None or not (win_start < dt <= win_end):
+                continue
+            qty, px = o["filled_qty"], o["fill_price"]
+            rows.append({"acct": disp(n), "sym": o.get("symbol", ""), "qty": qty, "px": px,
+                         "cost": qty * px, "unrlz": o.get("unrlz"), "ret": o.get("ret"),
+                         "held": o.get("days_held")})
+    # descending by current unrealized P&L; buys no longer held (unrlz None) sort to the bottom
+    rows.sort(key=lambda r: (r["unrlz"] is not None, r["unrlz"] if r["unrlz"] is not None else 0.0), reverse=True)
+    cols = ["Account", "Ticker", "Qty", "Buy px", "Cost $", "Unreal $", "Unreal %", "Held"]
+    raw = [18, 8, 6, 8, 10, 10, 8, 6]
+    tot_cost = sum(r["cost"] for r in rows)
+    tot_unrlz = sum(r["unrlz"] for r in rows if r["unrlz"] is not None)
+    PER = 32
+    chunks = [rows[i:i + PER] for i in range(0, len(rows), PER)] or [[]]
+    for pi, chunk in enumerate(chunks):
+        fig = plt.figure(figsize=(11, 8.5))
+        fig.suptitle(title + ("" if len(chunks) == 1 else "  (%d/%d)" % (pi + 1, len(chunks))),
+                     fontsize=14, weight="bold")
+        fig.text(0.5, 0.945, sub, ha="center", fontsize=8, color="#555")
+        ax = fig.add_axes([0.06, 0.09, 0.88, 0.82]); ax.axis("off")
+        cells = [[r["acct"], r["sym"], "%g" % r["qty"], "$%.2f" % r["px"], _money(r["cost"]),
+                  (_money(r["unrlz"]) if r["unrlz"] is not None else "—"),
+                  (_pct(r["ret"]) if r["ret"] is not None else "—"),
+                  ("%dd" % r["held"] if r["held"] is not None else "—")] for r in chunk]
+        last = pi == len(chunks) - 1
+        if last and rows:
+            cells.append(["TOTAL", "", "", "", _money(tot_cost), _money(tot_unrlz), "", ""])
+        if not rows:
+            cells = [["— no buys in this window —"] + [""] * (len(cols) - 1)]
+        # bbox-constrained so the table always fits the axes (compresses rows) instead of overflowing
+        bh = min(1.0, 0.04 + 0.03 * len(cells))
+        t = ax.table(cellText=cells, colLabels=cols, colWidths=[w / sum(raw) for w in raw],
+                     cellLoc="center", bbox=[0, 1 - bh, 1, bh])
+        t.auto_set_font_size(False); t.set_fontsize(7.5)
+        for j in range(len(cols)):
+            t[0, j].set_facecolor(HEAD); t[0, j].set_text_props(color="white", weight="bold")
+        for i, r in enumerate(chunk):
+            if r["unrlz"] is not None:
+                t[i + 1, 5].set_text_props(color=(GREEN if r["unrlz"] >= 0 else RED), weight="bold")
+            if r["ret"] is not None:
+                t[i + 1, 6].set_text_props(color=(GREEN if r["ret"] >= 0 else RED))
+        if last and rows:
+            tr = len(chunk) + 1
+            for j in range(len(cols)):
+                t[tr, j].set_facecolor("#dfe6e9"); t[tr, j].set_text_props(weight="bold")
+            if tot_unrlz:
+                t[tr, 5].set_text_props(color=(GREEN if tot_unrlz >= 0 else RED), weight="bold")
+        fig.text(0.06, 0.035, "Every BUY filled in the window, by account & ticker, marked to current prices and "
+                 "sorted by unrealized P&L (descending).  Unreal $ / % = mark-to-market vs the buy fill; Held = "
+                 "days since the buy.  Buys already sold out show '—' and sort last.", fontsize=7.2, color="#555", wrap=True)
+        pdf.savefig(fig); plt.close(fig)
+
+
+# ── page: orders today — totals by account (no per-ticker detail) ────────────────
 def _render_orders_by_account(pdf, data, accts, today, win_start, win_end, win_lbl):
     fig = plt.figure(figsize=(11, 8.5))
     fig.suptitle("Orders Today — totals by account   %s" % today, fontsize=14, weight="bold")
@@ -386,6 +450,16 @@ def run(end: Optional[date] = None, output: Optional[Path] = None,
     prior_day = _prior_trading_day(panel, today)
     dbench = _daily_bench(panel, prior_day, live_px)
     win_start, win_end, win_lbl = _session_window(today, prior_day)
+    # prior session = between the close-before-last and the last close (for the prior-day buys table)
+    pb_day = _prior_trading_day(panel, prior_day) if prior_day else None
+    if prior_day:
+        winB_end = datetime.combine(date.fromisoformat(prior_day), time(16, 0), tzinfo=_ET)
+        winB_start = (datetime.combine(date.fromisoformat(pb_day), time(16, 0), tzinfo=_ET)
+                      if pb_day else winB_end - timedelta(days=1))
+        winB_lbl = "the prior session (%s 16:00 ET → %s 16:00 ET)" % (pb_day or "?", prior_day)
+    else:
+        winB_start, winB_end = win_start - timedelta(days=1), win_start
+        winB_lbl = "the prior session"
     snapshots = _load_rank_snapshots()
     sig_cache, trail_cache = {}, {}
 
@@ -415,6 +489,10 @@ def run(end: Optional[date] = None, output: Optional[Path] = None,
     out.parent.mkdir(parents=True, exist_ok=True)
     with PdfPages(out) as pdf:
         _render_summary(pdf, data, accts, today, panel, ibench, dbench, prior_day, bench_rows)
+        _render_buys(pdf, data, accts, win_start, win_end, "Buys Today — by account & ticker",
+                     "All buys %s, marked to current prices, sorted by unrealized P&L" % win_lbl)
+        _render_buys(pdf, data, accts, winB_start, winB_end, "Prior-Day Buys — current P&L",
+                     "Buys placed in %s, marked to NOW, sorted by current unrealized P&L" % winB_lbl)
         _render_orders_by_account(pdf, data, accts, today, win_start, win_end, win_lbl)
         _render_orders_today(pdf, data, accts, today, win_start, win_end, win_lbl, snapshots, sig_cache, trail_cache)
 
