@@ -196,7 +196,7 @@ def _account_page(pdf, d, enrich, entry_enrich, today):
     oy = 0.885 - ph - 0.04
     fig.text(0.04, oy, "ORDERS PLACED TODAY   —   actual broker fills; reason from the decision log",
              fontsize=10, weight="bold")
-    ocols = ["Side", "Ticker", "Qty", "Fill $", "Value $", "Score", "Rank", "Trend",
+    ocols = ["Side", "Ticker", "Qty", "Fill $", "Invested $", "Score", "Rank", "Trend",
              "Avg 1/5/20/60d", "Ret 1/5/20/60d", "Reason"]
     oraw = [5, 7, 4, 8, 9, 6, 7, 9, 15, 17, 34]
     ocolw = [w / sum(oraw) for w in oraw]
@@ -205,13 +205,14 @@ def _account_page(pdf, d, enrich, entry_enrich, today):
     for i, o in enumerate(rows):
         sym = o.get("symbol", ""); side = (o.get("side") or "").upper()
         fq = float(o.get("filled_qty") or 0); fp = o.get("fill_price")
-        val = fq * float(fp) if (fq and fp) else 0.0; tot += val
+        val = fq * float(fp) if (fq and fp) else 0.0
+        inv = val if side == "BUY" else (val - (o.get("rlz") or 0.0)); tot += inv   # $ invested (cost basis)
         reason = _order_reason(o, d.get("kind"), d.get("dec"))
         if o.get("status") != "filled":
             reason = "[%s] %s" % (o.get("status"), reason)
         reason = (reason[:50] + "…") if len(reason) > 51 else reason   # keep cell from overflowing
         ocells.append([side, sym, "%g" % fq if fq else "—",
-                       ("$%.2f" % float(fp)) if fp else "—", _money(val) if val else "—",
+                       ("$%.2f" % float(fp)) if fp else "—", _money(inv) if val else "—",
                        *_stat_cells(enrich.get(sym)), reason])
         orules.append((i, 0, GREEN if side == "BUY" else RED))
         _stat_rules(i, enrich.get(sym), is_rev, 5, 7, orules)
@@ -241,7 +242,9 @@ def _summary_page(pdf, data, accts, enrich, today, side):
             if (ordr.get("side") or "").lower() != side or not (ordr.get("fill_price") and ordr.get("filled_qty")):
                 continue
             sym = ordr["symbol"]; e = enrich.get(sym)
-            rows.append({"acct": disp(n), "sym": sym, "val": ordr["filled_qty"] * ordr["fill_price"],
+            val = ordr["filled_qty"] * ordr["fill_price"]
+            inv = val if is_buy else (val - (ordr.get("rlz") or 0.0))   # $ invested (cost basis)
+            rows.append({"acct": disp(n), "sym": sym, "val": val, "inv": inv,
                          "pnl": (ordr.get("unrlz") if is_buy else ordr.get("rlz")), "e": e,
                          "oneD": (e["ret"].get(1) if (e and e.get("ret")) else None),
                          "is_rev": (d.get("kind") == "zscore_reversal"),
@@ -251,7 +254,7 @@ def _summary_page(pdf, data, accts, enrich, today, side):
     fig = plt.figure(figsize=(11, 8.5))
     fig.suptitle(title + "   (%s)" % today, fontsize=14, weight="bold")
     fig.text(0.5, 0.95, sub, ha="center", fontsize=8.5, color="#555")
-    cols = ["Account", "Ticker", "Value $", "Score", "Rank", "Trend", "Avg 1/5/20/60d", "1D Ret", pnl_lbl, "Reason"]
+    cols = ["Account", "Ticker", "Invested $", "Score", "Rank", "Trend", "Avg 1/5/20/60d", "1D Ret", pnl_lbl, "Reason"]
     raw = [16, 7, 9, 6, 7, 9, 16, 8, 11, 30]
     colw = [w / sum(raw) for w in raw]
     body, tv, tp = [], 0.0, 0.0
@@ -261,9 +264,9 @@ def _summary_page(pdf, data, accts, enrich, today, side):
         rank = f"#{e['rank']}/{e['n_uni']}" if (e and e.get("rank")) else "—"
         avgq = _avg_quad(e) if e else "—"
         oneD = _pct(r["oneD"]) if r["oneD"] is not None else "—"
-        tv += r["val"]; tp += (pnl or 0.0)
+        tv += r["inv"]; tp += (pnl or 0.0)
         reason = r["reason"]; reason = (reason[:46] + "…") if len(reason) > 47 else reason
-        body.append(([r["acct"], r["sym"], _money(r["val"]), score, rank, _trend(e), avgq, oneD,
+        body.append(([r["acct"], r["sym"], _money(r["inv"]), score, rank, _trend(e), avgq, oneD,
                       _money(pnl) if pnl is not None else "—", reason], pnl, e, r["is_rev"]))
     cells, rules = [], []
     if rows:                                              # TOTAL as the TOP row
