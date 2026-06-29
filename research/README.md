@@ -31,6 +31,7 @@ scripts print tables. **Findings are summarized in `CLAUDE.md`** — this file i
 | `make_zscore_daily.py` | daily top-10 by the 60-day z (the high-z side) | console |
 | `make_zscore_freq_compare.py` | annual returns trading on the 60-day z ranking | console |
 | `make_zscore_returns_report.py` | rank-by-60-day-rolling-z returns report | console |
+| `make_zscore_putwrite.py` | **S1 options prototype** — put-WRITING (cash-secured puts / put-credit spreads) on the bottom-10 z names vs the equity book; BS-modeled premiums + realized-vol IV proxy (see `options_strategy_notes.md`) | console |
 
 ## Leveraged ETFs (TQQQ / SQQQ — the `LevEtf` scenario)
 | script | what it answers | output |
