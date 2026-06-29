@@ -4,7 +4,8 @@ For each Alpaca paper account it pulls the LIVE broker state and renders:
   • a P&L summary (equity / cash / starting; total, unrealized, and realized-estimate P&L),
   • the current positions with per-name unrealized P&L,
   • the full order history submitted to Alpaca (time, side, symbol, qty, status, fill price, value),
-paginated as needed. A cover page rolls every account's P&L into one table.
+paginated as needed. A cover page rolls every account's P&L into one table (incl. the current day's
+P&L so far = equity − prior-close equity).
 
 P&L sourcing (broker = truth):
   • unrealized $ per position = (current_price - avg_entry) * qty   (% = Alpaca unrealized_plpc),
@@ -312,6 +313,7 @@ def _collect(name, today, status="all", limit=500):
         cli = AlpacaPaper(account=name)
         a = cli.account()
         eq, cash = float(a.get("equity") or 0.0), float(a.get("cash") or 0.0)
+        last_eq = float(a.get("last_equity") or 0.0)           # equity at the PRIOR trading-day close
         pos = cli.positions() or []
         for p in pos:                                          # derive unrealized $ from the broker fields
             p["unrealized_pl"] = (p["price"] - p["avg_entry"]) * p["qty"]
@@ -331,6 +333,9 @@ def _collect(name, today, status="all", limit=500):
                 "dec_log": _load_decision_log(name),
                 "book_cost": cost, "book_mv": mv, "book_ret": (mv / cost - 1) if cost > 0 else None,
                 "unreal": unreal, "total_pnl": total, "realized_est": realized,
+                "last_eq": last_eq,                                # today's intraday change so far (vs prior close):
+                "day_pnl": (eq - last_eq) if last_eq > 0 else None,
+                "day_ret": (eq / last_eq - 1) if last_eq > 0 else None,
                 "tot_ret": (eq / start - 1 if start else 0.0), "err": None}
     except Exception as exc:
         return {"name": name, "err": str(exc)[:80]}
@@ -626,24 +631,33 @@ def _render_cover(pdf, data, accts, today, bench, mark_note=None):
     if mark_note:
         fig.text(0.5, 0.945, mark_note, ha="center", fontsize=8, color="#0b3d91", style="italic")
     ax = fig.add_axes([0.03, 0.30, 0.94, 0.55]); ax.axis("off")
-    cols = ["Account", "Equity", "Cash", "Starting", "Total P&L", "Total %", "QQQ %", "SPY %",
-            "Unreal $", "Realized", "Pos", "Orders"]
+    cols = ["Account", "Equity", "Cash", "Starting", "Total P&L", "Total %", "Day P&L", "Day %",
+            "QQQ %", "SPY %", "Unreal $", "Realized", "Pos", "Orders"]
 
     def _bp(n, sym):                                          # account-aligned benchmark % (or "—")
         v = (bench.get(n) or {}).get(sym)
         return _pct(v) if v is not None else "—"
+
+    def _dp(d):                                              # (day-P&L $, day %) cells — '—' before a prior close
+        return (_money(d["day_pnl"]) if d.get("day_pnl") is not None else "—",
+                _pct(d["day_ret"]) if d.get("day_ret") is not None else "—")
     cells, ok = [], []
     for n in accts:
         d = data[n]
         if d.get("err"):
-            cells.append([n, "—", "—", "—", "ERR", "—", "—", "—", "—", "—", "—", "—"])
+            cells.append([n, "—", "—", "—", "ERR", "—", "—", "—", "—", "—", "—", "—", "—", "—"])
             continue
         ok.append(d)
+        dpnl, dret = _dp(d)
         cells.append([n, _money(d["eq"]), _money(d["cash"]), _money(d["start"]), _money(d["total_pnl"]),
-                      _pct(d["tot_ret"]), _bp(n, "QQQ"), _bp(n, "SPY"), _money(d["unreal"]),
+                      _pct(d["tot_ret"]), dpnl, dret, _bp(n, "QQQ"), _bp(n, "SPY"), _money(d["unreal"]),
                       _money(d["realized_est"]), str(len(d["pos"])), str(len(d["orders"]))])
     if ok:
         agg = {k: sum(d[k] for d in ok) for k in ("eq", "cash", "start", "total_pnl", "unreal", "realized_est")}
+        # day aggregates over accounts that HAVE a prior close (day % = Σ day P&L ÷ Σ prior-close equity)
+        day_ok = [d for d in ok if d.get("day_pnl") is not None]
+        day_pnl = sum(d["day_pnl"] for d in day_ok)
+        day_last = sum(d["last_eq"] for d in day_ok)
         # blended benchmark = starting-value-weighted mean of each account's inception-aligned return
         def _blend(sym):
             num = sum(d["start"] * bench[d["name"]][sym] for d in ok
@@ -652,9 +666,10 @@ def _render_cover(pdf, data, accts, today, bench, mark_note=None):
             return _pct(num / den) if den else "—"
         cells.append(["TOTAL", _money(agg["eq"]), _money(agg["cash"]), _money(agg["start"]),
                       _money(agg["total_pnl"]), _pct(agg["eq"] / agg["start"] - 1 if agg["start"] else 0.0),
+                      (_money(day_pnl) if day_ok else "—"), (_pct(day_pnl / day_last) if day_last else "—"),
                       _blend("QQQ"), _blend("SPY"), _money(agg["unreal"]), _money(agg["realized_est"]),
                       str(sum(len(d["pos"]) for d in ok)), str(sum(len(d["orders"]) for d in ok))])
-    raw = [15, 10, 9, 9, 10, 7, 7, 7, 9, 11, 5, 7]
+    raw = [15, 10, 9, 9, 10, 7, 9, 7, 7, 7, 9, 11, 5, 7]
     t = ax.table(cellText=cells, colLabels=cols, colWidths=[w / sum(raw) for w in raw],
                  loc="upper center", cellLoc="center")
     t.auto_set_font_size(False); t.set_fontsize(7.5); t.scale(1, 1.5)
@@ -665,9 +680,11 @@ def _render_cover(pdf, data, accts, today, bench, mark_note=None):
         if d.get("err"):
             t[i + 1, 4].set_text_props(color=RED, weight="bold")
             continue
-        for j, v in [(4, d["total_pnl"]), (5, d["tot_ret"]), (8, d["unreal"]), (9, d["realized_est"])]:
-            t[i + 1, j].set_text_props(color=(GREEN if v >= 0 else RED), weight="bold")
-        for j, sym in [(6, "QQQ"), (7, "SPY")]:               # color benchmark cells too
+        for j, v in [(4, d["total_pnl"]), (5, d["tot_ret"]), (6, d.get("day_pnl")), (7, d.get("day_ret")),
+                     (10, d["unreal"]), (11, d["realized_est"])]:
+            if v is not None:
+                t[i + 1, j].set_text_props(color=(GREEN if v >= 0 else RED), weight="bold")
+        for j, sym in [(8, "QQQ"), (9, "SPY")]:               # color benchmark cells too
             bv = (bench.get(n) or {}).get(sym)
             if bv is not None:
                 t[i + 1, j].set_text_props(color=(GREEN if bv >= 0 else RED))
@@ -675,10 +692,11 @@ def _render_cover(pdf, data, accts, today, bench, mark_note=None):
         tr = len(accts) + 1
         for j in range(len(cols)):
             t[tr, j].set_facecolor("#dfe6e9"); t[tr, j].set_text_props(weight="bold")
-    fig.text(0.03, 0.24, "Total P&L = equity - starting (broker).  Unrealized = Σ (price - avg entry) x qty over open "
-             "positions (broker).  Realized = Σ realized P&L on sells (fills, avg-cost) — the SAME figure shown by the "
-             "order-history TOTAL and the Trade Summary (Total may differ from Realized+Unrealized by a small "
-             "broker-vs-fills residual).", fontsize=7.5, color="#555", wrap=True)
+    fig.text(0.03, 0.24, "Total P&L = equity - starting (broker).  Day P&L = equity - prior-close equity (today's "
+             "intraday change SO FAR; Day %% = that ÷ prior-close equity; TOTAL = Σ day P&L ÷ Σ prior-close equity).  "
+             "Unrealized = Σ (price - avg entry) x qty over open positions (broker).  Realized = Σ realized P&L on sells "
+             "(fills, avg-cost) — the SAME figure shown by the order-history TOTAL and the Trade Summary (Total may "
+             "differ from Realized+Unrealized by a small broker-vs-fills residual).", fontsize=7.5, color="#555", wrap=True)
     fig.text(0.03, 0.205, "QQQ %% / SPY %% = benchmark total return measured over EACH account's own inception->today "
              "window (timelines aligned per account; TOTAL = starting-weighted blend).", fontsize=7.5, color="#555")
     fig.text(0.03, 0.17, "ERR rows = the account's Alpaca keys are unset/placeholder; see its page for detail.",
