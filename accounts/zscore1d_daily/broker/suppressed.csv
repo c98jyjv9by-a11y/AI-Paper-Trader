@@ -3,3 +3,5 @@ asof,symbol,current,target,delta,reason,retry
 2026-06-29,ADI,23,22,-1,HOLD: -1-share trim suppressed (deadband 1) — zscore daily entry: most-fallen #5 (1d-avg z),False
 2026-06-29,MRVL,33,32,-1,HOLD: -1-share trim suppressed (deadband 1) — zscore daily entry: most-fallen #6 (1d-avg z),False
 2026-06-29,AVGO,24,23,-1,HOLD: -1-share trim suppressed (deadband 1) — zscore daily entry: most-fallen #8 (1d-avg z),False
+2026-06-30,ARM,24,25,1,"HOLD: +1-share trim suppressed (deadband 1) — zscore daily hold: most-fallen #1 (1d-avg z, keep<=#20)",False
+2026-06-30,TXN,31,30,-1,"HOLD: -1-share trim suppressed (deadband 1) — zscore daily hold: most-fallen #18 (1d-avg z, keep<=#20)",False

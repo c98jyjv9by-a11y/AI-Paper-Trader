@@ -38,3 +38,9 @@ asof,symbol,side,qty,limit_price,reason,score,rank,z,pnl,retry
 2026-06-29,ON,buy,5,91.28,ADD to target weight — zscore daily entry: most-fallen #2 (1d-avg z),,2,-2.399,,False
 2026-06-29,ORCL,sell,59,141.86,EXIT — zscore daily: rebalance out (z rank 15),,15,-1.337,,False
 2026-06-29,QCOM,sell,47,183.21,EXIT — zscore daily: rebalance out (z rank 13),,13,-1.495,,False
+2026-06-30,CSCO,buy,3,119.28,"ADD to target weight — zscore daily hold: most-fallen #5 (1d-avg z, keep<=#20)",,5,-1.831,,False
+2026-06-30,GS,buy,8,1065.5,"OPEN — zscore daily entry: most-fallen #3 (1d-avg z, keep<=#20)",,3,-1.877,,False
+2026-06-30,MCHP,sell,98,87.95,EXIT — zscore daily: sell out of bottom-20 keep band (z rank 28),,28,-0.448,,False
+2026-06-30,MRVL,sell,33,278.55,EXIT — zscore daily: sell out of bottom-20 keep band (z rank 25),,25,-0.496,,False
+2026-06-30,ON,sell,7,89.47,"TRIM to target weight — zscore daily hold: most-fallen #4 (1d-avg z, keep<=#20)",,4,-1.849,,False
+2026-06-30,TEAM,buy,119,80.17,"OPEN — zscore daily entry: most-fallen #6 (1d-avg z, keep<=#20)",,6,-1.819,,False
